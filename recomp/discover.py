@@ -26,12 +26,14 @@ written for Hitachi SHC's output (and GCC's, which is close):
    of 16 or 32 bits, each an offset from the `braf` + 4. The runtime
    library's form: `mov #N,rB; cmp/hs r0,rB; bf default; mov.l TABLE,rT;
    mov.l @(r0,rT),rJ; jmp @rJ`, r0 a byte offset, N/4 + 1 absolute entries;
-   and its shift ladders, a table of signed bytes added to a base.
+   and its shift ladders, a table of signed bytes added to a base (also
+   with the index offset by a constant).
 6. Unreached code: after the pass, a literal value that points into the
    program at a *boundary* (after data, or after a terminator's delay
-   slot) and is not data is a function reached by pointer (a callback, an
-   interrupt handler, a slave job). It becomes a seed if its descent meets
-   no undefined opcode and no data. Failing that, unclassified code that
+   slot), is not data and is not dereferenced where it is loaded (a load or
+   store through it: a variable's address) is a function reached by
+   pointer (a callback, an interrupt handler, a slave job). It becomes a
+   seed if its descent meets no undefined opcode and no data. Failing that, unclassified code that
    starts with a stack-frame prologue at a boundary (SHC links whole
    object files, so uncalled functions sit between called ones) is taken
    the same way. Repeat to a fixed point.
@@ -97,7 +99,7 @@ def _transfer(img, ins, st):
 
 
 class Function:
-    __slots__ = ("entry", "code", "calls", "tails", "unresolved", "bad", "tables")
+    __slots__ = ("entry", "code", "calls", "tails", "unresolved", "bad", "tables", "slot_only")
 
     def __init__(self, entry):
         self.entry = entry
@@ -107,6 +109,7 @@ class Function:
         self.unresolved = []       # (addr, what) indirect jumps not resolved
         self.bad = None            # first problem met, or None
         self.tables = set()        # halfwords of the switch tables it reads
+        self.slot_only = set()     # delay slots not (yet) reached as instructions of their own
 
 
 class Program:
@@ -121,6 +124,7 @@ class Program:
         self.ext_calls = collections.Counter()   # calls through pointers: loaded-from address
         self._pending = list(seeds) or [img.base]
         self._rejected = set()
+        self._data_addrs, self._scanned = set(), set()   # _data_addresses, incrementally
         self.run()
 
     # -- helpers
@@ -207,24 +211,48 @@ class Program:
                 and add2.fmt == "add Rm,Rn" and add2.n == j.n and add2.m == ldb.n):
             return None
         tab, base = img.literal(t1), img.literal(t2)
-        idx = add1.m
+        return self._byte_targets(jmp, tab, 0, add1.m, base)
+
+    def _byte_switch_offset(self, jmp):
+        """The same ladder with the index offset: mov.l TAB,rT; add #k,ri;
+        add rT,ri; mov.b @ri,rB; mov.l BASE,rJ; add rB,rJ; jmp @rJ.
+        Entry i (0 <= i < N) is the byte at TAB + k + i."""
+        img = self.img
+        t1, addk, add1, ldb, t2, add2 = [img.insn(jmp - 2 * k) for k in range(6, 0, -1)]
+        j = img.insn(jmp)
+        if not (t1.op == "mov.l" and t1.size == 4 and addk.op == "add" and addk.imm is not None
+                and add1.fmt == "add Rm,Rn" and add1.m == t1.n and add1.n == addk.n
+                and ldb.fmt == "mov.b @Rm,Rn" and ldb.m == add1.n
+                and t2.op == "mov.l" and t2.size == 4 and t2.n == j.n
+                and add2.fmt == "add Rm,Rn" and add2.n == j.n and add2.m == ldb.n):
+            return None
+        return self._byte_targets(jmp, img.literal(t1), addk.imm, addk.n, img.literal(t2))
+
+    def _byte_targets(self, jmp, tab, k, idx, base):
+        """Targets BASE + signed byte for index 0 <= i < N, the bound read
+        from `mov #N,rN; cmp/ge rN,ri` before the jump."""
+        img = self.img
         n = None
         for a in range(jmp - 12, jmp - 40, -2):
             ins = img.insn(a)
             if ins.op == "cmp/ge" and ins.n == idx:
                 for b in range(a - 2, a - 12, -2):
-                    k = img.insn(b)
-                    if k.op == "mov" and k.imm is not None and k.n == ins.m:
-                        n = k.imm
+                    mv = img.insn(b)
+                    if mv.op == "mov" and mv.imm is not None and mv.n == ins.m:
+                        n = mv.imm
                         break
                 break
-        if tab is None or base is None or not n or n > 256 or not img.contains(tab, n):
+        if tab is None or base is None or not n or n > 256:
+            return None
+        start = (tab + k) & 0xFFFFFFFF
+        if not img.contains(start, n):
             return None
         targets = []
-        for k in range(n):
-            v = img.data[tab - img.base + k]
+        for i in range(n):
+            v = img.data[start - img.base + i]
             targets.append((base + (v - 256 if v & 0x80 else v)) & 0xFFFFFFFF)
-        return targets, tab, (n + 1) & ~1
+        lo = start & ~1
+        return targets, lo, ((start + n + 1) & ~1) - lo
 
     def _switch(self, braf):
         """Targets of an SHC switch ending at `braf`, and its table, or None."""
@@ -359,7 +387,7 @@ class Program:
         """Follow straight-line code from `a` until a terminator or known code."""
         img = self.img
         while True:
-            if a in f.code:
+            if a in f.code and a not in f.slot_only:
                 return
             if not self.inside(a):
                 f.bad = f.bad or ("outside", a)
@@ -371,6 +399,7 @@ class Program:
             if ins.op == ".word":
                 f.bad = f.bad or ("undefined", a)
                 return
+            f.slot_only.discard(a)
             f.code.add(a)
             self._code_literal(ins, data)
             op = ins.op
@@ -381,6 +410,8 @@ class Program:
                     if s.op == ".word" or s.delay:
                         f.bad = f.bad or ("bad slot", slot)
                     else:
+                        if slot not in f.code:
+                            f.slot_only.add(slot)
                         f.code.add(slot)
                         self._code_literal(s, data)
             if op in ("bt", "bf"):
@@ -422,7 +453,7 @@ class Program:
                 elif r and r[0] == "ptr":
                     self.ext_calls[r[1]] += 1
                 else:
-                    sw = self._abs_switch(a) or self._byte_switch(a)
+                    sw = self._abs_switch(a) or self._byte_switch(a) or self._byte_switch_offset(a)
                     if sw:
                         targets, table, size = sw
                         switches[a] = targets
@@ -482,7 +513,42 @@ class Program:
             return i.op in TERMINATORS and i.op != "braf"
         return p < self.lo or not self.img.contains(p)
 
+    _BASE_M = ("@Rm,", "@Rm+", "@(disp,Rm)", "@(r0,Rm)")
+    _BASE_N = ("@Rn", "@-Rn", "@(disp,Rn)", "@(r0,Rn)")
+
+    def _data_addresses(self):
+        """Literal values the code dereferences: `mov.l LIT,rX` followed, in
+        the same straight line and before rX changes, by a load or store
+        through rX. They point at data, whatever the bytes there decode to
+        (a program's `main` reads the BSS end its crt0 keeps in its pool)."""
+        img, out = self.img, self._data_addrs
+        for a in self.code - self._scanned:
+            ins = img.insn(a)
+            if ins.op != "mov.l" or ins.size != 4 or ins.target is None:
+                continue
+            v = img.literal(ins)
+            if v is None:
+                continue
+            r, b = ins.n, a + 2
+            for _ in range(8):
+                if b not in self.code:
+                    break
+                j = img.insn(b)
+                if j.op in ("jsr", "jmp", "bsr", "bra", "bt", "bf", "bt/s", "bf/s", "rts", "rte", "braf", "bsrf"):
+                    break
+                f = j.fmt
+                if (j.m == r and any(k in f for k in self._BASE_M)) or \
+                        (j.n == r and any(k in f for k in self._BASE_N)):
+                    out.add(v)
+                    break
+                if r in _writes(j):
+                    break
+                b += 2
+        self._scanned |= self.code
+        return out
+
     def _pointer_seeds(self):
+        data_addrs = self._data_addresses()
         cands = set()
         words = [a for a in self.data if not a & 3 and a + 2 in self.data]
         # and the unclassified words: pointer tables in the data section
@@ -492,7 +558,8 @@ class Program:
             if not self.img.contains(a, 4):
                 continue
             v = self.img.u32(a)
-            if self.inside(v) and v not in self.code and v not in self.data and v not in self._rejected:
+            if self.inside(v) and v not in self.code and v not in self.data and v not in self._rejected \
+                    and v not in data_addrs:
                 cands.add(v)
         added = 0
         for v in sorted(cands):

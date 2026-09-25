@@ -275,6 +275,30 @@ def decode(word, pc):
     return ins
 
 
+_BY_FMT = {}
+for _e in _TABLE:
+    _BY_FMT.setdefault(_e[3], _e)
+
+
+def encode(fmt, n=0, m=0, low=0):
+    """The word for format `fmt` (as decode prints it before substitution,
+    e.g. "mov.l Rm,@(disp,Rn)") with registers n, m and the raw low field
+    (displacement count, immediate or branch offset, before scaling)."""
+    mask, val, op, f, kind, nsh, msh = _BY_FMT[fmt]
+    w = val
+    if nsh is not None:
+        w |= (n & 15) << nsh
+    if msh is not None:
+        w |= (m & 15) << msh
+    free = ~mask & 0xFFFF & ~((15 << nsh) if nsh is not None else 0) & ~((15 << msh) if msh is not None else 0)
+    return w | (low & free)
+
+
+def formats():
+    """Every instruction format the decoder knows, as encode() takes them."""
+    return list(_BY_FMT)
+
+
 class Image:
     """A flat binary loaded at `base` (a 1st read file, an overlay...)."""
 

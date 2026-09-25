@@ -19,7 +19,7 @@ fixes live in the ports.
 
 | Port | Game | What it asked of saturnkit |
 |---|---|---|
-| pc-virtualhydlide | Virtual Hydlide (1995) | the disc, the SH-2 decoder, the address map, function discovery, cross-program matching, the interpreter, the recompiler and the first of the runtime |
+| pc-virtualhydlide | Virtual Hydlide (1995) | the disc, the SH-2 decoder, the address map, function discovery, cross-program matching, the interpreter, the recompiler, and the runtime core (HLE boot and BIOS, SCU, SMPC, the slave as a coroutine, the CD block, SBL's sound-driver handshake) |
 
 ## Using it
 
@@ -50,6 +50,8 @@ python -m saturnkit.recomp --out build/recomp A=A.BIN@0600B000 B=B.BIN@0600B000 
 python -m saturnkit.recomp.selftest --out a.txt --image A=A.BIN@0600B000 --test A --auto  # vectors
 cmake -S build/recomp -B build/recomp-build -G Ninja -DCMAKE_CXX_COMPILER=clang++
 ninja -C build/recomp-build && build/recomp-build/selftest build/recomp/selftest/optest.txt a.txt
+build/recomp-build/saturn --cue GAME.cue --vblanks 600 --trace       # the game on the runtime, headless
+build/recomp-build/saturn --cue GAME.cue --input 1200:START,1210: --peek 25F80000:8 --watch 25A00000:25A01000
 ```
 
 ## Layers
@@ -60,7 +62,7 @@ ninja -C build/recomp-build && build/recomp-build/selftest build/recomp/selftest
 | 2. Extract | Turn standard formats into standard files | `disc --extract`, `disc --audio` (CD-DA to WAV) | VDP1/VDP2 image decoders (4/8/16 bpp, CLUT, CRAM), Sega FILM/Cinepak, SCSP tone banks |
 | 3. Map code | What does the code do, where? | `sh2` (SH7604 decoder, disassembly with literal pools resolved and hardware registers named, `--refs`, `--census`, `--find-base`), `hw` (address map, register names, BIOS service pointers, SCU vectors), `sh2emu` (an SH-2 interpreter for isolated functions: the recompiler's oracle) | executable map (crt0, BSS, programs swapped at one address); `fingerprint` (SBL by signature) |
 | 4. Translate | Turn SH-2 code into C++ | `recomp.discover` (functions and code/data in stripped SHC code: recursive descent, constant propagation for register calls, four switch forms, pointer and prologue seeds), `recomp.match` (the same function across programs linked at other addresses; names carried), `recomp` (one C++ function per entry: delay slots, calls checked on return, guarded dispatch through registers, switches, safe points; one module per program, recognised in memory by its crc32), `recomp.selftest` (vectors from `sh2emu`: every instruction form, and a program's functions that run alone) | hooks: replace a named function by a host one |
-| 5. Runtime | Replace the hardware | `runtime/` (C++20): the SH-2 context, the work RAMs with the cache-through addresses, the address map outside them, dispatch over the active modules, no-hardware services, the self-test harness | BIOS services and boot, SCU (interrupts, DMA), SMPC (pads, INTBACK, slave on/off), the slave SH-2, CD block at its registers (GFS reads, CD-DA), VDP1 on the GPU, VDP2 compositor, 68000 + SCSP; SDL3 window, input and sound |
+| 5. Runtime | Replace the hardware | `runtime/` (C++20): the SH-2 context, the work RAMs with the cache-through addresses, dispatch over the active modules, the self-test harness; the Saturn (`saturn` executable): virtual or host time, program starts with the host stack unwound, HLE boot and BIOS services (interrupt dispatch, SCU mask, semaphores, BUP in a host file), SCU (interrupts, timers, DMA), SMPC (INTBACK, a scripted pad, slave and sound on/off), the slave SH-2 as a deterministic coroutine, the CD block at its registers over .cue/.bin, the SH7604's division unit, FRT and DMAC, the VDPs as memory with the raster timing, SBL's sound-driver command handshake and PCM play position; a log of every register touched | VDP1 on the GPU, VDP2 compositor, 68000 + SCSP; SDL3 window, input and sound |
 
 ## Principles
 
@@ -79,7 +81,8 @@ ninja -C build/recomp-build && build/recomp-build/selftest build/recomp/selftest
 | `recomp.discover` | Virtual Hydlide, 15 programs: no function whose descent meets data or an undefined opcode; every resolved switch target is code. Against Ghidra 12's auto-analysis of the field program: 571 of its 576 functions found; the other 5 are shared tails (common epilogues several functions branch to), which discovery follows as part of each caller |
 | `recomp.match` | Virtual Hydlide: the frame limiter, found in each program by its bytes, is where the match carries its name in 11 of 11 programs |
 | `sh2emu` | the SHC runtime's four division helpers run on 3 000 random operands each: quotient and remainder, signed and unsigned, 12 000 of 12 000 equal to Python |
-| `recomp` (emit) | Virtual Hydlide, 15 programs: 10 256 functions, 1.5 million instructions, compiled with clang 22 and linked; no static target outside the modules. The self-test: 775 functions of the instruction test (126 forms, alone and in a delay slot, and the control flow) and 2 647 of the game's, 51 448 vectors, 0 differences in registers or memory |
+| `recomp` (emit) | Virtual Hydlide, 15 programs: 10 259 functions, 1.5 million instructions, compiled with clang 22 and linked; no static target outside the modules. The self-test: 775 functions of the instruction test (126 forms, alone and in a delay slot, and the control flow) and 2 653 of the game's, 51 532 vectors, 0 differences in registers or memory |
+| `runtime` (the Saturn) | Virtual Hydlide from the boot of its 1st read file to its first field: the opening movie through the CD block and the PCM handshake, three program starts (HYDSYS, the title menu, the field), both CPUs, the field's frame loop at its 12 fps cap; 120 s of game time with no wrong return and no call to a non-entry, the same run every time |
 | `sh2.encode` | every word that decodes (53 752 of the 65 536): encoded back from its format and fields, 53 752 of 53 752 equal |
 | `hw` | the register names Virtual Hydlide's code uses, read in context (VDP1 FBCR/PTMR/EDSR, VDP2 TVSTAT and colour offset, SMPC COMREG, FRT FTCSR in the slave's wait loop) |
 
@@ -87,7 +90,9 @@ ninja -C build/recomp-build && build/recomp-build/selftest build/recomp/selftest
 
 * Discovery leaves unreached what nothing references: leaf functions with
   no prologue called only by dead code (about 7% of the opening program's
-  text). The runtime will name them as unknown targets, to be given as seeds.
+  text). The runtime stops at a call to an address that is not an entry
+  and logs it, to be given as a seed; Virtual Hydlide made none from the
+  boot to its first field.
 * A computed jump that fits none of the four switch forms stays
   unresolved; the recompiled code tries every instruction of its own
   function, then dispatches. In Virtual Hydlide all 36 left are tail calls
@@ -96,7 +101,13 @@ ninja -C build/recomp-build && build/recomp-build/selftest build/recomp/selftest
   could differ from the hardware (`mac.w` saturation, `div1` corner cases)
   the self-test cannot tell; the running game is the check.
 * Interrupts reach recompiled code at safe points only (back-edges, calls,
-  `ldc …,sr`); there are no cycle counts.
+  `ldc …,sr`); there are no cycle counts. An interrupt raised twice before
+  a poll takes it is taken once (an SCU timer on every line comes about
+  once a poll).
+* The runtime draws nothing and plays nothing yet: the VDPs and sound RAM
+  are memory, the 68000 is not run (SBL's sound driver is answered at its
+  command blocks), CD-DA plays are timed, not heard. Not emulated: the
+  SCU DSP, the SH-2's on-chip interrupts, the caches.
 * `match` needs a fingerprint unique on both sides; identical small
   functions (library copies) are matched only through their callers.
 * `--find-base` scores literals pointing at function prologues. A small

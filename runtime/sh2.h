@@ -172,6 +172,7 @@ const SH2Module* sh2_identify(uint32_t base);     // the module whose image is i
 void    sh2_activate(const SH2Module* m);          // replaces any active module it overlaps
 SH2Func sh2_lookup(uint32_t addr);                  // nullptr if not an entry of an active module
 void    sh2_call_unknown(SH2Context& c, uint32_t addr);   // services: not an entry (the BIOS...)
+void    sh2_program_start(SH2Context& c, uint32_t addr);  // services: a call to a module's base
 uint32_t sh2_crc32(const uint8_t* p, size_t n, uint32_t crc = 0);
 // Guest memory as bytes, for loaders and tests (work RAMs only).
 bool sh2_mem_write(uint32_t addr, const void* src, size_t n);

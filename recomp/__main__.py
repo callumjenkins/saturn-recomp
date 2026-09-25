@@ -182,11 +182,15 @@ add_library(recomp STATIC
     {srcs})
 target_include_directories(recomp PUBLIC ${{SATURNKIT_RUNTIME}})
 target_compile_options(recomp PRIVATE -Wno-unused-label -Wno-tautological-compare)
-# the runtime: saturnkit_core (memory, dispatch over the modules) and
-# saturnkit_stub (no hardware: tests that only run the game's own code)
+# the runtime: saturnkit_core (memory, dispatch over the modules),
+# saturnkit_stub (no hardware: tests that only run the game's own code) and
+# saturnkit_hw (the Saturn)
 include(${{SATURNKIT_RUNTIME}}/runtime.cmake)
 add_executable(selftest ${{SATURNKIT_RUNTIME}}/selftest.cpp)
 target_link_libraries(selftest saturnkit_core saturnkit_stub recomp)
+# the Saturn with no screen: boots a disc into these modules
+add_executable(saturn ${{SATURNKIT_RUNTIME}}/main.cpp)
+target_link_libraries(saturn saturnkit_core saturnkit_hw recomp Threads::Threads)
 # a project can add its own targets (the game) with -DSATURNKIT_EXTRA=file.cmake
 if(DEFINED SATURNKIT_EXTRA)
   include(${{SATURNKIT_EXTRA}})

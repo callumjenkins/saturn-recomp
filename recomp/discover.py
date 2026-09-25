@@ -30,10 +30,11 @@ written for Hitachi SHC's output (and GCC's, which is close):
    with the index offset by a constant).
 6. Unreached code: after the pass, a literal value that points into the
    program at a *boundary* (after data, or after a terminator's delay
-   slot), is not data and is not dereferenced where it is loaded (a load or
-   store through it: a variable's address) is a function reached by
-   pointer (a callback, an interrupt handler, a slave job). It becomes a
-   seed if its descent meets no undefined opcode and no data. Failing that, unclassified code that
+   slot) or at a stack-frame prologue, is not data and is not dereferenced
+   where it is loaded (a load or store through it: a variable's address)
+   is a function reached by pointer (a callback, an interrupt handler, a
+   slave job). It becomes a seed if its descent meets no undefined opcode
+   and no data. Failing that, unclassified code that
    starts with a stack-frame prologue at a boundary (SHC links whole
    object files, so uncalled functions sit between called ones) is taken
    the same way. Repeat to a fixed point.
@@ -563,8 +564,12 @@ class Program:
                 cands.add(v)
         added = 0
         for v in sorted(cands):
-            if not self._boundary(v):
-                continue                # may become one once its neighbour is found
+            # not after known code or data: it may become a boundary once its
+            # neighbour is found, unless it opens with a stack frame (a pointer
+            # to a prologue is a function, whatever unclassified words precede it:
+            # an interrupt handler after a pool nothing reads)
+            if not self._boundary(v) and not (v & 1 == 0 and self._is_prologue(self.img.u16(v))):
+                continue
             f, data = self._descend(v, commit=False)
             if f.bad or f.code & self.data or data & self.code:
                 self._rejected.add(v)

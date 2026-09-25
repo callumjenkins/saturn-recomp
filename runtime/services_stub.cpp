@@ -22,6 +22,13 @@ void sh2_bad_return(SH2Context& c, uint32_t expected) {
     std::exit(1);
 }
 void sh2_call_unknown(SH2Context& c, uint32_t addr) { fail(c, "call to a non-entry", addr); }
+// No machine to restart: a program start is an ordinary call into the module
+// whose image is in memory there.
+void sh2_program_start(SH2Context& c, uint32_t addr) {
+    if (const SH2Module* m = sh2_identify(addr)) sh2_activate(m);
+    if (SH2Func f = sh2_lookup(addr)) f(c);
+    else fail(c, "program start with no module at", addr);
+}
 
 uint32_t sh2_mmio_read(uint32_t a, int size) {
     std::fprintf(stderr, "saturnkit: %d-byte read of %08X (no hardware)\n", size, a);

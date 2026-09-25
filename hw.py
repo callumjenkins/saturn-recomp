@@ -91,7 +91,7 @@ ONCHIP = {0xFE00: "SMR", 0xFE01: "BRR", 0xFE02: "SCR", 0xFE03: "TDR", 0xFE04: "S
 # BIOS service pointers in WRAM-H, as the SBL headers name them.
 # (address, name, checked-by-a-game note or "")
 BIOS = [
-    (0x0600026C, "SYS_EXECDMP?", ""),
+    (0x0600026C, "SYS_0x26C", "Virtual Hydlide: jumped through (not called) right after a program is loaded to the 1st read address; probably starts it"),
     (0x06000300, "SYS_SETUINT", "Virtual Hydlide: (0x40 VBlank-IN, handler), (0x4D sprite end, handler)"),
     (0x06000304, "SYS_GETUINT", "Virtual Hydlide: returns the handler it saves before replacing it"),
     (0x06000310, "SYS_SETSINT", "Virtual Hydlide: (0x94, slave entry) before SSHON"),

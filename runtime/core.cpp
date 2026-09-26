@@ -156,6 +156,17 @@ void sh2_call(SH2Context& c, uint32_t addr) {
     else sh2_call_unknown(c, addr);
 }
 
+// ---- the store watch ------------------------------------------------------------------------
+// Called from the recompiled function that stores (the inline st8/16/32):
+// its return address lies in that function, which the report maps back to
+// the guest's.
+uint32_t g_sh2_watch_lo, g_sh2_watch_len;
+void (*g_sh2_watch_report)(uint32_t a, uint32_t v, int size, const void* host);
+
+__attribute__((noinline)) void sh2_watch_store(uint32_t a, uint32_t v, int size) {
+    if (g_sh2_watch_report) g_sh2_watch_report(a, v, size, __builtin_return_address(0));
+}
+
 // ---- hooks ----------------------------------------------------------------------------------
 // The recompiler calls sh2_hook after the instructions a build asked for
 // (recomp --hook); what a hook does is set here, from the command line

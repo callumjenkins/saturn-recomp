@@ -64,6 +64,14 @@ void     sh2_mmio_write(uint32_t a, uint32_t v, int size);
 #define SH2_IS_WRAM_H(a) (((a) & 0xDFF00000u) == 0x06000000u)
 #define SH2_IS_WRAM_L(a) (((a) & 0xDFF00000u) == 0x00200000u)
 
+// A store into [g_sh2_watch_lo, g_sh2_watch_lo + g_sh2_watch_len) (addresses
+// with the cache-through bit cleared) goes to sh2_watch_store first: the
+// runtime's --watch over a work-RAM range. Length 0, the default: none.
+extern uint32_t g_sh2_watch_lo, g_sh2_watch_len;
+void sh2_watch_store(uint32_t a, uint32_t v, int size);
+#define SH2_WATCH(a, v, size) \
+    do { if (SH2_UNLIKELY(((a) & 0xDFFFFFFFu) - g_sh2_watch_lo < g_sh2_watch_len)) sh2_watch_store(a, v, size); } while (0)
+
 static inline uint32_t ld8(uint32_t a) {
     if (SH2_IS_WRAM_H(a)) return g_wram_h[a & 0xFFFFFu];
     if (SH2_IS_WRAM_L(a)) return g_wram_l[a & 0xFFFFFu];
@@ -84,17 +92,20 @@ static inline uint32_t ld32(uint32_t a) {
     return __builtin_bswap32(v);
 }
 static inline void st8(uint32_t a, uint32_t v) {
+    SH2_WATCH(a, v, 1);
     if (SH2_IS_WRAM_H(a)) g_wram_h[a & 0xFFFFFu] = (uint8_t)v;
     else if (SH2_IS_WRAM_L(a)) g_wram_l[a & 0xFFFFFu] = (uint8_t)v;
     else sh2_io_write(a, v & 0xFFu, 1);
 }
 static inline void st16(uint32_t a, uint32_t v) {
+    SH2_WATCH(a, v, 2);
     uint16_t w = __builtin_bswap16((uint16_t)v);
     if (SH2_IS_WRAM_H(a)) std::memcpy(g_wram_h + (a & 0xFFFFFu), &w, 2);
     else if (SH2_IS_WRAM_L(a)) std::memcpy(g_wram_l + (a & 0xFFFFFu), &w, 2);
     else sh2_io_write(a, v & 0xFFFFu, 2);
 }
 static inline void st32(uint32_t a, uint32_t v) {
+    SH2_WATCH(a, v, 4);
     uint32_t w = __builtin_bswap32(v);
     if (SH2_IS_WRAM_H(a)) std::memcpy(g_wram_h + (a & 0xFFFFFu), &w, 4);
     else if (SH2_IS_WRAM_L(a)) std::memcpy(g_wram_l + (a & 0xFFFFFu), &w, 4);

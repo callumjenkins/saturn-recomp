@@ -108,20 +108,34 @@ static void backtrace(const SH2Context& c) {
 static void* g_poll_ring[4096];
 static unsigned g_poll_pos;
 
+// The recompiled function a host code address lies in: its module and guest entry
+struct HostFn { uintptr_t host; uint32_t addr; const char* mod; };
+static const HostFn* host_function(const void* p) {
+    static std::vector<HostFn> fns;
+    if (fns.empty()) {
+        for (int i = 0; i < g_sh2_nmodules; ++i)
+            for (uint32_t k = 0; k < g_sh2_modules[i]->nfuncs; ++k)
+                fns.push_back({(uintptr_t)g_sh2_modules[i]->funcs[k].fn, g_sh2_modules[i]->funcs[k].addr,
+                               g_sh2_modules[i]->name});
+        std::sort(fns.begin(), fns.end(), [](const HostFn& a, const HostFn& b) { return a.host < b.host; });
+    }
+    auto it = std::upper_bound(fns.begin(), fns.end(), (uintptr_t)p, [](uintptr_t v, const HostFn& f) { return v < f.host; });
+    return it == fns.begin() ? nullptr : &*(it - 1);
+}
+
+// --watch over the work RAMs: every store, its value, the function that made it
+static void watch_report(uint32_t a, uint32_t v, int size, const void* host) {
+    if (sat_vblanks() < g_cfg.watch_from || sat_vblanks() > g_cfg.watch_to) return;
+    const HostFn* f = host_function(host);
+    sat_note("store%d %08X = %0*X in %s:%08X (pr %08X, VBlank %llu)", size * 8, a, size * 2, v,
+             f ? f->mod : "?", f ? f->addr : 0, g_cpu->pr, (unsigned long long)sat_vblanks());
+}
+
 static void hot_spots() {
-    struct Fn { uintptr_t host; uint32_t addr; const char* mod; };
-    std::vector<Fn> fns;
-    for (int i = 0; i < g_sh2_nmodules; ++i)
-        for (uint32_t k = 0; k < g_sh2_modules[i]->nfuncs; ++k)
-            fns.push_back({(uintptr_t)g_sh2_modules[i]->funcs[k].fn, g_sh2_modules[i]->funcs[k].addr, g_sh2_modules[i]->name});
-    std::sort(fns.begin(), fns.end(), [](const Fn& a, const Fn& b) { return a.host < b.host; });
     std::map<std::pair<const char*, uint32_t>, int> hist;
     for (void* p : g_poll_ring) {
         if (!p) continue;
-        auto it = std::upper_bound(fns.begin(), fns.end(), (uintptr_t)p, [](uintptr_t v, const Fn& f) { return v < f.host; });
-        if (it == fns.begin()) continue;
-        --it;
-        ++hist[{it->mod, it->addr}];
+        if (const HostFn* f = host_function(p)) ++hist[{f->mod, f->addr}];
     }
     std::vector<std::pair<int, std::pair<const char*, uint32_t>>> top;
     for (auto& [k, n] : hist) top.push_back({n, k});
@@ -352,6 +366,12 @@ int saturn_main(const SaturnConfig& cfg) {
     g_cfg = cfg;
     g_t0 = std::chrono::steady_clock::now();
     mmio_watch(cfg.watch_lo, cfg.watch_hi);
+    if (cfg.watch_lo <= cfg.watch_hi && (SH2_IS_WRAM_H(cfg.watch_lo) || SH2_IS_WRAM_L(cfg.watch_lo))) {
+        extern void (*g_sh2_watch_report)(uint32_t, uint32_t, int, const void*);
+        g_sh2_watch_lo = cfg.watch_lo & 0xDFFFFFFFu;
+        g_sh2_watch_len = cfg.watch_hi - cfg.watch_lo + 1;
+        g_sh2_watch_report = watch_report;
+    }
     smpc_input_script(cfg.input);
     if (!cdrom_open(cfg.cue)) { std::fprintf(stderr, "cannot open the disc %s\n", cfg.cue.c_str()); return 2; }
     g_master = SH2Context{};

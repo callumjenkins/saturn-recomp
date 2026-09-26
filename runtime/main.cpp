@@ -4,14 +4,17 @@
 //     saturn --cue GAME.cue [--out DIR] [--headless] [--fullscreen] [--scale N]
 //            [--vblanks N] [--starts N] [--trace] [--realtime] [--input VBLANK:BUTTONS,...]
 //            [--shot N,...] [--dump N,...] [--peek ADDR[:WORDS],...] [--watch LO:HI]
-//            [--wav FILE] [--hook ADDR:rN=VALUE ...]
+//            [--watch-vblanks FROM:TO] [--wav FILE] [--hook ADDR:rN=VALUE ...]
 //
 // --vblanks and --starts end the run after that many VBlanks or program
 // starts; the log of the hardware touched goes to DIR/hw-log.txt. --shot
 // saves the picture at those VBlank-INs (DIR/shot-N.png), --dump the video
 // memories (DIR/dump-N.bin), --wav the sound of the whole run. --hook sets
 // register N to VALUE (hex) after the hooked instruction at ADDR (the build's
-// recomp --hook).
+// recomp --hook). --watch LO:HI logs each access to a memory area in the
+// range with --trace; in the work RAMs, each store, with the function that
+// made it, with or without --trace; --watch-vblanks FROM:TO narrows that to
+// those VBlanks.
 #include "saturn.h"
 #include <cstdio>
 #include <cstdlib>
@@ -33,6 +36,12 @@ int main(int argc, char** argv) {
             cfg.watch_lo = (uint32_t)std::strtoul(w, nullptr, 16);
             const char* colon = std::strchr(w, ':');
             cfg.watch_hi = colon ? (uint32_t)std::strtoul(colon + 1, nullptr, 16) : cfg.watch_lo;
+        }
+        else if (!std::strcmp(a, "--watch-vblanks") && more) {
+            const char* w = argv[++i];
+            cfg.watch_from = std::strtoull(w, nullptr, 10);
+            const char* colon = std::strchr(w, ':');
+            cfg.watch_to = colon ? std::strtoull(colon + 1, nullptr, 10) : ~0ull;
         }
         else if (!std::strcmp(a, "--realtime")) cfg.realtime = true;
         else if (!std::strcmp(a, "--input") && more) cfg.input = argv[++i];

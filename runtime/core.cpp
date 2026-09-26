@@ -155,3 +155,21 @@ void sh2_call(SH2Context& c, uint32_t addr) {
     if (SH2Func f = sh2_lookup(addr)) f(c);
     else sh2_call_unknown(c, addr);
 }
+
+// ---- hooks ----------------------------------------------------------------------------------
+// The recompiler calls sh2_hook after the instructions a build asked for
+// (recomp --hook); what a hook does is set here, from the command line
+// (main.cpp --hook): a register takes a value. A hook nothing was set for
+// leaves the game's own value.
+struct Hook { uint32_t addr; int reg; uint32_t v; };
+static Hook g_hooks[16];
+static int g_nhooks;
+
+void sh2_hook_set(uint32_t addr, int reg, uint32_t v) {
+    if (g_nhooks < 16) g_hooks[g_nhooks++] = {addr, reg & 15, v};
+}
+
+void sh2_hook(SH2Context& c, uint32_t addr) {
+    for (int i = 0; i < g_nhooks; ++i)
+        if (g_hooks[i].addr == addr) c.r[g_hooks[i].reg] = g_hooks[i].v;
+}

@@ -265,9 +265,10 @@ class Body:
     were resolved, `unknown` lists static targets that are not entries here.
     """
 
-    def __init__(self, prog, f, entries, volatile=frozenset(), comments=True):
+    def __init__(self, prog, f, entries, volatile=frozenset(), comments=True, hooks=frozenset()):
         self.p, self.f, self.img = prog, f, prog.img
         self.entries, self.volatile, self.comments = entries, volatile, comments
+        self.hooks = hooks
         self.ops = {a: prog.img.insn(a) for a in f.code}
         self.slots = {a + 2 for a, i in self.ops.items() if i.delay and a + 2 in f.code}
         self.sites = {}
@@ -386,6 +387,10 @@ class Body:
         """(C++ for the instruction at `a`, the address it continues at or None)."""
         ins = self.ops[a]
         op = ins.op
+        if a in self.hooks:
+            if op in BRANCHES or a in self.slots:
+                raise Unsupported("a hook at %08X, on a branch or a delay slot: %s" % (a, ins.text))
+            return "%s sh2_hook(c, %s);" % (self._stmt(ins), _h(a)), a + 2
         if op not in BRANCHES:
             return self._stmt(ins), a + 2
         if op in ("bt", "bf"):

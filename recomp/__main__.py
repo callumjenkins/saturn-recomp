@@ -1,7 +1,7 @@
 """Recompile flat SH-2 programs to C++, one module per program.
 
     python -m saturnkit.recomp --out build/recomp NAME=FILE@BASE[+SEED,...] ... [--optest]
-                               [--per-file 8000] [--no-comments]
+                               [--per-file 8000] [--no-comments] [--hook NAME:ADDR,...]
 
 Each program is discovered (recomp/discover.py) and emitted into its own
 namespace, p_<name>. Programs loaded at the same address are separate
@@ -15,6 +15,11 @@ modules; the runtime activates the one whose image it finds in memory
     CMakeLists.txt          the library `recomp`, the runtime, the self-test
     report.txt              per module: functions, calls and jumps by how
                             they were resolved, targets outside the module
+
+--hook NAME:ADDR,... calls sh2_hook(c, ADDR) after the instruction at ADDR
+in program NAME (not a branch, not a delay slot): a place where the
+runtime can change what the game computed (runtime/core.cpp, `--hook` of
+the saturn executable).
 
 --optest adds saturnkit's own instruction test (recomp/selftest.py): a
 synthetic program with every SH-2 instruction form, as module OPTEST, and
@@ -86,8 +91,9 @@ def volatile_literals(prog):
 
 
 class Module:
-    def __init__(self, name, path, base, seeds=()):
+    def __init__(self, name, path, base, seeds=(), hooks=()):
         self.name, self.path, self.base = name, path, base
+        self.hooks = frozenset(hooks)
         self.ns = "p_" + name.lower()
         self.data = open(path, "rb").read()
         self.crc = zlib.crc32(self.data)
@@ -117,7 +123,7 @@ class Module:
 
         for e in self.entries:
             fn = prog.funcs[e]
-            body = E.Body(prog, fn, entries, volatile, comments)
+            body = E.Body(prog, fn, entries, volatile, comments, self.hooks & set(fn.code))
             buf.append("\n".join(body.emit()))
             for k, v in body.sites.items():
                 self.sites[k] = self.sites.get(k, 0) + v
@@ -198,7 +204,9 @@ endif()
 """
 
 
-def generate(specs, out, per_file=8000, comments=True, optest=False, log=print):
+def generate(specs, out, per_file=8000, comments=True, optest=False, log=print, hooks=None):
+    """hooks: {program name: [address, ...]}, see --hook."""
+    hooks = hooks or {}
     t0 = time.time()
     os.makedirs(out, exist_ok=True)
     if optest:
@@ -208,8 +216,11 @@ def generate(specs, out, per_file=8000, comments=True, optest=False, log=print):
     modules = []
     for name, path, base, seeds in specs:
         t = time.time()
-        m = Module(name, path, base, seeds)
+        m = Module(name, path, base, seeds, hooks.get(name, ()))
         m.generate(out, per_file, comments, log)
+        missing = m.hooks - {a for f in m.prog.funcs.values() for a in f.code}
+        if missing:
+            raise SystemExit("%s: hook at %s, not in any function's code" % (name, ", ".join("%08X" % a for a in sorted(missing))))
         modules.append(m)
         log("%-9s %5d functions %8d instructions %3d files  %.1f s"
             % (name, len(m.entries), m.n_ins, len(m.files), time.time() - t))
@@ -259,8 +270,13 @@ def main(argv=None):
     ap.add_argument("--per-file", type=int, default=8000)
     ap.add_argument("--no-comments", action="store_true")
     ap.add_argument("--optest", action="store_true", help="add saturnkit's instruction test module")
+    ap.add_argument("--hook", action="append", default=[], help="NAME:ADDR,...: sh2_hook after these instructions")
     a = ap.parse_args(argv)
-    generate([parse_spec(s) for s in a.programs], a.out, a.per_file, not a.no_comments, a.optest)
+    hooks = {}
+    for h in a.hook:
+        name, _, addrs = h.partition(":")
+        hooks.setdefault(name, []).extend(int(x, 16) for x in addrs.split(",") if x)
+    generate([parse_spec(s) for s in a.programs], a.out, a.per_file, not a.no_comments, a.optest, hooks=hooks)
 
 
 if __name__ == "__main__":

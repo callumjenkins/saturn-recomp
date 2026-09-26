@@ -45,6 +45,8 @@ void     sh2_call(SH2Context& c, uint32_t addr);        // jsr/jmp through a reg
 void     sh2_poll(SH2Context& c);                       // the budget is spent: time, interrupts
 void     sh2_sleep(SH2Context& c, uint32_t pc);
 void     sh2_trapa(SH2Context& c, uint32_t imm, uint32_t pc);
+void     sh2_hook(SH2Context& c, uint32_t addr);         // after an instruction the build hooked (core.cpp)
+void     sh2_hook_set(uint32_t addr, int reg, uint32_t v);   // that hook sets register reg to v
 void     sh2_bad_return(SH2Context& c, uint32_t expected);   // rts/rte went elsewhere
 uint32_t sh2_io_read(uint32_t a, int size);             // anything outside the work RAMs (core.cpp)
 void     sh2_io_write(uint32_t a, uint32_t v, int size);

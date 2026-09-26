@@ -287,8 +287,11 @@ class Body:
                 continue
             if ins.op in ("jmp", "jsr"):
                 lit = p._literal_for(a, ins.n)
-                if lit and lit[0] == "lit":
+                if lit and lit[0] == "lit" and lit[2] not in self.volatile:
                     out[a] = ([lit[1]], "literal")
+                    continue
+                if lit and lit[0] == "lit":         # a slot the code writes: its value at run time
+                    out[a] = ([], "unresolved")
                     continue
                 if lit and lit[0] == "ptr":
                     out[a] = ([], "pointer")

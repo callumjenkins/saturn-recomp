@@ -34,6 +34,7 @@ static const uint32_t kRet = 0xFFFFFFE8u;            // the dispatcher's return 
 static uint32_t g_first_read = 0x06004000u;
 static bool g_pal;                                   // the disc is for Europe (PAL) alone
 static uint32_t g_uint[0x80];                        // SYS_SETUINT's handlers, vectors 0x00-0x7F
+static uint32_t g_uipr[0x20];                        // SYS_CHGUIPR's table: the SCU mask while 0x40+i runs
 static uint8_t g_sem[0x100];
 
 uint32_t bios_first_read() { return g_first_read; }
@@ -108,6 +109,7 @@ static const char* slot_name(uint32_t p) {
     case 0x06000340: return "SYS_SETSCUIM";
     case 0x06000344: return "SYS_CHGSCUIM";
     case 0x06000358: return "BUP_Init";
+    case 0x06000280: return "SYS_CHGUIPR";
     }
     return nullptr;
 }
@@ -123,13 +125,21 @@ bool bios_is_dispatcher(uint32_t vec, uint32_t target) {
     return vec >= 0x40 && vec < 0x80 && target == kSlotBase + vec * 4;
 }
 
+// While an SCU interrupt's handler runs, the BIOS masks the SCU sources its
+// table (SYS_CHGUIPR, 0x06000280) lists for that vector, so that only the
+// ones the game allows can nest (SGL lets the DMA ends into its VBlank-IN
+// handler, which waits for them). The table's mask is added to the current
+// one and the current one comes back after the handler.
 void bios_dispatch(SH2Context& c, uint32_t vec) {
     uint32_t h = g_uint[vec & 0x7F];
+    uint32_t mask = scu_mask();
+    if (vec >= 0x40 && vec < 0x60) scu_set_mask(mask | (g_uipr[vec - 0x40] & 0xFFFFu));
     c.r[15] -= 0x30;                            // r0-r7, mach, macl, pr, gbr saved by the BIOS
     c.pr = kRet;
     c.pc = 0;
     sh2_call(c, h);
     if (c.pc != kRet) sat_fatal("interrupt %02X: handler %08X returned to %08X", vec, h, c.pc);
+    scu_set_mask(mask);
 }
 
 bool bios_call(SH2Context& c, uint32_t addr) {
@@ -189,6 +199,10 @@ bool bios_call(SH2Context& c, uint32_t addr) {
         break;
     case 0x06000358:                            // BUP_Init(lib, work, config[3])
         if (!bup_call(c, 0x100)) return false;
+        break;
+    case 0x06000280:                            // SYS_CHGUIPR(table): 32 words, the SCU mask for each of 0x40-0x5F
+        for (uint32_t i = 0; i < 0x20; ++i) g_uipr[i] = ld32(r4 + i * 4);
+        sat_trace("SYS_CHGUIPR(%08X)", r4);
         break;
     case 0x0600026C:
         sat_note("the program called 0x0600026C (the BIOS's exit to the system), from %08X", c.pr);

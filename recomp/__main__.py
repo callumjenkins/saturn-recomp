@@ -71,11 +71,26 @@ def parse_spec(spec):
 
 
 def volatile_literals(prog):
-    """Literal-pool slots that some 32-bit literal points at: data the code
-    may write, so their loads read memory instead of folding the constant."""
+    """Literal-pool slots that some 32-bit literal points at, or that a `mova`
+    takes to store through (`mova SLOT,r0; mov.l rN,@r0`, hand-written
+    assembly keeping its variables in its pools): data the code may write,
+    so their loads read memory instead of folding the constant."""
     img, pools, values = prog.img, {}, set()
     for a in prog.code:
         ins = img.insn(a)
+        if ins.op == "mova":
+            # stores through r0 in the straight line after, until r0 changes
+            for b in range(a + 2, a + 12, 2):
+                if b not in prog.code:
+                    break
+                j = img.insn(b)
+                if j.n == 0 and j.fmt in ("mov.l Rm,@Rn", "mov.w Rm,@Rn", "mov.b Rm,@Rn"):
+                    values.add(ins.target)
+                elif j.n == 0 and j.fmt in ("mov.l Rm,@(disp,Rn)", "mov.w r0,@(disp,Rn)", "mov.b r0,@(disp,Rn)"):
+                    values.add(ins.target + j.disp)
+                if j.op in discover.Program._STOPS or j.op in ("bt", "bf", "bt/s", "bf/s", "jsr", "bsr") \
+                        or 0 in discover._writes(j):
+                    break
         if ins.op in ("mov.w", "mov.l") and ins.size and ins.target is not None:
             pools[ins.target] = ins.size
             if ins.size == 4:

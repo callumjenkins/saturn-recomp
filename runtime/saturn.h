@@ -92,6 +92,8 @@ void scu_frame_event(int what);     // DMA start factors: 0 VBlank-IN, 1 VBlank-
 void scu_line(int line);            // timer 0 compare, per raster line reached
 uint32_t scu_read(uint32_t off, int size);
 void scu_write(uint32_t off, uint32_t v, int size);
+uint32_t scu_dsp_read(uint32_t off);   // the DSP's registers, 0x80-0x8C (scudsp.cpp)
+void scu_dsp_write(uint32_t off, uint32_t v);
 
 // ---- SMPC (smpc.cpp) ----------------------------------------------------------------
 uint32_t smpc_read(uint32_t off);

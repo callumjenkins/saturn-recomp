@@ -1,5 +1,5 @@
 // saturnkit runtime — the SCU: its interrupt controller, the two timers and
-// the three DMA levels (the DSP is not there: no game of ours uses it yet).
+// the three DMA levels (the DSP is in scudsp.cpp).
 //
 // Interrupts: a source sets its bit in IST; an interrupt whose bit is not
 // masked in IMS goes to the master at its fixed level, and is taken at the
@@ -126,6 +126,7 @@ uint32_t scu_read(uint32_t off, int size) {
     }
     switch (off) {
     case 0x7C: return 0;                        // DSTA: nothing in progress
+    case 0x80: case 0x84: case 0x88: case 0x8C: return scu_dsp_read(off);
     case 0x90: return g_t0c;
     case 0x94: return g_t1s;
     case 0x98: return g_t1md;
@@ -168,7 +169,8 @@ void scu_write(uint32_t off, uint32_t v, int size) {
     case 0xA0: g_ims = v; return;
     case 0xA4: g_ist &= v; return;              // writing 0 clears
     case 0x80: case 0x84: case 0x88: case 0x8C:
-        sat_fatal("the SCU DSP (%02X) is not emulated", off);
+        scu_dsp_write(off, v);
+        return;
     }
     g_regs[off / 4] = v;
 }

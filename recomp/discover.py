@@ -150,8 +150,8 @@ class Program:
     def _literal_for(self, at, reg, limit=24):
         """Value loaded into `reg` by a literal load in the straight line before `at`.
 
-        Returns ("lit", value), ("ptr", address) for `mov.l @rX,reg` with rX a
-        literal (a call through a pointer, e.g. a BIOS vector), or None.
+        Returns ("lit", value, slot), ("ptr", address) for `mov.l @rX,reg` with
+        rX a literal (a call through a pointer, e.g. a BIOS vector), or None.
         """
         a = at - 2
         want = reg
@@ -164,7 +164,7 @@ class Program:
             if want in _writes(ins):
                 if ins.op == "mov.l" and ins.size == 4 and ins.target is not None:
                     v = self.img.literal(ins)
-                    return ("lit", v) if v is not None else None
+                    return ("lit", v, ins.target) if v is not None else None
                 if ins.op == "mov.l" and ins.fmt in ("mov.l @Rm,Rn", "mov.l @(disp,Rm),Rn"):
                     inner = self._literal_for(a, ins.m, limit)
                     if inner and inner[0] == "lit" and ins.fmt == "mov.l @Rm,Rn":
@@ -269,7 +269,7 @@ class Program:
     _LOADS = {"mov.b @(r0,Rm),Rn": 1, "mov.w @(r0,Rm),Rn": 2, "mov.l @(r0,Rm),Rn": 4}
     _STOPS = ("bra", "jmp", "rts", "rte", "braf")
 
-    def _mova_switch(self, jmp):
+    def _mova_switch(self, jmp, before=None):
         """GCC's switch and its kin, a `mova` table read by `jmp`:
 
             mova TABLE,r0; mov.w|mov.b @(r0,rI),rI; add rI,r0; jmp @r0   (entries relative to TABLE)
@@ -280,12 +280,17 @@ class Program:
         entries if the index is scaled after it, M / size + 1 if not);
         failing that, the table runs until it would overlap a target. Either
         way it stops before the first target past it: a table does not run
-        into the code it jumps to."""
+        into the code it jumps to.
+
+        `before`: GCC also computes the target, then `bra`s to a `jmp @r0`
+        placed after a pool; the computation is then read back from the
+        `bra` at `before`."""
         img = self.img
         j = img.insn(jmp)
         load = mova = None
         rel = False
-        for a in range(jmp - 2, jmp - 16, -2):
+        end = before if before is not None else jmp
+        for a in range(end - 2, end - 16, -2):
             if not self.inside(a):
                 return None
             ins = img.insn(a)
@@ -300,7 +305,9 @@ class Program:
             return None
         la, ld = load
         size = self._LOADS[ld.fmt]
-        between = [img.insn(b) for b in range(la + 2, jmp, 2)]
+        between = [img.insn(b) for b in range(la + 2, end, 2)]
+        if before is not None:
+            between.append(img.insn(before + 2))       # the bra's delay slot
         if j.n == 0 and any(i.fmt == "add Rm,Rn" and i.n == 0 and i.m == ld.n for i in between):
             rel = True
         elif j.n != ld.n or size != 4 or any(ld.n in _writes(i) for i in between):
@@ -327,6 +334,86 @@ class Program:
             return None
         span = len(entries) * size
         return entries, table & ~1, ((table + span + 1) & ~1) - (table & ~1)
+
+    def _mova_base(self, jmp):
+        """T for `mova T,r0; ... add rX,r0; jmp @r0` in the straight line before
+        `jmp`, r0 not otherwise written in between; None otherwise."""
+        img = self.img
+        if img.insn(jmp).n != 0:
+            return None
+        added = False
+        for a in range(jmp - 2, jmp - 14, -2):
+            if not self.inside(a):
+                return None
+            ins = img.insn(a)
+            if ins.op in self._STOPS or ins.delay:
+                return None
+            if ins.op == "mova":
+                return ins.target if added and self.inside(ins.target) else None
+            if ins.fmt == "add Rm,Rn" and ins.n == 0:
+                added = True
+            elif 0 in _writes(ins):
+                return None
+        return None
+
+    def _record_switch(self, jmp):
+        """A table of records whose first word is the target (hand-written
+        assembly): `and #M` on the index, shifts, `mova TABLE,r0; add rI,r0;
+        mov.l @r0+,rJ` (or `@r0`), more loads from the record, `jmp @rJ`.
+        The offsets are every index the mask lets through, scaled by the
+        shifts between the mask and the `mova`."""
+        img = self.img
+        j = img.insn(jmp)
+        ld = None
+        for a in range(jmp - 2, jmp - 24, -2):
+            if not self.inside(a):
+                return None
+            ins = img.insn(a)
+            if ins.op in self._STOPS or ins.delay:
+                return None
+            if ins.fmt in ("mov.l @Rm+,Rn", "mov.l @Rm,Rn") and ins.m == 0 and ins.n == j.n:
+                ld = a
+                break
+            if j.n in _writes(ins):
+                return None
+        if ld is None:
+            return None
+        add, mova = img.insn(ld - 2), img.insn(ld - 4)
+        if not (add.fmt == "add Rm,Rn" and add.n == 0 and mova.op == "mova"):
+            return None
+        idx, scale, mask = add.m, 1, None
+        for a in range(ld - 6, ld - 30, -2):
+            ins = img.insn(a)
+            if ins.op in self._STOPS:
+                return None
+            if ins.n == idx and ins.op == "shll":
+                scale *= 2
+            elif ins.n == idx and ins.op == "shll2":
+                scale *= 4
+            elif ins.n == idx and ins.fmt == "add Rm,Rn" and ins.m == idx:
+                scale *= 2
+            elif ins.n == idx and ins.fmt == "mov Rm,Rn":
+                idx = ins.m
+            elif ins.op == "and" and ins.imm is not None and idx == 0:
+                mask = ins.imm
+                break
+            elif idx in _writes(ins):
+                return None
+        if mask is None or mask > 1023:
+            return None
+        table = mova.target
+        offsets = [v * scale for v in range(mask + 1) if v & ~mask == 0]
+        targets = []
+        for o in offsets:
+            if not img.contains(table + o, 4):
+                return None
+            t = img.u32(table + o)
+            if not self.inside(t):
+                return None
+            targets.append(t)
+        # the records are data; the table spans them all (the other fields included)
+        stride = scale * (mask & -mask or 1)
+        return targets, table & ~1, ((table + offsets[-1] + stride + 1) & ~1) - (table & ~1)
 
     def _switch_bound(self, at, size):
         """The number of entries of a table indexed just after `at`, from the
@@ -559,10 +646,22 @@ class Program:
                     f.tails.add(t)
                 else:
                     work.append(t)
+                    # GCC's switch computed here, dispatched by a `jmp @r0` after a pool
+                    if self.inside(t) and t not in switches and img.insn(t).op == "jmp":
+                        sw = self._mova_switch(t, before=a)
+                        if sw:
+                            targets, table, size = sw
+                            switches[t] = targets
+                            for k in range(0, size, 2):
+                                data.add(table + k)
+                                f.tables.add(table + k)
+                            work.extend(targets)
                 return
             elif op == "jmp":
                 r = self._literal_for(a, ins.n)
-                if r and r[0] == "lit":
+                if a in switches:                  # a switch found at the bra that leads here
+                    pass
+                elif r and r[0] == "lit":
                     t = r[1]
                     if (t in self.funcs and t != f.entry) or not self.inside(t):
                         f.tails.add(t)
@@ -572,7 +671,7 @@ class Program:
                     self.ext_calls[r[1]] += 1
                 else:
                     sw = self._abs_switch(a) or self._byte_switch(a) or self._byte_switch_offset(a) \
-                        or self._mova_switch(a)
+                        or self._mova_switch(a) or self._record_switch(a)
                     if sw:
                         targets, table, size = sw
                         switches[a] = targets
@@ -582,6 +681,15 @@ class Program:
                         work.extend(targets)
                     else:
                         pending.append((a, "jmp"))
+                        # a computed jump into straight code near a label
+                        # (`mova T,r0; add rX,r0; jmp @r0`, an unrolled copy
+                        # entered part-way): T and the code up to it are the
+                        # function's, so that the jump can land anywhere in it
+                        t = self._mova_base(a)
+                        if t is not None:
+                            work.append(t)
+                            if t > a:
+                                work.append(a + 4)
                 return
             elif op == "braf":
                 sw = self._switch(a)
@@ -684,6 +792,8 @@ class Program:
                 if into(a - 4) or into(a + 4):     # a word of a table of pointers
                     tabled.add(v)
         literals = self._literal_values()
+        cands |= {v for v in literals if self.inside(v) and v not in self.code and v not in self.data
+                  and v not in self._rejected and v not in data_addrs}
         added = 0
         for v in sorted(cands):
             # not after known code or data: it may become a boundary once its
@@ -723,14 +833,26 @@ class Program:
         return any(not a & 3 and a + 6 in code and self._is_pointers(a) for a in code)
 
     def _literal_values(self):
-        """The 32-bit values the code loads from its literal pools (incrementally)."""
-        out = self._lits
+        """The 32-bit values the code loads from its literal pools, and the
+        addresses `mova` takes and stores (`mova L,r0; mov.l r0,@rN`: a code
+        address handed over, a slave's entry written to the BIOS's vector),
+        incrementally."""
+        out, img = self._lits, self.img
         for a in self.code - self._lit_scanned:
-            ins = self.img.insn(a)
+            ins = img.insn(a)
             if ins.op == "mov.l" and ins.size == 4 and ins.target is not None:
-                v = self.img.literal(ins)
+                v = img.literal(ins)
                 if v is not None:
                     out.add(v)
+            elif ins.op == "mova":
+                for b in range(a + 2, a + 10, 2):
+                    j = img.insn(b)
+                    if j.op == "mov.l" and (j.m == 0 and j.fmt.startswith("mov.l Rm,@")
+                                            or j.fmt == "mov.l r0,@(disp,gbr)"):
+                        out.add(ins.target)
+                        break
+                    if 0 in _writes(j) or j.op in self._STOPS:
+                        break
         self._lit_scanned |= self.code
         return out
 

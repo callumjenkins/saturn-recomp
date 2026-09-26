@@ -9,7 +9,7 @@ set(_rt ${CMAKE_CURRENT_LIST_DIR})
 add_library(saturnkit_core OBJECT ${_rt}/core.cpp)
 add_library(saturnkit_stub OBJECT ${_rt}/services_stub.cpp)
 add_library(saturnkit_hw OBJECT
-    ${_rt}/machine.cpp ${_rt}/bios.cpp ${_rt}/mmio.cpp ${_rt}/scu.cpp ${_rt}/smpc.cpp
+    ${_rt}/machine.cpp ${_rt}/bios.cpp ${_rt}/mmio.cpp ${_rt}/scu.cpp ${_rt}/scudsp.cpp ${_rt}/smpc.cpp
     ${_rt}/cdrom.cpp ${_rt}/cdblock.cpp ${_rt}/onchip.cpp ${_rt}/video.cpp ${_rt}/vdp1.cpp ${_rt}/vdp2.cpp
     ${_rt}/host.cpp ${_rt}/sound.cpp ${_rt}/scsp.cpp)
 enable_language(C)

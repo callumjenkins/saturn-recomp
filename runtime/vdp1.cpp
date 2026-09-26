@@ -35,6 +35,7 @@
 #include "saturn.h"
 #include "video.h"
 #include <algorithm>
+#include <array>
 #include <climits>
 #include <cmath>
 #include <cstdlib>
@@ -346,8 +347,10 @@ static void command(const uint8_t* cmd, uint32_t a) {
 // the one in the frame before that has the same kind, mode, colour,
 // texture and size and lies nearest (within 64 pixels), or, when the game
 // layer gave the draw keys (vdp1_next_draw_keys: which model part each
-// command is), with the one that has the same key; an unmatched one is
-// drawn where it is. VDP2's scroll registers (0x70-0x9F), kept at each
+// command is), with the one that has the same key. An unmatched one (what
+// has just come into view) moves with what it touches of the matched ones:
+// a vertex it shares, an edge it lies on, else the nearest vertex; so new
+// ground stays joined to the ground beside it. VDP2's scroll registers (0x70-0x9F), kept at each
 // frame change, move the same way (video.cpp). The last frame is redrawn
 // from a copy of VDP1 RAM taken at its frame change: by the last field of
 // the interval the game has already sent the next frame's textures (its
@@ -420,6 +423,12 @@ static uint64_t signature(const uint8_t* b) {
     return (uint64_t)(cw(b, 0) & 0x0F3F) << 48 ^ (uint64_t)cw(b, 4) << 32 ^ (uint64_t)cw(b, 6) << 16 ^
            (uint64_t)cw(b, 8) ^ (uint64_t)cw(b, 10) << 24;
 }
+// the vertices a command places: a normal sprite its corner, a scaled one two corners
+// (or a point and a size), a line two ends, the rest four
+static int vertices(const uint8_t* b) {        // a mask of A B C D
+    int comm = cw(b, 0) & 0xF;
+    return comm == 0 ? 1 : comm == 1 ? ((cw(b, 0) >> 8 & 0xF) ? 1 : 5) : comm == 6 ? 3 : 15;
+}
 static void centre(const uint8_t* b, int& x, int& y) {
     x = y = 0;
     for (int i = 0; i < 4; ++i) { x += sx13(cw(b, 12 + i * 4)); y += sx13(cw(b, 14 + i * 4)); }
@@ -452,8 +461,11 @@ static void draw_between(float alpha) {
                 else before.emplace(signature(pd->cmds[i].b), i);
             }
         }
-        for (const RecCmd& rc : ld.cmds) {
-            if (!pd || !matchable(rc.b)) { command(rc.b, rc.addr); continue; }
+        // which command of the frame before each one is
+        std::vector<size_t> picks(ld.cmds.size(), SIZE_MAX);
+        for (size_t k = 0; k < ld.cmds.size() && pd; ++k) {
+            const RecCmd& rc = ld.cmds[k];
+            if (!matchable(rc.b)) continue;
             int cx, cy;
             centre(rc.b, cx, cy);
             size_t pick = SIZE_MAX;
@@ -475,18 +487,124 @@ static void draw_between(float alpha) {
                     if (dist < best) { best = dist; pick = it->second; }
                 }
             }
-            if (pick == SIZE_MAX) { command(rc.b, rc.addr); continue; }
-            used[pick] = true;
-            uint8_t b[32];
-            std::copy(rc.b, rc.b + 32, b);
-            const uint8_t* pb = pd->cmds[pick].b;
+            if (pick != SIZE_MAX) { used[pick] = true; picks[k] = pick; }
+        }
+        // the matched vertices' moves: where a vertex is, how far it goes; and the matched
+        // shapes' edges
+        struct Move { int x, y, dx, dy; };
+        std::vector<Move> verts;
+        std::vector<std::pair<Move, Move>> edges;
+        std::vector<std::array<uint8_t, 32>> moved(ld.cmds.size());
+        for (size_t k = 0; k < ld.cmds.size(); ++k) {
+            if (picks[k] == SIZE_MAX) continue;
+            uint8_t* nb = moved[k].data();
+            std::copy(ld.cmds[k].b, ld.cmds[k].b + 32, nb);
+            const uint8_t* pb = pd->cmds[picks[k]].b;
             for (int o = 12; o < 28; o += 2) {
-                int from = sx13(cw(pb, o)), to = sx13(cw(b, o));
+                int from = sx13(cw(pb, o)), to = sx13(cw(nb, o));
                 int v = from + (int)std::lround((to - from) * alpha);
-                b[o] = (uint8_t)(v >> 8);
-                b[o + 1] = (uint8_t)v;
+                nb[o] = (uint8_t)(v >> 8);
+                nb[o + 1] = (uint8_t)v;
             }
-            command(b, rc.addr);
+            Move m[4];
+            int mask = vertices(nb);
+            for (int i = 0; i < 4; ++i) {
+                int x = sx13(cw(ld.cmds[k].b, 12 + i * 4)), y = sx13(cw(ld.cmds[k].b, 14 + i * 4));
+                m[i] = {x, y, sx13(cw(nb, 12 + i * 4)) - x, sx13(cw(nb, 14 + i * 4)) - y};
+                if (mask >> i & 1) verts.push_back(m[i]);
+            }
+            if (mask == 15)
+                for (int i = 0; i < 4; ++i) edges.push_back({m[i], m[(i + 1) & 3]});
+        }
+        // Matched shapes that meet at a vertex in this frame stay met: it moves by the mean
+        // of their moves (near the camera the game clips and clamps, so they need not have
+        // met in the frame before)
+        {
+            std::unordered_map<uint64_t, std::array<long, 3>> sum;
+            auto at = [](int x, int y) { return (uint64_t)(uint32_t)x << 32 | (uint32_t)y; };
+            for (const Move& m : verts) {
+                auto& e = sum[at(m.x, m.y)];
+                e[0] += m.dx; e[1] += m.dy; ++e[2];
+            }
+            for (size_t k = 0; k < ld.cmds.size(); ++k) {
+                if (picks[k] == SIZE_MAX) continue;
+                uint8_t* nb = moved[k].data();
+                int mask = vertices(nb);
+                for (int i = 0; i < 4; ++i) {
+                    if (!(mask >> i & 1)) continue;
+                    Move v{sx13(cw(ld.cmds[k].b, 12 + i * 4)), sx13(cw(ld.cmds[k].b, 14 + i * 4)), 0, 0};
+                    const auto& e = sum[at(v.x, v.y)];
+                    int dx = (int)std::lround((double)e[0] / e[2]), dy = (int)std::lround((double)e[1] / e[2]);
+                    nb[12 + i * 4] = (uint8_t)((v.x + dx) >> 8); nb[13 + i * 4] = (uint8_t)(v.x + dx);
+                    nb[14 + i * 4] = (uint8_t)((v.y + dy) >> 8); nb[15 + i * 4] = (uint8_t)(v.y + dy);
+                }
+            }
+        }
+        // A command with no counterpart (just come into view) moves with what it touches: a
+        // matched vertex it shares, else a matched edge it lies on (the finer ground near the
+        // camera meets the coarser in T-junctions), else the nearest matched vertex. So new
+        // ground stays joined to the ground beside it.
+        auto displacement = [&](int x, int y, int& dx, int& dy) {
+            dx = dy = 0;
+            long best = LONG_MAX;
+            for (const Move& m : verts) {
+                long d = (long)(m.x - x) * (m.x - x) + (long)(m.y - y) * (m.y - y);
+                if (d < best) { best = d; dx = m.dx; dy = m.dy; }
+            }
+            if (best == 0) return;
+            for (const auto& [p, q] : edges) {
+                double ex = q.x - p.x, ey = q.y - p.y, len2 = ex * ex + ey * ey;
+                if (len2 < 1) continue;
+                double t = ((x - p.x) * ex + (y - p.y) * ey) / len2;
+                if (t < 0 || t > 1) continue;
+                double cross = (x - p.x) * ey - (y - p.y) * ex;
+                if (cross * cross > len2 * 2.25) continue;     // more than 1.5 pixels off the edge
+                dx = (int)std::lround(p.dx + (q.dx - p.dx) * t);
+                dy = (int)std::lround(p.dy + (q.dy - p.dy) * t);
+                return;
+            }
+        };
+        // what has no counterpart, in two passes: each one moved becomes something the
+        // others can touch (new ground meets new ground too)
+        std::vector<std::array<uint8_t, 32>> placed(ld.cmds.size());
+        std::vector<Move> base_verts = verts;
+        std::vector<std::pair<Move, Move>> base_edges = edges;
+        for (int pass = 0; pass < 2 && pd && !base_verts.empty(); ++pass) {
+            std::vector<Move> more_verts;
+            std::vector<std::pair<Move, Move>> more_edges;
+            for (size_t k = 0; k < ld.cmds.size(); ++k) {
+                const RecCmd& rc = ld.cmds[k];
+                if (picks[k] != SIZE_MAX || !matchable(rc.b)) continue;
+                uint8_t* nb = placed[k].data();
+                std::copy(rc.b, rc.b + 32, nb);
+                int mask = vertices(nb);
+                Move m[4];
+                for (int i = 0; i < 4; ++i) {
+                    int x = sx13(cw(nb, 12 + i * 4)), y = sx13(cw(nb, 14 + i * 4)), dx = 0, dy = 0;
+                    if (mask >> i & 1) displacement(x, y, dx, dy);
+                    m[i] = {x, y, dx, dy};
+                    if (!(mask >> i & 1)) continue;
+                    more_verts.push_back(m[i]);
+                    nb[12 + i * 4] = (uint8_t)((x + dx) >> 8); nb[13 + i * 4] = (uint8_t)(x + dx);
+                    nb[14 + i * 4] = (uint8_t)((y + dy) >> 8); nb[15 + i * 4] = (uint8_t)(y + dy);
+                }
+                if (mask == 15)
+                    for (int i = 0; i < 4; ++i) more_edges.push_back({m[i], m[(i + 1) & 3]});
+                if (pass == 0) {                // the first pass's results count at once
+                    verts.insert(verts.end(), more_verts.end() - __builtin_popcount(mask), more_verts.end());
+                    if (mask == 15) edges.insert(edges.end(), more_edges.end() - 4, more_edges.end());
+                }
+            }
+            verts = base_verts;
+            verts.insert(verts.end(), more_verts.begin(), more_verts.end());
+            edges = base_edges;
+            edges.insert(edges.end(), more_edges.begin(), more_edges.end());
+        }
+        for (size_t k = 0; k < ld.cmds.size(); ++k) {
+            const RecCmd& rc = ld.cmds[k];
+            if (picks[k] != SIZE_MAX) command(moved[k].data(), rc.addr);
+            else if (pd && matchable(rc.b) && !base_verts.empty()) command(placed[k].data(), rc.addr);
+            else command(rc.b, rc.addr);
         }
     }
     g_sys_x = sx; g_sys_y = sy; g_ux0 = u0; g_uy0 = v0; g_ux1 = u1; g_uy1 = v1; g_local_x = lx; g_local_y = ly;

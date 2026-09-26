@@ -33,13 +33,14 @@
 // 68000's level is the highest of SCILV2-0 over the bits pending and
 // enabled (bits 8-10 take bit 7's level).
 //
-// The envelope, LFO and DSP follow MAME's scsp.cpp and scspdsp.cpp
-// (BSD-3-Clause; copyright-holders ElSemi, R. Belmont, thanks-to
-// kingshriek): the envelope times in milliseconds, the key-rate scaling,
-// the LFO tables and scales, the FM scaling, and the DSP step with its
-// floating-point PACK/UNPACK of the ring buffer. The timers' behaviour
-// (free-running, loaded at the next count) is the hardware's as Mednafen
-// documents it. Not done: MIDI (its input reads empty), the DSP's
+// The envelope, LFO and DSP follow MAME's scsp.cpp and scspdsp.cpp: the
+// envelope times in milliseconds, the key-rate scaling, the LFO tables and
+// scales, the FM scaling, and the DSP step with its floating-point
+// PACK/UNPACK of the ring buffer. Those parts are derived from MAME's code:
+//   Copyright (c) ElSemi, R. Belmont (thanks-to kingshriek), BSD-3-Clause;
+//   the licence's text is in THIRD_PARTY.md at the root of saturnkit.
+// The timers' behaviour (free-running, loaded at the next count) is the
+// hardware's as Mednafen documents it. Not done: MIDI (its input reads empty), the DSP's
 // ring-buffer writes on even steps.
 #include "saturn.h"
 #include "sound.h"

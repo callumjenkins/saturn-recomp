@@ -32,10 +32,12 @@ static const uint32_t kBupTable = 0x06000A00u;       // where 0x06000354 points
 static const uint32_t kRet = 0xFFFFFFE8u;            // the dispatcher's return address
 
 static uint32_t g_first_read = 0x06004000u;
+static bool g_pal;                                   // the disc is for Europe (PAL) alone
 static uint32_t g_uint[0x80];                        // SYS_SETUINT's handlers, vectors 0x00-0x7F
 static uint8_t g_sem[0x100];
 
 uint32_t bios_first_read() { return g_first_read; }
+bool bios_pal() { return g_pal; }
 
 // ---- the boot ------------------------------------------------------------------------
 static bool load_file(const char* path, uint32_t addr, uint32_t* size_out) {
@@ -62,14 +64,16 @@ void bios_boot() {
     auto be = [&](int o) { return (uint32_t)ip[o] << 24 | ip[o + 1] << 16 | ip[o + 2] << 8 | ip[o + 3]; };
     uint32_t ip_size = be(0xE0), mstack = be(0xE8), sstack = be(0xEC);
     g_first_read = be(0xF0);
+    std::string areas(reinterpret_cast<const char*>(ip + 0x40), 10);   // area symbols: J T U B K A E L
+    g_pal = areas.find('E') != std::string::npos && areas.find_first_of("JTUBKAL") == std::string::npos;
     sh2_mem_write(0x06002000u, ip, ip_size && ip_size <= sizeof ip ? ip_size : sizeof ip);
 
     std::string first = cdrom_first_file();
     uint32_t size = 0;
     if (first.empty() || !load_file(first.c_str(), g_first_read, &size))
         sat_fatal("cannot load the 1st read file");
-    sat_note("IP.BIN: %.10s %.6s; 1st read file %s, %u bytes at %08X", ip + 0x20, ip + 0x2A, first.c_str(),
-             size, g_first_read);
+    sat_note("IP.BIN: %.10s %.6s, areas %.10s; 1st read file %s, %u bytes at %08X", ip + 0x20, ip + 0x2A, ip + 0x40,
+             first.c_str(), size, g_first_read);
 
     // the vector tables and the service pointers
     for (uint32_t v = 0; v < 256; ++v) {

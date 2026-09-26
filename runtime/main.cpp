@@ -1,11 +1,14 @@
-// saturnkit runtime — a Saturn with no screen yet: boots a disc into the
-// recompiled programs of this build and runs it.
+// saturnkit runtime — boots a disc into the recompiled programs of this
+// build and runs it, in a window or headless.
 //
-//     saturn --cue GAME.cue [--out DIR] [--vblanks N] [--starts N] [--trace] [--realtime]
-//            [--peek ADDR[:WORDS],...] [--watch LO:HI] [--input VBLANK:BUTTONS,...]
+//     saturn --cue GAME.cue [--out DIR] [--headless] [--fullscreen] [--scale N]
+//            [--vblanks N] [--starts N] [--trace] [--realtime] [--input VBLANK:BUTTONS,...]
+//            [--shot N,...] [--dump N,...] [--peek ADDR[:WORDS],...] [--watch LO:HI]
 //
 // --vblanks and --starts end the run after that many VBlanks or program
-// starts; the log of the hardware touched goes to DIR/hw-log.txt.
+// starts; the log of the hardware touched goes to DIR/hw-log.txt. --shot
+// saves the picture at those VBlank-INs (DIR/shot-N.png), --dump the video
+// memories (DIR/dump-N.bin).
 #include "saturn.h"
 #include <cstdio>
 #include <cstdlib>
@@ -30,9 +33,15 @@ int main(int argc, char** argv) {
         }
         else if (!std::strcmp(a, "--realtime")) cfg.realtime = true;
         else if (!std::strcmp(a, "--input") && more) cfg.input = argv[++i];
+        else if (!std::strcmp(a, "--dump") && more) cfg.dump = argv[++i];
+        else if (!std::strcmp(a, "--shot") && more) cfg.shots = argv[++i];
+        else if (!std::strcmp(a, "--headless")) cfg.headless = true;
+        else if (!std::strcmp(a, "--fullscreen")) cfg.fullscreen = true;
+        else if (!std::strcmp(a, "--scale") && more) cfg.scale = std::atoi(argv[++i]);
         else {
-            std::fprintf(stderr, "usage: saturn --cue GAME.cue [--out DIR] [--vblanks N] [--starts N] [--trace] [--realtime]\n"
-                                 "             [--peek ADDR[:WORDS],...] [--watch LO:HI] [--input VBLANK:BUTTONS,...]\n");
+            std::fprintf(stderr, "usage: saturn --cue GAME.cue [--out DIR] [--headless] [--fullscreen] [--scale N]\n"
+                                 "             [--vblanks N] [--starts N] [--trace] [--realtime] [--input VBLANK:BUTTONS,...]\n"
+                                 "             [--shot N,...] [--dump N,...] [--peek ADDR[:WORDS],...] [--watch LO:HI]\n");
             return 2;
         }
     }

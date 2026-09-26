@@ -6,9 +6,10 @@
 // INTBACK answers with the status (time, area, system state) and/or the
 // peripheral data, and raises the SMPC interrupt at the next poll; the
 // peripheral data comes when the program asks to continue (IREG0 bit 7).
-// Port 1 has a standard digital pad, pressed by a script (--input), port 2
-// nothing.
+// Port 1 has a standard digital pad, pressed by a script (--input) and by
+// the host's keyboard and gamepad (host.cpp), port 2 nothing.
 #include "saturn.h"
+#include "video.h"
 #include <ctime>
 #include <string>
 #include <vector>
@@ -17,7 +18,7 @@ static uint8_t g_ireg[7], g_oreg[32], g_sr, g_sf, g_port[16];
 static uint8_t g_smem[4];
 static bool g_irq, g_peri_pending;
 static uint8_t g_area = 0x0C;              // Europe, PAL (the disc's area); TV timing is NTSC (video.cpp)
-static uint16_t g_pad1 = 0xFFFF;           // active low
+static uint16_t g_script_pressed;         // what the script holds now
 
 // The pad, scripted: "VBLANK:BUTTON+BUTTON,..." (an empty list releases all).
 // Digital pad bits, active low: byte 1 RIGHT LEFT DOWN UP START A C B,
@@ -80,15 +81,16 @@ static void intback_status() {
 
 static void intback_peripheral() {
     while (g_script_pos < g_script.size() && g_script[g_script_pos].first <= sat_vblanks()) {
-        g_pad1 = (uint16_t)~g_script[g_script_pos].second | 0x0007;
-        sat_note("pad: %04X", (uint16_t)~g_pad1);
+        g_script_pressed = g_script[g_script_pos].second;
+        sat_note("pad: %04X", g_script_pressed);
         ++g_script_pos;
     }
+    uint16_t pad1 = (uint16_t)~(g_script_pressed | host_pad()) | 0x0007;   // active low
     int i = 0;
     g_oreg[i++] = 0xF1;                      // port 1: direct, one peripheral
     g_oreg[i++] = 0x02;                      // digital pad, 2 bytes
-    g_oreg[i++] = (uint8_t)(g_pad1 >> 8);
-    g_oreg[i++] = (uint8_t)g_pad1;
+    g_oreg[i++] = (uint8_t)(pad1 >> 8);
+    g_oreg[i++] = (uint8_t)pad1;
     g_oreg[i++] = 0xF0;                      // port 2: nothing
     while (i < 31) g_oreg[i++] = 0;
     g_oreg[31] = 0x10;

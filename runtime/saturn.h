@@ -11,7 +11,10 @@
 //   smpc.cpp      commands, INTBACK, the pads
 //   cdblock.cpp   the CD block at its registers, over cdrom.cpp's disc
 //   onchip.cpp    the SH7604's own registers, per CPU (DIVU, FRT, DMAC...)
-//   video.cpp     VDP1, VDP2, the SCSP: memory and registers, the raster timing
+//   video.cpp     the raster timing, the video and sound chips on the bus, the sound driver
+//   vdp1.cpp      VDP1: the command table drawn in software, the framebuffers
+//   vdp2.cpp      VDP2: the picture composed from its layers and VDP1's
+//   host.cpp      the window, the pad, the pace, PNG files
 #pragma once
 #include "sh2.h"
 #include <cstdint>
@@ -28,6 +31,11 @@ struct SaturnConfig {
     std::string peek;               // ADDR[:WORDS],... : memory printed when the run ends
     uint32_t watch_lo = 1, watch_hi = 0;   // memory-area addresses logged one by one
     std::string input;              // the pad: "VBLANK:BUTTON+BUTTON,..."
+    std::string dump;               // N,... : the video memories to out/dump-N.bin at VBlank-IN N
+    std::string shots;              // N,... : the picture to out/shot-N.png at VBlank-IN N
+    bool headless = false;          // no window
+    bool fullscreen = false;
+    int scale = 3;                  // the window: 320x240 times this
 };
 extern SaturnConfig g_cfg;
 extern SH2Context g_master, g_slave;
@@ -50,6 +58,7 @@ void master_poll_devices();
 // ---- the BIOS (bios.cpp) -----------------------------------------------------------
 void bios_boot();                   // the state the BIOS leaves, the 1st read file loaded
 uint32_t bios_first_read();         // where it was loaded (the entry)
+bool bios_pal();                    // IP.BIN's areas: Europe alone, a PAL disc
 bool bios_call(SH2Context& c, uint32_t addr);        // a BIOS ROM address: true if handled
 bool bios_is_dispatcher(uint32_t vec, uint32_t target);
 void bios_dispatch(SH2Context& c, uint32_t vec);     // the handler SYS_SETUINT installed
@@ -104,7 +113,7 @@ void onchip_write(SH2Context& c, uint32_t a, uint32_t v, int size);
 void onchip_input_capture(int cpu);   // SINIT/MINIT: the FRT's input-capture flag
 void onchip_reset(int cpu);
 
-// ---- video and sound, as memory for now (video.cpp) ---------------------------------------
+// ---- video and sound (video.cpp; vdp1.cpp, vdp2.cpp, host.cpp through video.h) ------------------
 void video_init();
 void video_tick(uint64_t now);        // raster timing: VBlank in/out, lines, VDP1 frames
 uint32_t video_read(uint32_t a, int size);    // VDP1, VDP2, SCSP (canonical addresses)

@@ -46,7 +46,10 @@ static std::map<std::pair<uint32_t, char>, uint64_t> g_watch;
 static uint32_t g_watch_lo = 1, g_watch_hi = 0;
 
 static void log_area(const char* name, uint32_t a, char rw) {
-    if (a >= g_watch_lo && a <= g_watch_hi) ++g_watch[{a, rw}];
+    if (a >= g_watch_lo && a <= g_watch_hi) {
+        ++g_watch[{a, rw}];
+        sat_trace("watch %c %08X (pr %08X)", rw, a, g_cpu->pr);
+    }
     AreaLog& l = g_areas[{name, rw}];
     if (a < l.lo) l.lo = a;
     if (a > l.hi) l.hi = a;

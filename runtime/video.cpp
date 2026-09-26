@@ -1,41 +1,41 @@
-// saturnkit runtime — VDP1, VDP2 and the SCSP, as memory for now, and the
-// raster timing that drives the frame.
+// saturnkit runtime — the raster timing that drives the frame, the video and
+// sound chips' place on the bus, and the sound driver's side of its
+// handshake.
 //
 // Timing is NTSC: 263 lines at 59.94 Hz, whatever the disc's area (TVSTAT's
 // PAL bit reads 0). Each line reached runs the SCU's timer 0 compare and
 // raises HBlank-IN; line 0 raises VBlank-OUT, the first line after the
-// display (224 or 240, from TVMD) VBlank-IN. At VBlank-IN VDP1 changes frame
-// (every frame in one-cycle mode, when FBCR asked for it in manual mode) and,
-// with PTMR = 2, starts drawing; PTMR = 1 starts at once. Nothing is drawn
-// yet: the command list is walked (for the counts and the end address), the
-// end flags in EDSR are set a little later and the sprite-draw-end interrupt
-// raised.
+// display (224, or 240 with TVMD's VRESO 1; 224 too for VRESO 2, PAL's 256
+// lines, which a 60 Hz raster has no room for) VBlank-IN. At VBlank-IN the
+// field that has ended is composed (vdp2.cpp) when a window or a picture
+// file wants it; at VBlank-OUT VDP1 erases and changes frame (vdp1.cpp).
 //
-// All memory and all registers keep what is written; reads return it.
+// VDP1 is vdp1.cpp, VDP2's picture vdp2.cpp; VDP2's registers, VRAM and
+// colour RAM, and the SCSP's RAM and registers, keep what is written.
 #include "saturn.h"
+#include "video.h"
+#include <cstdio>
+#include <string>
 #include <vector>
 
-static std::vector<uint8_t> g_vdp1_vram(0x80000), g_vdp1_fb(0x40000), g_vdp2_vram(0x80000),
-    g_vdp2_cram(0x1000), g_scsp_ram(0x80000), g_scsp_regs(0x1000);
-static uint8_t g_vdp1_regs[0x20], g_vdp2_regs[0x200];
+static std::vector<uint8_t> g_scsp_ram(0x80000), g_scsp_regs(0x1000);
 
 static const uint64_t kFrameNs = 16683350;      // 59.94 Hz
 static const int kLines = 263;
 static uint64_t g_line_abs;                      // raster lines since power-on
-static uint64_t g_vblanks, g_frame_changes, g_draws;
-static bool g_drawing, g_change_pending;
-static uint64_t g_draw_end;                      // time the current draw ends
+static uint64_t g_vblanks;
+static Frame g_frame;
 
 uint64_t sat_vblanks() { return g_vblanks; }
-uint64_t video_frame_changes() { return g_frame_changes; }
-uint64_t video_draws() { return g_draws; }
+uint64_t video_frame_changes() { return vdp1_frame_changes(); }
+uint64_t video_draws() { return vdp1_draws(); }
 
 static uint16_t reg16(const uint8_t* r, uint32_t o) { return (uint16_t)(r[o] << 8 | r[o + 1]); }
 static void set16(uint8_t* r, uint32_t o, uint16_t v) { r[o] = v >> 8; r[o + 1] = (uint8_t)v; }
 
 void video_init() {
-    set16(g_vdp1_regs, 0x16, 0x1000);            // MODR: version 1
-    set16(g_vdp1_regs, 0x10, 0x0002);            // EDSR: the last draw has ended
+    vdp1_init();
+    if (!host_open()) sat_fatal("no window");
 }
 
 static int display_lines() {
@@ -43,52 +43,35 @@ static int display_lines() {
     return vreso == 1 ? 240 : 224;
 }
 
-// ---- VDP1 ---------------------------------------------------------------------------
-static void draw_start() {
-    uint16_t edsr = reg16(g_vdp1_regs, 0x10);
-    set16(g_vdp1_regs, 0x10, (uint16_t)(edsr >> 1 & 1));   // BEF <- CEF, CEF <- 0
-    // walk the command table: END, and the jump modes (next, assign, call, return, skips)
-    uint32_t a = 0, ret = 0, last = 0;
-    int n = 0;
-    for (int guard = 0; guard < 20000; ++guard) {
-        uint16_t ctrl = (uint16_t)mem_rd(g_vdp1_vram.data(), a, 2);
-        last = a;
-        if (ctrl & 0x8000) break;
-        int jp = ctrl >> 12 & 7;
-        if (!(jp & 4)) ++n;                      // not a skip
-        uint32_t link = (uint32_t)mem_rd(g_vdp1_vram.data(), a + 2, 2) * 8 & 0x7FFFF;
-        switch (jp & 3) {
-        case 0: a += 0x20; break;
-        case 1: a = link; break;
-        case 2: ret = a + 0x20; a = link; break;
-        case 3: a = ret; break;
-        }
-        a &= 0x7FFFF;
-    }
-    set16(g_vdp1_regs, 0x12, (uint16_t)(last >> 3));       // LOPR
-    set16(g_vdp1_regs, 0x14, (uint16_t)(last >> 3));       // COPR
-    ++g_draws;
-    g_drawing = true;
-    g_draw_end = sat_now() + 1000000;           // 1 ms
-    sat_trace("VDP1 draw %llu: %d commands", (unsigned long long)g_draws, n);
+static bool listed(const std::string& list, const std::string& item) {
+    return !list.empty() && ("," + list + ",").find("," + item + ",") != std::string::npos;
 }
 
-static void frame_change() {
-    ++g_frame_changes;
-    sat_trace("VDP1 frame change %llu", (unsigned long long)g_frame_changes);
-    if ((reg16(g_vdp1_regs, 0x04) & 3) == 2) draw_start();   // PTMR: draw at each frame change
+// --dump: VDP1 VRAM, its draw framebuffer, VDP2 VRAM, CRAM, VDP1's and VDP2's registers, one after the other
+static void dump(const char* prefix, uint64_t n) {
+    char path[512];
+    std::snprintf(path, sizeof path, "%s/dump-%s%llu.bin", g_cfg.out.c_str(), prefix, (unsigned long long)n);
+    FILE* f = std::fopen(path, "wb");
+    if (!f) return;
+    vdp1_dump(f);
+    std::fwrite(g_vdp2_vram, 1, sizeof g_vdp2_vram, f);
+    std::fwrite(g_vdp2_cram, 1, sizeof g_vdp2_cram, f);
+    std::fclose(f);
 }
 
-static void vblank_in() {
+static void vblank_in(uint64_t now) {
     ++g_vblanks;
+    std::string n = std::to_string(g_vblanks);
+    if (listed(g_cfg.dump, n)) dump("", g_vblanks);
+    bool shot = listed(g_cfg.shots, n);
+    if (shot || host_wants_frame()) {
+        vdp2_compose(g_frame);
+        if (shot) write_png(g_cfg.out + "/shot-" + n + ".png", g_frame);
+        host_present(g_frame);
+    }
     scu_raise(IRQ_VBLANK_IN);
     scu_frame_event(0);
-    uint16_t fbcr = reg16(g_vdp1_regs, 0x02);
-    bool manual = fbcr & 2;                      // FCM
-    if (!manual || g_change_pending) {
-        g_change_pending = false;
-        frame_change();
-    }
+    host_pace(now);
 }
 
 void video_tick(uint64_t now) {
@@ -96,29 +79,12 @@ void video_tick(uint64_t now) {
     while (g_line_abs < target) {
         ++g_line_abs;
         int line = (int)(g_line_abs % kLines);
-        if (line == 0) { scu_raise(IRQ_VBLANK_OUT); scu_frame_event(1); }
-        if (line == display_lines()) vblank_in();
+        if (line == 0) { vdp1_vblank_out(); scu_raise(IRQ_VBLANK_OUT); scu_frame_event(1); }
+        if (line == display_lines()) vblank_in(g_line_abs * (kFrameNs / kLines));
         scu_raise(IRQ_HBLANK_IN);
         scu_line(line);
     }
-    if (g_drawing && now >= g_draw_end) {
-        g_drawing = false;
-        set16(g_vdp1_regs, 0x10, (uint16_t)(reg16(g_vdp1_regs, 0x10) | 2));   // CEF
-        scu_raise(IRQ_SPRITE_END);
-        scu_frame_event(6);
-    }
-}
-
-static void vdp1_reg_write(uint32_t off, uint16_t v) {
-    set16(g_vdp1_regs, off, v);
-    switch (off) {
-    case 0x02:                                   // FBCR: FCM|FCT asks for a change at the next VBlank
-        if ((v & 3) == 3) g_change_pending = true;
-        break;
-    case 0x04:                                   // PTMR
-        if ((v & 3) == 1) draw_start();
-        break;
-    }
+    vdp1_tick(now);
 }
 
 // ---- the sound CPU's side, high level --------------------------------------------------------
@@ -130,9 +96,12 @@ static void vdp1_reg_write(uint32_t off, uint16_t v) {
 //
 // One command is followed further, PCM streaming (0x85 start, 0x86 stop):
 // the driver plays a ring buffer of samples from sound RAM and publishes,
-// for each of 8 streams, the play position at 0x7A0 + 2 * stream (samples
-// from the buffer's start, 16 bits); the SH-2 refills the ring and paces
-// movies by it. Here the position runs from the start command's pitch word
+// for each of 8 streams, where it plays in the byte at 0x7A0 + 2 * stream:
+// the play position in blocks of 4096 samples (the SCSP's call address,
+// CA). The SH-2 counts each change of that byte as 4096 samples played
+// (Virtual Hydlide's PCM task, 0x06055C36 and 0x060560C8), refills the ring
+// by it and paces movies by it; published a sample at a time, the byte
+// changed at every poll of the task and the movie ran 2.4 times too fast. Here the position runs from the start command's pitch word
 // (SCSP OCT/FNS: 44.1 kHz * 2^OCT * (1 + FNS/1024)). The start command's
 // layout, as Virtual Hydlide's movie player sends it: [1] stream, [2] mode
 // (0x80 stereo), [3] level/pan, [4-5] buffer address >> 4, [6-7] size in
@@ -176,7 +145,7 @@ void sound_tick() {
     for (int i = 0; i < 8; ++i)
         if (g_pcm[i].on) {
             uint32_t pos = (uint32_t)((double)(now - g_pcm[i].t0) * g_pcm[i].rate / 1e9) % g_pcm[i].size;
-            set16(&g_scsp_ram[0x7A0 + 2 * i], 0, (uint16_t)pos);
+            g_scsp_ram[0x7A0 + 2 * i] = (uint8_t)(pos >> 12);
         }
 }
 
@@ -189,18 +158,18 @@ bool video_owns(uint32_t a) {
 static uint8_t* area(uint32_t a, uint32_t& off) {
     if (a < 0x05B00000u) { off = a & 0x7FFFF; return g_scsp_ram.data(); }
     if (a < 0x05B01000u) { off = a & 0xFFF; return g_scsp_regs.data(); }
-    if (a < 0x05C80000u) { off = a & 0x7FFFF; return g_vdp1_vram.data(); }
-    if (a < 0x05D00000u) { off = a & 0x3FFFF; return g_vdp1_fb.data(); }
-    if (a < 0x05E00000u) return nullptr;                  // VDP1's registers
-    if (a < 0x05F00000u) { off = a & 0x7FFFF; return g_vdp2_vram.data(); }
-    if (a < 0x05F80000u) { off = a & 0xFFF; return g_vdp2_cram.data(); }
+    if (a < 0x05C80000u) { off = a & 0x7FFFF; return g_vdp1_vram; }
+    if (a < 0x05E00000u) return nullptr;                  // VDP1's framebuffer and registers
+    if (a < 0x05F00000u) { off = a & 0x7FFFF; return g_vdp2_vram; }
+    if (a < 0x05F80000u) { off = a & 0xFFF; return g_vdp2_cram; }
     return nullptr;
 }
 
 uint32_t video_read(uint32_t a, int size) {
     uint32_t off;
     if (uint8_t* p = area(a, off)) return mem_rd(p, off, size);
-    if (a >= 0x05D00000u && a < 0x05D00020u) return mem_rd(g_vdp1_regs, a & 0x1F, size);
+    if (a < 0x05D00000u) return vdp1_fb_read(a & 0x3FFFF, size);
+    if (a < 0x05D00020u) return vdp1_reg_read(a & 0x1F, size);
     off = a & 0x1FF;
     if (off == 0x04 || off == 0x08 || off == 0x0A) {   // TVSTAT, HCNT, VCNT: from the raster
         int line = (int)(g_line_abs % kLines);
@@ -214,12 +183,7 @@ uint32_t video_read(uint32_t a, int size) {
 void video_write(uint32_t a, uint32_t v, int size) {
     uint32_t off;
     if (uint8_t* p = area(a, off)) { mem_wr(p, off, v, size); return; }
-    if (a >= 0x05D00000u && a < 0x05D00020u) {
-        off = a & 0x1F;
-        if (size == 4) { vdp1_reg_write(off, (uint16_t)(v >> 16)); vdp1_reg_write(off + 2, (uint16_t)v); }
-        else if (size == 2) vdp1_reg_write(off, (uint16_t)v);
-        else sat_fatal("byte write to VDP1 register %02X", off);
-        return;
-    }
+    if (a < 0x05D00000u) { vdp1_fb_write(a & 0x3FFFF, v, size); return; }
+    if (a < 0x05D00020u) { vdp1_reg_write(a & 0x1F, v, size); return; }
     mem_wr(g_vdp2_regs, a & 0x1FF, v, size);
 }

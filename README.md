@@ -19,7 +19,7 @@ fixes live in the ports.
 
 | Port | Game | What it asked of saturnkit |
 |---|---|---|
-| pc-virtualhydlide | Virtual Hydlide (1995) | the disc, the SH-2 decoder, the address map, function discovery, cross-program matching, the interpreter, the recompiler, the runtime core (HLE boot and BIOS, SCU, SMPC, the slave as a coroutine, the CD block, SBL's sound-driver handshake), and VDP1 and VDP2 in software in a window with the pad |
+| pc-virtualhydlide | Virtual Hydlide (1995) | the disc, the SH-2 decoder, the address map, function discovery, cross-program matching, the interpreter, the recompiler, the runtime core (HLE boot and BIOS, SCU, SMPC, the slave as a coroutine, the CD block), VDP1 and VDP2 in software in a window with the pad, the 68000 and the SCSP (sound), recompiler hooks for a game layer, and the fields between a game's frames drawn moving (`--interp`) |
 
 ## Using it
 

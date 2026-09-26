@@ -20,21 +20,31 @@ written for Hitachi SHC's output (and GCC's, which is close):
 3. Every delayed branch runs its slot: the slot is code, its literal is
    data.
 4. Literal loads mark their 2 or 4 bytes as data; `mova` marks nothing
-   until a switch claims the table.
+   until a switch claims the table (hand-written assembly also takes code
+   addresses with it, to jump to).
 5. SHC switch: `mov #N,r1; cmp/hs r1,r0; bt default; shll|shll2 r0;
    mov r0,r1; mova TABLE,r0; mov.w|mov.l @(r0,r1),r0; braf r0`. N entries
    of 16 or 32 bits, each an offset from the `braf` + 4. The runtime
    library's form: `mov #N,rB; cmp/hs r0,rB; bf default; mov.l TABLE,rT;
    mov.l @(r0,rT),rJ; jmp @rJ`, r0 a byte offset, N/4 + 1 absolute entries;
    and its shift ladders, a table of signed bytes added to a base (also
-   with the index offset by a constant).
-6. Unreached code: after the pass, a literal value that points into the
-   program at a *boundary* (after data, or after a terminator's delay
-   slot) or at a stack-frame prologue, is not data and is not dereferenced
-   where it is loaded (a load or store through it: a variable's address)
-   is a function reached by pointer (a callback, an interrupt handler, a
-   slave job). It becomes a seed if its descent meets no undefined opcode
-   and no data. Failing that, unclassified code that
+   with the index offset by a constant). GCC's switch: `mova TABLE,r0;
+   mov.w @(r0,rI),rI; add rI,r0; jmp @r0`, entries relative to the table
+   (8-bit ones in hand-written assembly), or `mov.l @(r0,rI),rJ; jmp @rJ`
+   with absolute entries; bounded by `cmp/hi` or `cmp/hs` against a
+   constant, or by an `and` mask, and never running into its own targets.
+6. Unreached code: after the pass, a value in the data or in unclassified
+   words that points into the program is a function reached by pointer (a
+   callback, an interrupt handler, a slave job) if it is not dereferenced
+   where it is loaded (a load or store through it: a variable's address),
+   is not text (a string passed as an argument) nor two pointers (a table
+   or a pool), and its descent meets no undefined opcode, no data, and no
+   pair of pointers. It must also be at a *boundary* (after data, or after
+   a terminator's delay slot), open with a stack-frame prologue, be loaded
+   by the code as a literal, or sit in a table of pointers; for the last
+   two, which is how hand-written handlers are reached, the descent must
+   be at least 8 instructions (a data record can decode cleanly for a few).
+   Failing all that, unclassified code that
    starts with a stack-frame prologue at a boundary (SHC links whole
    object files, so uncalled functions sit between called ones) is taken
    the same way. Repeat to a fixed point.
@@ -126,6 +136,7 @@ class Program:
         self._pending = list(seeds) or [img.base]
         self._rejected = set()
         self._data_addrs, self._scanned = set(), set()   # _data_addresses, incrementally
+        self._lits, self._lit_scanned = set(), set()     # _literal_values, likewise
         self.run()
 
     # -- helpers
@@ -255,6 +266,110 @@ class Program:
         lo = start & ~1
         return targets, lo, ((start + n + 1) & ~1) - lo
 
+    _LOADS = {"mov.b @(r0,Rm),Rn": 1, "mov.w @(r0,Rm),Rn": 2, "mov.l @(r0,Rm),Rn": 4}
+    _STOPS = ("bra", "jmp", "rts", "rte", "braf")
+
+    def _mova_switch(self, jmp):
+        """GCC's switch and its kin, a `mova` table read by `jmp`:
+
+            mova TABLE,r0; mov.w|mov.b @(r0,rI),rI; add rI,r0; jmp @r0   (entries relative to TABLE)
+            mova TABLE,r0; mov.l @(r0,rI),rJ; ...; jmp @rJ              (absolute entries)
+
+        The number of entries comes from the bound before it, `mov #K,rB;
+        cmp/hi rB,rX` (K + 1) or `cmp/hs` (K), or a mask, `and #M` (M + 1
+        entries if the index is scaled after it, M / size + 1 if not);
+        failing that, the table runs until it would overlap a target. Either
+        way it stops before the first target past it: a table does not run
+        into the code it jumps to."""
+        img = self.img
+        j = img.insn(jmp)
+        load = mova = None
+        rel = False
+        for a in range(jmp - 2, jmp - 16, -2):
+            if not self.inside(a):
+                return None
+            ins = img.insn(a)
+            if ins.op in self._STOPS or ins.delay:
+                return None
+            if ins.fmt in self._LOADS and ins.m != 0 and load is None:
+                load = (a, ins)
+            elif ins.op == "mova" and load is not None:
+                mova = (a, ins)
+                break
+        if not load or not mova:
+            return None
+        la, ld = load
+        size = self._LOADS[ld.fmt]
+        between = [img.insn(b) for b in range(la + 2, jmp, 2)]
+        if j.n == 0 and any(i.fmt == "add Rm,Rn" and i.n == 0 and i.m == ld.n for i in between):
+            rel = True
+        elif j.n != ld.n or size != 4 or any(ld.n in _writes(i) for i in between):
+            return None
+        table = mova[1].target
+        n = self._switch_bound(mova[0], size)
+        entries, first_after = [], None
+        for k in range(n or 1024):
+            ea = table + k * size
+            if not img.contains(ea, size) or (first_after is not None and ea >= first_after):
+                break
+            v = img.data[ea - img.base] if size == 1 else img.u16(ea) if size == 2 else img.u32(ea)
+            if rel:
+                bits = 8 * size
+                v = (table + (v - (1 << bits) if v >> (bits - 1) else v)) & 0xFFFFFFFF
+            if not self.inside(v):
+                if n:
+                    return None
+                break
+            entries.append(v)
+            if v > table and (first_after is None or v < first_after):
+                first_after = v
+        if not entries or (n and len(entries) != n):
+            return None
+        span = len(entries) * size
+        return entries, table & ~1, ((table + span + 1) & ~1) - (table & ~1)
+
+    def _switch_bound(self, at, size):
+        """The number of entries of a table indexed just after `at`, from the
+        bound or the mask before it in the same straight line, or None."""
+        img = self.img
+        scaled = False
+        for a in range(at - 2, at - 24, -2):
+            if not self.inside(a):
+                return None
+            ins = img.insn(a)
+            if ins.op in self._STOPS:
+                return None
+            if ins.op in ("shll", "shll2") or (ins.fmt == "add Rm,Rn" and ins.m == ins.n):
+                scaled = True
+            if ins.op in ("cmp/hi", "cmp/hs") and a + 2 < at and img.insn(a + 2).op in ("bt", "bt/s"):
+                k = self._reg_const(a, ins.m)
+                if k is None:
+                    return None
+                return k + 1 if ins.op == "cmp/hi" else k
+            if ins.op == "and":
+                m = ins.imm if ins.imm is not None else self._reg_const(a, ins.m)
+                if m is None or m >= 4096:
+                    return None
+                return m + 1 if scaled else m // size + 1
+        return None
+
+    def _reg_const(self, at, reg):
+        """The constant `mov #imm,reg` or a literal load gives `reg` in the few instructions before `at`."""
+        img = self.img
+        for a in range(at - 2, at - 12, -2):
+            if not self.inside(a):
+                return None
+            ins = img.insn(a)
+            if ins.op in self._STOPS:
+                return None
+            if reg in _writes(ins):
+                if ins.op == "mov" and ins.imm is not None:
+                    return ins.imm & 0xFFFFFFFF
+                if ins.op in ("mov.w", "mov.l") and ins.target is not None and ins.size:
+                    return img.literal(ins)
+                return None
+        return None
+
     def _switch(self, braf):
         """Targets of an SHC switch ending at `braf`, and its table, or None."""
         img = self.img
@@ -380,7 +495,9 @@ class Program:
         return f, data
 
     def _code_literal(self, ins, data):
-        if ins.target is not None and ins.op in ("mov.w", "mov.l", "mova") and ins.size:
+        # not `mova`: its target may be a table, or code (hand-written assembly
+        # takes a label's address with it and jumps to it)
+        if ins.target is not None and ins.op in ("mov.w", "mov.l") and ins.size:
             for k in range(0, ins.size, 2):
                 data.add(ins.target + k)
 
@@ -454,7 +571,8 @@ class Program:
                 elif r and r[0] == "ptr":
                     self.ext_calls[r[1]] += 1
                 else:
-                    sw = self._abs_switch(a) or self._byte_switch(a) or self._byte_switch_offset(a)
+                    sw = self._abs_switch(a) or self._byte_switch(a) or self._byte_switch_offset(a) \
+                        or self._mova_switch(a)
                     if sw:
                         targets, table, size = sw
                         switches[a] = targets
@@ -550,11 +668,12 @@ class Program:
 
     def _pointer_seeds(self):
         data_addrs = self._data_addresses()
-        cands = set()
+        cands, tabled = set(), set()
         words = [a for a in self.data if not a & 3 and a + 2 in self.data]
         # and the unclassified words: pointer tables in the data section
         for start, n in self.gaps():
             words.extend(range((start + 3) & ~3, start + n - 3, 4))
+        into = lambda w: self.img.contains(w, 4) and self.lo <= self.img.u32(w) < self.hi
         for a in sorted(words):
             if not self.img.contains(a, 4):
                 continue
@@ -562,17 +681,34 @@ class Program:
             if self.inside(v) and v not in self.code and v not in self.data and v not in self._rejected \
                     and v not in data_addrs:
                 cands.add(v)
+                if into(a - 4) or into(a + 4):     # a word of a table of pointers
+                    tabled.add(v)
+        literals = self._literal_values()
         added = 0
         for v in sorted(cands):
             # not after known code or data: it may become a boundary once its
             # neighbour is found, unless it opens with a stack frame (a pointer
             # to a prologue is a function, whatever unclassified words precede it:
-            # an interrupt handler after a pool nothing reads)
-            if not self._boundary(v) and not (v & 1 == 0 and self._is_prologue(self.img.u16(v))):
+            # an interrupt handler after a pool nothing reads), or the code loads
+            # it as a literal (a handler or a callback handed to a function:
+            # hand-written ones save r0-r7 first, not the callee-saved registers),
+            # or it sits in a table of pointers (hand-written dispatch tables)
+            if not self._boundary(v) and not (v & 1 == 0 and self._is_prologue(self.img.u16(v))) \
+                    and v not in literals and v not in tabled:
+                continue
+            if self._is_text(v) or self._is_pointers(v):   # a string or a table passed as an argument
+                self._rejected.add(v)
                 continue
             f, data = self._descend(v, commit=False)
-            if f.bad or f.code & self.data or data & self.code:
+            if f.bad or f.code & self.data or data & self.code or self._through_pointers(f.code):
                 self._rejected.add(v)
+                continue
+            # taken only as a literal or for its table: the address of a data
+            # record (passed to a function, or in a table of pointers) can decode
+            # cleanly for a few halfwords; a handler is longer
+            # (not rejected for good: it may yet become a boundary)
+            weak = not self._boundary(v) and not self._is_prologue(self.img.u16(v))
+            if weak and len(f.code) < 8:
                 continue
             self._descend(v)
             for t in f.calls | f.tails:
@@ -580,6 +716,53 @@ class Program:
                     self._pending.append(t)
             added += 1
         return added
+
+    def _through_pointers(self, code):
+        """The code runs over two consecutive words that point into the
+        program: it is a table decoded as instructions."""
+        return any(not a & 3 and a + 6 in code and self._is_pointers(a) for a in code)
+
+    def _literal_values(self):
+        """The 32-bit values the code loads from its literal pools (incrementally)."""
+        out = self._lits
+        for a in self.code - self._lit_scanned:
+            ins = self.img.insn(a)
+            if ins.op == "mov.l" and ins.size == 4 and ins.target is not None:
+                v = self.img.literal(ins)
+                if v is not None:
+                    out.add(v)
+        self._lit_scanned |= self.code
+        return out
+
+    def _is_text(self, a):
+        """A NUL-terminated run of printable ASCII (or tabs and newlines) starts
+        at `a`. Code rarely looks like this: prologues and most ALU forms have
+        a byte above 0x7E, and its NUL bytes come early (the high byte of `nop`,
+        `rts`…). Two printable bytes and a NUL can still be code (`add r3,r4;
+        nop` is "4<"), so a string shorter than 3 is taken only if zeros pad it
+        to the next 4-byte boundary, as the compiler aligns strings."""
+        img = self.img
+        for k in range(64):
+            if not img.contains(a + k, 1):
+                return False
+            c = img.data[a + k - img.base]
+            if c == 0:
+                if k >= 3:
+                    return True
+                end = (a + k + 4) & ~3
+                return k > 0 and img.contains(a + k, end - a - k) and \
+                    not any(img.data[a + k - img.base:end - img.base])
+            if not (0x20 <= c < 0x7F or c in (9, 10, 13)):
+                return False
+        return False
+
+    def _is_pointers(self, a):
+        """Two 32-bit words into the program start at `a`: a pointer table or a
+        literal pool, not code (`mov.b r0,@(r0,r6)` twice, each followed by a
+        branch, does not open a function)."""
+        img = self.img
+        return not a & 3 and img.contains(a, 8) and \
+            all(self.lo <= img.u32(a + k) < self.hi for k in (0, 4))
 
     def _address_taken(self):
         """Code addresses that appear as 32-bit literals become entries of their own.

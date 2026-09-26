@@ -16,7 +16,14 @@
 //             west X, north Y, left shoulder Z, triggers L and R
 // F12 saves the picture (out/shot-VBLANK.png); F11 or Alt+Enter switches
 // fullscreen. Closing the window ends the run.
+//
+// Sound (sound.cpp) comes as it is made, in virtual time, into an SDL audio
+// stream at 44 100 Hz: the window's pace keeps it level with the device.
+// The stream starts 50 ms ahead; a chunk that would take it past 250 ms is
+// dropped (the host's clock and the device's drift apart), and one that
+// finds it empty (the host fell behind) is preceded by 50 ms of silence.
 #include "saturn.h"
+#include "sound.h"
 #include "video.h"
 #include <SDL3/SDL.h>
 #include <GL/glcorearb.h>
@@ -55,7 +62,7 @@ uint16_t host_pad() { return g_buttons; }
 
 bool host_open() {
     if (g_cfg.headless) return true;
-    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) { sat_note("SDL: %s", SDL_GetError()); return false; }
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD | SDL_INIT_AUDIO)) { sat_note("SDL: %s", SDL_GetError()); return false; }
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 5);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
@@ -78,6 +85,37 @@ bool host_open() {
     g_base = Clock::now();
     g_paced = !g_cfg.realtime;
     return true;
+}
+
+// ---- sound ------------------------------------------------------------------------------------
+static SDL_AudioStream* g_audio;
+static const int kLead = 2205, kMax = 11025;    // frames: 50 ms ahead, 250 ms at most
+static int g_underruns, g_dropped;
+
+static void audio_silence(int frames) {
+    std::vector<int16_t> z((size_t)frames * 2);
+    SDL_PutAudioStreamData(g_audio, z.data(), (int)(z.size() * sizeof(int16_t)));
+}
+
+bool host_audio_open() {
+    if (!g_win) return false;
+    SDL_AudioSpec spec = {SDL_AUDIO_S16, 2, 44100};
+    g_audio = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, nullptr, nullptr);
+    if (!g_audio) { sat_note("SDL audio: %s (no sound)", SDL_GetError()); return false; }
+    audio_silence(kLead);
+    SDL_ResumeAudioStreamDevice(g_audio);
+    return true;
+}
+
+void host_audio_push(const int16_t* lr, int frames) {
+    int queued = SDL_GetAudioStreamQueued(g_audio) / 4;
+    if (queued + frames > kMax) { ++g_dropped; return; }
+    if (queued == 0) { ++g_underruns; audio_silence(kLead); }
+    SDL_PutAudioStreamData(g_audio, lr, frames * 4);
+}
+
+void host_audio_report() {
+    if (g_audio) std::fprintf(stderr, "  audio stream: %d times empty, %d chunks dropped\n", g_underruns, g_dropped);
 }
 
 // ---- the pad ----------------------------------------------------------------------------------

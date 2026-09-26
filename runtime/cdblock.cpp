@@ -6,8 +6,9 @@
 // the disc (cdrom.cpp) at double speed while it plays: each goes from the
 // CD device connection through the filters (FAD range, subheader) into a
 // partition of the 200-sector buffer, where the host gets it through the
-// data port (0x25818000). CD-DA plays are recorded and timed (75 sectors a
-// second), not heard. The file-system commands (0x70-0x75) work on the ISO
+// data port (0x25818000). CD-DA plays at 75 sectors a second; each sector's
+// 588 stereo samples go to the SCSP's external input (cd_audio_sample, taken
+// by sound.cpp once a sample). The file-system commands (0x70-0x75) work on the ISO
 // 9660 directory the way the CD block's own firmware does.
 //
 // Command set and answer layouts: Sega's CD block documentation as used by
@@ -49,6 +50,7 @@ static int g_repeat, g_repeat_left;
 static bool g_audio_play;
 static uint64_t g_play_t0, g_play_done;         // time the play began, sectors read since
 static int g_getlen = 2048;
+static std::deque<int16_t> g_cdda;              // the audio played, not yet taken by the SCSP (L, R)
 
 // the host transfer
 enum Xfer { X_NONE, X_WORDS, X_SECTORS };
@@ -208,6 +210,9 @@ void cd_tick() {
                 g_play_t0 = now - g_play_done * 1000000000ull / rate;
                 break;
             }
+            uint8_t raw[2352];
+            if (g_audio_play && cdrom_read(g_fad, raw))
+                for (int i = 0; i < 2352; i += 2) g_cdda.push_back((int16_t)(raw[i] | raw[i + 1] << 8));
             ++g_fad;
             ++g_play_done;
         }
@@ -220,6 +225,14 @@ void cd_tick() {
             g_out[0] |= ST_PERI << 8;
         }
     }
+}
+
+// One stereo sample of the CD audio at 44 100 Hz, or silence
+void cd_audio_sample(int16_t lr[2]) {
+    if (g_cdda.size() < 2) { lr[0] = lr[1] = 0; return; }
+    lr[0] = g_cdda.front(); g_cdda.pop_front();
+    lr[1] = g_cdda.front(); g_cdda.pop_front();
+    while (g_cdda.size() > 2352 * 4) g_cdda.pop_front();   // more than 4 sectors behind: catch up
 }
 
 // ---- the file system ---------------------------------------------------------------------------
@@ -275,7 +288,7 @@ static void start_play(uint32_t start, uint32_t end, int mode) {
     g_play_t0 = sat_now();
     g_play_done = 0;
     if (g_audio_play)
-        sat_note("CD-DA: play track %d, FAD %u-%u, repeat %d (not heard)", track_of(g_fad, nullptr), g_fad,
+        sat_note("CD-DA: play track %d, FAD %u-%u, repeat %d", track_of(g_fad, nullptr), g_fad,
                  g_play_end, g_repeat);
     else
         sat_trace("CD: read FAD %u-%u into filter %d", g_fad, g_play_end, g_cddev);

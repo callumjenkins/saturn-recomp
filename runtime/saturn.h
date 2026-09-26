@@ -11,7 +11,9 @@
 //   smpc.cpp      commands, INTBACK, the pads
 //   cdblock.cpp   the CD block at its registers, over cdrom.cpp's disc
 //   onchip.cpp    the SH7604's own registers, per CPU (DIVU, FRT, DMAC...)
-//   video.cpp     the raster timing, the video and sound chips on the bus, the sound driver
+//   video.cpp     the raster timing, the video chips on the bus
+//   sound.cpp     the 68000, the pace of the sound side, sound RAM and the SCSP on the SH-2's bus
+//   scsp.cpp      the SCSP: slots, timers, interrupts, DSP, the mix
 //   vdp1.cpp      VDP1: the command table drawn in software, the framebuffers
 //   vdp2.cpp      VDP2: the picture composed from its layers and VDP1's
 //   host.cpp      the window, the pad, the pace, PNG files
@@ -36,6 +38,7 @@ struct SaturnConfig {
     bool headless = false;          // no window
     bool fullscreen = false;
     int scale = 3;                  // the window: 320x240 times this
+    std::string wav;                // the run's sound to this file (16-bit stereo, 44 100 Hz)
 };
 extern SaturnConfig g_cfg;
 extern SH2Context g_master, g_slave;
@@ -106,6 +109,7 @@ void cd_init();
 void cd_tick();
 uint32_t cd_read(uint32_t off, int size);
 void cd_write(uint32_t off, uint32_t v, int size);
+void cd_audio_sample(int16_t lr[2]);                 // CD-DA at 44 100 Hz, to the SCSP's EXTS
 
 // ---- SH7604 on-chip (onchip.cpp) ------------------------------------------------------
 uint32_t onchip_read(SH2Context& c, uint32_t a, int size);
@@ -113,13 +117,19 @@ void onchip_write(SH2Context& c, uint32_t a, uint32_t v, int size);
 void onchip_input_capture(int cpu);   // SINIT/MINIT: the FRT's input-capture flag
 void onchip_reset(int cpu);
 
-// ---- video and sound (video.cpp; vdp1.cpp, vdp2.cpp, host.cpp through video.h) ------------------
+// ---- video (video.cpp; vdp1.cpp, vdp2.cpp, host.cpp through video.h) --------------------------
 void video_init();
 void video_tick(uint64_t now);        // raster timing: VBlank in/out, lines, VDP1 frames
 uint32_t video_read(uint32_t a, int size);    // VDP1, VDP2, SCSP (canonical addresses)
 void video_write(uint32_t a, uint32_t v, int size);
 bool video_owns(uint32_t a);
-void sound_power(bool on);            // SMPC SNDON/SNDOFF: the 68000 runs or is held
-void sound_tick();                    // the sound driver's side of its command handshake
 uint64_t video_frame_changes();
 uint64_t video_draws();
+
+// ---- sound (sound.cpp, scsp.cpp through sound.h) ----------------------------------------------
+void sound_init();
+void sound_power(bool on);            // SMPC SNDON/SNDOFF: the 68000 runs or is held
+void sound_tick();                    // the samples due by now, the 68000 between them
+void sound_close();                   // the report line, the WAV file finished
+uint32_t sound_read(uint32_t a, int size);    // 0x05A00000-0x05B00FFF from the SH-2
+void sound_write(uint32_t a, uint32_t v, int size);

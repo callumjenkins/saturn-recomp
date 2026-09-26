@@ -4,11 +4,12 @@
 //     saturn --cue GAME.cue [--out DIR] [--headless] [--fullscreen] [--scale N]
 //            [--vblanks N] [--starts N] [--trace] [--realtime] [--input VBLANK:BUTTONS,...]
 //            [--shot N,...] [--dump N,...] [--peek ADDR[:WORDS],...] [--watch LO:HI]
+//            [--wav FILE]
 //
 // --vblanks and --starts end the run after that many VBlanks or program
 // starts; the log of the hardware touched goes to DIR/hw-log.txt. --shot
 // saves the picture at those VBlank-INs (DIR/shot-N.png), --dump the video
-// memories (DIR/dump-N.bin).
+// memories (DIR/dump-N.bin), --wav the sound of the whole run.
 #include "saturn.h"
 #include <cstdio>
 #include <cstdlib>
@@ -38,10 +39,12 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--headless")) cfg.headless = true;
         else if (!std::strcmp(a, "--fullscreen")) cfg.fullscreen = true;
         else if (!std::strcmp(a, "--scale") && more) cfg.scale = std::atoi(argv[++i]);
+        else if (!std::strcmp(a, "--wav") && more) cfg.wav = argv[++i];
         else {
             std::fprintf(stderr, "usage: saturn --cue GAME.cue [--out DIR] [--headless] [--fullscreen] [--scale N]\n"
                                  "             [--vblanks N] [--starts N] [--trace] [--realtime] [--input VBLANK:BUTTONS,...]\n"
-                                 "             [--shot N,...] [--dump N,...] [--peek ADDR[:WORDS],...] [--watch LO:HI]\n");
+                                 "             [--shot N,...] [--dump N,...] [--peek ADDR[:WORDS],...] [--watch LO:HI]\n"
+                                 "             [--wav FILE]\n");
             return 2;
         }
     }

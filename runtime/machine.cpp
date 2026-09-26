@@ -357,6 +357,7 @@ int saturn_main(const SaturnConfig& cfg) {
     g_master = SH2Context{};
     g_master.budget = kBudget;
     video_init();
+    sound_init();
     cd_init();
     onchip_reset(0);
     bios_boot();
@@ -386,6 +387,7 @@ int saturn_main(const SaturnConfig& cfg) {
     backtrace(g_master);
     hot_spots();
     peek(cfg.peek);
+    sound_close();
     mmio_log_write(cfg.out + "/hw-log.txt");
     bios_save();
     std::fflush(stderr);

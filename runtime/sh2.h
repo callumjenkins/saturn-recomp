@@ -47,6 +47,8 @@ void     sh2_sleep(SH2Context& c, uint32_t pc);
 void     sh2_trapa(SH2Context& c, uint32_t imm, uint32_t pc);
 void     sh2_hook(SH2Context& c, uint32_t addr);         // after an instruction the build hooked (core.cpp)
 void     sh2_hook_set(uint32_t addr, int reg, uint32_t v);   // that hook sets register reg to v
+typedef void (*SH2HookFn)(SH2Context& c, uint32_t addr);
+void     sh2_hook_add(uint32_t addr, SH2HookFn fn);        // ... or runs fn (a game layer's)
 void     sh2_bad_return(SH2Context& c, uint32_t expected);   // rts/rte went elsewhere
 uint32_t sh2_io_read(uint32_t a, int size);             // anything outside the work RAMs (core.cpp)
 void     sh2_io_write(uint32_t a, uint32_t v, int size);

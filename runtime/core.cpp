@@ -169,18 +169,26 @@ __attribute__((noinline)) void sh2_watch_store(uint32_t a, uint32_t v, int size)
 
 // ---- hooks ----------------------------------------------------------------------------------
 // The recompiler calls sh2_hook after the instructions a build asked for
-// (recomp --hook); what a hook does is set here, from the command line
-// (main.cpp --hook): a register takes a value. A hook nothing was set for
-// leaves the game's own value.
-struct Hook { uint32_t addr; int reg; uint32_t v; };
-static Hook g_hooks[16];
+// (recomp --hook); what a hook does is set here: from the command line
+// (main.cpp --hook), a register takes a value; from a game layer compiled
+// into the executable (sh2_hook_add), a function runs. A hook nothing was
+// set for does nothing.
+struct Hook { uint32_t addr; int reg; uint32_t v; SH2HookFn fn; };
+static Hook g_hooks[64];
 static int g_nhooks;
 
 void sh2_hook_set(uint32_t addr, int reg, uint32_t v) {
-    if (g_nhooks < 16) g_hooks[g_nhooks++] = {addr, reg & 15, v};
+    if (g_nhooks < 64) g_hooks[g_nhooks++] = {addr, reg & 15, v, nullptr};
+}
+
+void sh2_hook_add(uint32_t addr, SH2HookFn fn) {
+    if (g_nhooks < 64) g_hooks[g_nhooks++] = {addr, 0, 0, fn};
 }
 
 void sh2_hook(SH2Context& c, uint32_t addr) {
     for (int i = 0; i < g_nhooks; ++i)
-        if (g_hooks[i].addr == addr) c.r[g_hooks[i].reg] = g_hooks[i].v;
+        if (g_hooks[i].addr == addr) {
+            if (g_hooks[i].fn) g_hooks[i].fn(c, addr);
+            else c.r[g_hooks[i].reg] = g_hooks[i].v;
+        }
 }

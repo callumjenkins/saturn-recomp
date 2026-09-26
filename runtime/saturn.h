@@ -41,6 +41,7 @@ struct SaturnConfig {
     bool fullscreen = false;
     int scale = 3;                  // the window: 320x240 times this
     std::string wav;                // the run's sound to this file (16-bit stereo, 44 100 Hz)
+    bool interp = false;            // fields between the game's frames drawn moving (vdp1.cpp)
 };
 extern SaturnConfig g_cfg;
 extern SH2Context g_master, g_slave;

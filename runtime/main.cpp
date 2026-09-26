@@ -4,7 +4,7 @@
 //     saturn --cue GAME.cue [--out DIR] [--headless] [--fullscreen] [--scale N]
 //            [--vblanks N] [--starts N] [--trace] [--realtime] [--input VBLANK:BUTTONS,...]
 //            [--shot N,...] [--dump N,...] [--peek ADDR[:WORDS],...] [--watch LO:HI]
-//            [--watch-vblanks FROM:TO] [--wav FILE] [--hook ADDR:rN=VALUE ...]
+//            [--watch-vblanks FROM:TO] [--wav FILE] [--interp] [--hook ADDR:rN=VALUE ...]
 //
 // --vblanks and --starts end the run after that many VBlanks or program
 // starts; the log of the hardware touched goes to DIR/hw-log.txt. --shot
@@ -14,7 +14,8 @@
 // recomp --hook). --watch LO:HI logs each access to a memory area in the
 // range with --trace; in the work RAMs, each store, with the function that
 // made it, with or without --trace; --watch-vblanks FROM:TO narrows that to
-// those VBlanks.
+// those VBlanks. --interp draws the fields between the game's frames with
+// everything moved part of the way (vdp1.cpp), one frame behind.
 #include "saturn.h"
 #include <cstdio>
 #include <cstdlib>
@@ -51,6 +52,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--fullscreen")) cfg.fullscreen = true;
         else if (!std::strcmp(a, "--scale") && more) cfg.scale = std::atoi(argv[++i]);
         else if (!std::strcmp(a, "--wav") && more) cfg.wav = argv[++i];
+        else if (!std::strcmp(a, "--interp")) cfg.interp = true;
         else if (!std::strcmp(a, "--hook") && more) {
             unsigned addr, reg, v;
             if (std::sscanf(argv[++i], "%x:r%u=%x", &addr, &reg, &v) != 3 || reg > 15) {

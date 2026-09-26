@@ -48,7 +48,12 @@ static uint32_t g_watch_lo = 1, g_watch_hi = 0;
 static void log_area(const char* name, uint32_t a, char rw) {
     if (a >= g_watch_lo && a <= g_watch_hi) {
         ++g_watch[{a, rw}];
-        sat_trace("watch %c %08X (pr %08X)", rw, a, g_cpu->pr);
+        uint64_t v = sat_vblanks();
+        bool window = g_cfg.watch_from || g_cfg.watch_to != ~0ull;   // --watch-vblanks: printed, --trace or not
+        if (window && v >= g_cfg.watch_from && v <= g_cfg.watch_to)
+            sat_note("watch %c %08X (pr %08X, VBlank %llu)", rw, a, g_cpu->pr, (unsigned long long)v);
+        else if (!window)
+            sat_trace("watch %c %08X (pr %08X)", rw, a, g_cpu->pr);
     }
     AreaLog& l = g_areas[{name, rw}];
     if (a < l.lo) l.lo = a;

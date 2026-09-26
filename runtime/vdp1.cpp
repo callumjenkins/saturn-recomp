@@ -35,10 +35,14 @@
 #include "saturn.h"
 #include "video.h"
 #include <algorithm>
+#include <climits>
+#include <cmath>
 #include <cstdlib>
+#include <unordered_map>
 
 uint8_t g_vdp1_vram[0x80000];
 static uint16_t g_fb[2][512 * 256];             // host order
+static uint16_t* g_target = g_fb[0];            // where commands draw
 static int g_draw_fb;                           // the other one is shown
 static uint16_t g_reg[0x10];                    // TVMR FBCR PTMR EWDR EWLR EWRR ENDR - EDSR LOPR COPR MODR
 enum { TVMR, FBCR, PTMR, EWDR, EWLR, EWRR, ENDR, EDSR = 8, LOPR, COPR, MODR };
@@ -53,7 +57,6 @@ static int g_local_x, g_local_y;
 
 uint64_t vdp1_frame_changes() { return g_frame_changes; }
 uint64_t vdp1_draws() { return g_draws; }
-const uint16_t* vdp1_display() { return g_fb[g_draw_fb ^ 1]; }
 
 void vdp1_init() {
     g_reg[MODR] = 0x1000;                       // version 1
@@ -64,6 +67,13 @@ static uint16_t vw(uint32_t a) {
     a &= 0x7FFFE;
     return (uint16_t)(g_vdp1_vram[a] << 8 | g_vdp1_vram[a + 1]);
 }
+// textures, colour tables and Gouraud tables: VRAM, or its copy from when a recorded frame was drawn
+static const uint8_t* g_tex = g_vdp1_vram;
+static uint16_t tw(uint32_t a) {
+    a &= 0x7FFFE;
+    return (uint16_t)(g_tex[a] << 8 | g_tex[a + 1]);
+}
+static uint16_t cw(const uint8_t* cmd, int o) { return (uint16_t)(cmd[o] << 8 | cmd[o + 1]); }
 static int sx13(uint16_t v) { return (int32_t)((uint32_t)v << 19) >> 19; }
 static int sx11(uint16_t v) { return (int32_t)((uint32_t)v << 21) >> 21; }
 
@@ -92,7 +102,7 @@ static bool texel(const Cmd& c, int u, int v, uint16_t& out, bool& end) {
     bool is_end, is_zero;
     switch (c.cmode) {
     case 0: case 1: {
-        uint8_t b = g_vdp1_vram[(c.srca + i / 2) & 0x7FFFF];
+        uint8_t b = g_tex[(c.srca + i / 2) & 0x7FFFF];
         raw = (i & 1) ? (b & 0xF) : (b >> 4);
         is_end = raw == 0xF;
         is_zero = raw == 0;
@@ -100,7 +110,7 @@ static bool texel(const Cmd& c, int u, int v, uint16_t& out, bool& end) {
         break;
     }
     case 2: case 3: case 4: {
-        raw = g_vdp1_vram[(c.srca + i) & 0x7FFFF];
+        raw = g_tex[(c.srca + i) & 0x7FFFF];
         is_end = raw == 0xFF;
         is_zero = raw == 0;
         static const uint16_t kMask[] = {0x3F, 0x7F, 0xFF};
@@ -109,7 +119,7 @@ static bool texel(const Cmd& c, int u, int v, uint16_t& out, bool& end) {
         break;
     }
     default:
-        raw = vw(c.srca + i * 2);
+        raw = tw(c.srca + i * 2);
         is_end = raw == 0x7FFF;
         is_zero = raw == 0;
         out = (uint16_t)raw;
@@ -127,7 +137,7 @@ static void plot(const Cmd& c, int x, int y, uint16_t pix, const Rgb* g) {
         if (in == c.outside) return;
     }
     if (c.mesh && ((x ^ y) & 1)) return;
-    uint16_t& d = g_fb[g_draw_fb][y * 512 + x];
+    uint16_t& d = g_target[y * 512 + x];
     if (c.mon) { d |= 0x8000; return; }
     if (g && (pix & 0x8000)) {
         int r = std::clamp((pix & 0x1F) + g->r - 16, 0, 31);
@@ -241,28 +251,28 @@ static void quad(const Cmd& c, Pt a, Pt b, Pt cc, Pt d) {
     }
 }
 
-static void command(uint32_t a) {
+static void command(const uint8_t* cmd, uint32_t a) {
     Cmd c{};
-    c.ctrl = vw(a);
-    c.pmod = vw(a + 4);
-    c.colr = vw(a + 6);
-    c.srca = (uint32_t)vw(a + 8) * 8;
-    uint16_t size = vw(a + 10);
+    c.ctrl = cw(cmd, 0);
+    c.pmod = cw(cmd, 4);
+    c.colr = cw(cmd, 6);
+    c.srca = (uint32_t)cw(cmd, 8) * 8;
+    uint16_t size = cw(cmd, 10);
     c.w = (size >> 8 & 0x3F) * 8;
     c.h = size & 0xFF;
     int comm = c.ctrl & 0xF;
     Pt p[4];
-    for (int i = 0; i < 4; ++i) p[i] = {sx13(vw(a + 12 + i * 4)), sx13(vw(a + 14 + i * 4))};
+    for (int i = 0; i < 4; ++i) p[i] = {sx13(cw(cmd, 12 + i * 4)), sx13(cw(cmd, 14 + i * 4))};
     switch (comm) {
     case 0x8: case 0xB:                         // user clipping
-        g_ux0 = vw(a + 12) & 0x3FF; g_uy0 = vw(a + 14) & 0x1FF;
-        g_ux1 = vw(a + 20) & 0x3FF; g_uy1 = vw(a + 22) & 0x1FF;
+        g_ux0 = cw(cmd, 12) & 0x3FF; g_uy0 = cw(cmd, 14) & 0x1FF;
+        g_ux1 = cw(cmd, 20) & 0x3FF; g_uy1 = cw(cmd, 22) & 0x1FF;
         return;
     case 0x9:                                   // system clipping
-        g_sys_x = vw(a + 20) & 0x3FF; g_sys_y = vw(a + 22) & 0x1FF;
+        g_sys_x = cw(cmd, 20) & 0x3FF; g_sys_y = cw(cmd, 22) & 0x1FF;
         return;
     case 0xA:                                   // local coordinates
-        g_local_x = sx11(vw(a + 12)); g_local_y = sx11(vw(a + 14));
+        g_local_x = sx11(cw(cmd, 12)); g_local_y = sx11(cw(cmd, 14));
         return;
     }
     if (comm > 7) { sat_trace("VDP1: command %X at %05X", comm, a); return; }
@@ -280,10 +290,10 @@ static void command(uint32_t a) {
     c.textured = comm < 4;
     if (c.textured && (c.w == 0 || c.h == 0)) return;
     if (c.textured && c.cmode == 1)
-        for (int i = 0; i < 16; ++i) c.lut[i] = vw((uint32_t)c.colr * 8 + i * 2);
+        for (int i = 0; i < 16; ++i) c.lut[i] = tw((uint32_t)c.colr * 8 + i * 2);
     if (c.gouraud) {
-        uint32_t ga = (uint32_t)vw(a + 28) * 8;
-        for (int i = 0; i < 4; ++i) c.g[i] = rgb_of(vw(ga + i * 2));
+        uint32_t ga = (uint32_t)cw(cmd, 28) * 8;
+        for (int i = 0; i < 4; ++i) c.g[i] = rgb_of(tw(ga + i * 2));
     }
     for (Pt& q : p) { q.x += g_local_x; q.y += g_local_y; }
     switch (comm) {
@@ -298,7 +308,7 @@ static void command(uint32_t a) {
         if (!zp) {
             x0 = p[0].x; y0 = p[0].y; x1 = p[2].x; y1 = p[2].y;
         } else {
-            int w = sx13(vw(a + 16)), h = sx13(vw(a + 18));   // B: the width and height on screen
+            int w = sx13(cw(cmd, 16)), h = sx13(cw(cmd, 18));   // B: the width and height on screen
             switch (zp & 3) {
             case 2: x0 = p[0].x - w / 2; x1 = x0 + w; break;
             case 3: x0 = p[0].x - w; x1 = p[0].x; break;
@@ -325,9 +335,52 @@ static void command(uint32_t a) {
     }
 }
 
+// ---- the frames in between (--interp) -------------------------------------------------------
+// Each frame the game draws (the draws between two frame changes) is
+// recorded: every command executed, its 32 bytes, and the clipping and
+// local coordinates each draw starts from. Between two frame changes the
+// field shows the last frame redrawn into a framebuffer of its own, every
+// vertex moved from where its command was in the frame before by the part
+// of the interval gone by: the picture runs one frame behind the game (at
+// 12 fps, 83 ms), and moves at the field rate. A command is matched with
+// the one in the frame before that has the same kind, mode, colour,
+// texture and size and lies nearest (within 64 pixels), or, when the game
+// layer gave the draw keys (vdp1_next_draw_keys: which model part each
+// command is), with the one that has the same key; an unmatched one is
+// drawn where it is. VDP2's scroll registers (0x70-0x9F), kept at each
+// frame change, move the same way (video.cpp). The last frame is redrawn
+// from a copy of VDP1 RAM taken at its frame change: by the last field of
+// the interval the game has already sent the next frame's textures (its
+// player is a sprite drawn anew every frame, in the same place).
+struct RecCmd { uint32_t addr; uint64_t key; uint8_t b[32]; };
+struct RecDraw { int sys_x, sys_y, ux0, uy0, ux1, uy1, lx, ly; std::vector<RecCmd> cmds; };
+struct RecFrame {
+    std::vector<RecDraw> draws;
+    uint16_t ewdr, ewlr, ewrr;
+    uint64_t field;
+    uint8_t scroll[0x30];
+    std::vector<uint8_t> vram;                  // as the frame was drawn: the next one's textures come before its change
+};
+static RecFrame g_rec_cur, g_rec_last, g_rec_prev;
+static uint16_t g_ifb[512 * 256];               // the frame in between
+static bool g_show_ifb;
+static uint64_t g_fields;
+static float g_alpha;
+static std::vector<uint64_t> g_next_keys;       // vdp1_next_draw_keys: by command address / 32
+
+void vdp1_next_draw_keys(std::vector<uint64_t> keys) { g_next_keys = std::move(keys); }
+
+const uint16_t* vdp1_display() { return g_show_ifb ? g_ifb : g_fb[g_draw_fb ^ 1]; }
+
 static void draw() {
     g_reg[EDSR] = (uint16_t)(g_reg[EDSR] >> 1 & 1);   // BEF <- CEF, CEF <- 0
     if (g_reg[TVMR] & 3) sat_fatal("VDP1: TVMR %04X (8 bpp or rotation) is not done", g_reg[TVMR]);
+    g_target = g_fb[g_draw_fb];
+    RecDraw* rec = nullptr;
+    if (g_cfg.interp) {
+        g_rec_cur.draws.push_back({g_sys_x, g_sys_y, g_ux0, g_uy0, g_ux1, g_uy1, g_local_x, g_local_y, {}});
+        rec = &g_rec_cur.draws.back();
+    }
     uint32_t a = 0, ret = 0, last = 0;
     int n = 0;
     for (int guard = 0; guard < 20000; ++guard) {
@@ -335,7 +388,15 @@ static void draw() {
         last = a;
         if (ctrl & 0x8000) break;
         int jp = ctrl >> 12 & 7;
-        if (!(jp & 4)) { command(a); ++n; }
+        if (!(jp & 4)) {
+            RecCmd rc;
+            rc.addr = a;
+            rc.key = a / 32 < g_next_keys.size() ? g_next_keys[a / 32] : 0;
+            for (int i = 0; i < 32; ++i) rc.b[i] = g_vdp1_vram[(a + i) & 0x7FFFF];
+            command(rc.b, a);
+            if (rec) rec->cmds.push_back(rc);
+            ++n;
+        }
         uint32_t link = (uint32_t)vw(a + 2) * 8 & 0x7FFFF;
         switch (jp & 3) {
         case 0: a += 0x20; break;
@@ -345,12 +406,123 @@ static void draw() {
         }
         a &= 0x7FFFF;
     }
+    g_next_keys.clear();
     g_reg[LOPR] = (uint16_t)(last >> 3);
     g_reg[COPR] = (uint16_t)(last >> 3);
     ++g_draws;
     g_drawing = true;
     g_draw_end = sat_now() + 1000000;           // 1 ms
     sat_trace("VDP1 draw %llu: %d commands", (unsigned long long)g_draws, n);
+}
+
+static bool matchable(const uint8_t* b) { return (cw(b, 0) & 0xF) <= 7; }
+static uint64_t signature(const uint8_t* b) {
+    return (uint64_t)(cw(b, 0) & 0x0F3F) << 48 ^ (uint64_t)cw(b, 4) << 32 ^ (uint64_t)cw(b, 6) << 16 ^
+           (uint64_t)cw(b, 8) ^ (uint64_t)cw(b, 10) << 24;
+}
+static void centre(const uint8_t* b, int& x, int& y) {
+    x = y = 0;
+    for (int i = 0; i < 4; ++i) { x += sx13(cw(b, 12 + i * 4)); y += sx13(cw(b, 14 + i * 4)); }
+}
+
+// Draw the last frame into g_ifb, its vertices alpha of the way from the frame before
+static void draw_between(float alpha) {
+    const RecFrame &L = g_rec_last, &P = g_rec_prev;
+    int sx = g_sys_x, sy = g_sys_y, u0 = g_ux0, v0 = g_uy0, u1 = g_ux1, v1 = g_uy1, lx = g_local_x, ly = g_local_y;
+    g_target = g_ifb;
+    g_tex = L.vram.data();
+    int x0 = (L.ewlr >> 9 & 0x7F) * 8, y0 = L.ewlr & 0x1FF, x1 = (L.ewrr >> 9 & 0x7F) * 8, y1 = L.ewrr & 0x1FF;
+    std::fill(g_ifb, g_ifb + 512 * 256, 0);
+    for (int y = y0; y <= y1 && y < 256; ++y)
+        for (int x = x0; x < x1 && x < 512; ++x) g_ifb[y * 512 + x] = L.ewdr;
+    for (size_t d = 0; d < L.draws.size(); ++d) {
+        const RecDraw& ld = L.draws[d];
+        g_sys_x = ld.sys_x; g_sys_y = ld.sys_y; g_ux0 = ld.ux0; g_uy0 = ld.uy0; g_ux1 = ld.ux1; g_uy1 = ld.uy1;
+        g_local_x = ld.lx; g_local_y = ld.ly;
+        // the frame before's commands, by key and by signature
+        std::unordered_multimap<uint64_t, size_t> before;
+        std::unordered_map<uint64_t, size_t> keyed;
+        std::vector<bool> used;
+        const RecDraw* pd = d < P.draws.size() ? &P.draws[d] : nullptr;
+        if (pd) {
+            used.assign(pd->cmds.size(), false);
+            for (size_t i = 0; i < pd->cmds.size(); ++i) {
+                if (!matchable(pd->cmds[i].b)) continue;
+                if (pd->cmds[i].key) keyed.emplace(pd->cmds[i].key, i);
+                else before.emplace(signature(pd->cmds[i].b), i);
+            }
+        }
+        for (const RecCmd& rc : ld.cmds) {
+            if (!pd || !matchable(rc.b)) { command(rc.b, rc.addr); continue; }
+            int cx, cy;
+            centre(rc.b, cx, cy);
+            size_t pick = SIZE_MAX;
+            if (rc.key) {                       // the game said which it is
+                auto it = keyed.find(rc.key);
+                if (it != keyed.end() && !used[it->second]) {
+                    int px, py;
+                    centre(pd->cmds[it->second].b, px, py);
+                    if (std::abs(px - cx) + std::abs(py - cy) < 4 * 1024) pick = it->second;   // not across a cut
+                }
+            } else {
+                long best = 64L * 64 * 16;      // centres are sums of four vertices
+                auto range = before.equal_range(signature(rc.b));
+                for (auto it = range.first; it != range.second; ++it) {
+                    if (used[it->second]) continue;
+                    int px, py;
+                    centre(pd->cmds[it->second].b, px, py);
+                    long dist = (long)(px - cx) * (px - cx) + (long)(py - cy) * (py - cy);
+                    if (dist < best) { best = dist; pick = it->second; }
+                }
+            }
+            if (pick == SIZE_MAX) { command(rc.b, rc.addr); continue; }
+            used[pick] = true;
+            uint8_t b[32];
+            std::copy(rc.b, rc.b + 32, b);
+            const uint8_t* pb = pd->cmds[pick].b;
+            for (int o = 12; o < 28; o += 2) {
+                int from = sx13(cw(pb, o)), to = sx13(cw(b, o));
+                int v = from + (int)std::lround((to - from) * alpha);
+                b[o] = (uint8_t)(v >> 8);
+                b[o + 1] = (uint8_t)v;
+            }
+            command(b, rc.addr);
+        }
+    }
+    g_sys_x = sx; g_sys_y = sy; g_ux0 = u0; g_uy0 = v0; g_ux1 = u1; g_uy1 = v1; g_local_x = lx; g_local_y = ly;
+    g_target = g_fb[g_draw_fb];
+    g_tex = g_vdp1_vram;
+}
+
+// VBlank-IN, before VDP2 composes the field: the frame in between, if there is one
+bool vdp1_interp_field(bool compose) {
+    ++g_fields;
+    g_show_ifb = false;
+    if (!g_cfg.interp || g_rec_prev.draws.empty() || g_rec_last.draws.empty()) return false;
+    uint64_t interval = g_rec_last.field - g_rec_prev.field;
+    uint64_t m = g_fields - 1 - g_rec_last.field;   // fields shown since the last frame change
+    if (interval < 2 || interval > 8 || m >= interval) return false;
+    g_alpha = (float)m / (float)interval;
+    if (compose) {
+        draw_between(g_alpha);
+        g_show_ifb = true;
+    }
+    return true;
+}
+
+// VDP2's scroll registers (0x70-0x9F) for the field in between
+void vdp1_interp_scroll(uint8_t* regs) {
+    for (int o = 0; o < 0x30; o += 4) {
+        uint32_t p = (uint32_t)(g_rec_prev.scroll[o] << 24 | g_rec_prev.scroll[o + 1] << 16 | g_rec_prev.scroll[o + 2] << 8 |
+                                g_rec_prev.scroll[o + 3]);
+        uint32_t l = (uint32_t)(g_rec_last.scroll[o] << 24 | g_rec_last.scroll[o + 1] << 16 | g_rec_last.scroll[o + 2] << 8 |
+                                g_rec_last.scroll[o + 3]);
+        // 11.8 fixed point in the top bits (integer 0x07FF0000, fraction 0x0000FF00): the short way round
+        int32_t pv = (int32_t)((p & 0x07FFFF00) << 5) >> 5, lv = (int32_t)((l & 0x07FFFF00) << 5) >> 5;
+        int32_t d = (int32_t)((uint32_t)(lv - pv) << 5) >> 5;
+        uint32_t v = ((uint32_t)(pv + (int32_t)std::lround(d * g_alpha)) & 0x07FFFF00) | (l & 0xF80000FF);
+        regs[o] = (uint8_t)(v >> 24); regs[o + 1] = (uint8_t)(v >> 16); regs[o + 2] = (uint8_t)(v >> 8); regs[o + 3] = (uint8_t)v;
+    }
 }
 
 void vdp1_tick(uint64_t now) {
@@ -379,6 +551,15 @@ void vdp1_vblank_out() {
         g_change_pending = false;
         g_draw_fb ^= 1;
         ++g_frame_changes;
+        if (g_cfg.interp) {
+            g_rec_prev = std::move(g_rec_last);
+            g_rec_last = std::move(g_rec_cur);
+            g_rec_cur = RecFrame{};
+            g_rec_last.field = g_fields;
+            g_rec_last.ewdr = g_reg[EWDR]; g_rec_last.ewlr = g_reg[EWLR]; g_rec_last.ewrr = g_reg[EWRR];
+            std::copy(g_vdp2_regs + 0x70, g_vdp2_regs + 0xA0, g_rec_last.scroll);
+            g_rec_last.vram.assign(g_vdp1_vram, g_vdp1_vram + sizeof g_vdp1_vram);
+        }
         if (one_cycle) g_erase_field = true;
         sat_trace("VDP1 frame change %llu", (unsigned long long)g_frame_changes);
         if ((g_reg[PTMR] & 3) == 2) draw();
@@ -394,7 +575,7 @@ uint32_t vdp1_reg_read(uint32_t off, int size) {
 
 static void reg_write(uint32_t off, uint16_t v) {
     int r = (off >> 1) & 0xF;
-    sat_trace("VDP1 reg %02X <- %04X", off, v);
+    sat_trace("VDP1 reg %02X <- %04X (pr %08X)", off, v, g_cpu->pr);
     if (r >= EDSR) return;                       // read-only
     g_reg[r] = v;
     switch (r) {

@@ -20,6 +20,9 @@ const uint16_t* vdp1_display();                      // the framebuffer VDP2 sho
 uint64_t vdp1_frame_changes();
 uint64_t vdp1_draws();
 void vdp1_dump(FILE* f);                             // VRAM, the draw framebuffer, the registers
+bool vdp1_interp_field(bool compose);                // --interp: a frame in between for this field?
+void vdp1_interp_scroll(uint8_t* regs);              // ... and VDP2's scroll registers for it
+void vdp1_next_draw_keys(std::vector<uint64_t> keys); // --interp: what each command of the next draw is
 
 // ---- VDP2 (vdp2.cpp) --------------------------------------------------------------------
 extern uint8_t g_vdp2_vram[0x80000], g_vdp2_cram[0x1000], g_vdp2_regs[0x200];

@@ -19,7 +19,10 @@
 // 00 then 11), and the order MAME's Saturn driver reads them in.
 #include "saturn.h"
 #include "video.h"
+#include <cstdio>
 #include <ctime>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -35,11 +38,12 @@ static uint16_t g_script_pressed;         // what the script holds now
 static std::vector<std::pair<uint64_t, uint16_t>> g_script;
 static size_t g_script_pos;
 
+static const struct { const char* name; uint16_t bit; } kButtons[] = {
+    {"RIGHT", 0x8000}, {"LEFT", 0x4000}, {"DOWN", 0x2000}, {"UP", 0x1000}, {"START", 0x0800},
+    {"A", 0x0400}, {"C", 0x0200}, {"B", 0x0100}, {"R", 0x0080}, {"X", 0x0040}, {"Y", 0x0020},
+    {"Z", 0x0010}, {"L", 0x0008}};
+
 static uint16_t buttons(const std::string& list) {
-    static const struct { const char* name; uint16_t bit; } kButtons[] = {
-        {"RIGHT", 0x8000}, {"LEFT", 0x4000}, {"DOWN", 0x2000}, {"UP", 0x1000}, {"START", 0x0800},
-        {"A", 0x0400}, {"C", 0x0200}, {"B", 0x0100}, {"R", 0x0080}, {"X", 0x0040}, {"Y", 0x0020},
-        {"Z", 0x0010}, {"L", 0x0008}};
     uint16_t pressed = 0;
     size_t i = 0;
     while (i < list.size()) {
@@ -54,7 +58,16 @@ static uint16_t buttons(const std::string& list) {
     return pressed;
 }
 
-void smpc_input_script(const std::string& spec) {
+void smpc_input_script(const std::string& given) {
+    std::string spec = given;
+    if (!spec.empty() && spec[0] == '@') {               // @FILE: the script in a file (--record-input's)
+        std::ifstream f(spec.substr(1));
+        if (!f) sat_fatal("--input: cannot read %s", spec.c_str() + 1);
+        std::stringstream ss;
+        ss << f.rdbuf();
+        spec = ss.str();
+        while (!spec.empty() && (spec.back() == '\n' || spec.back() == '\r' || spec.back() == ',')) spec.pop_back();
+    }
     size_t i = 0;
     while (i < spec.size()) {
         size_t j = spec.find(',', i);
@@ -95,6 +108,24 @@ void smpc_set_area(char symbol) {
         if (symbol == kSymbols[i]) g_area = kCodes[i];
 }
 
+// The host's pad (keyboard, gamepad), taken once a VBlank, as a script's is,
+// so that --record-input writes what the program saw and --input @FILE
+// gives it back at the same VBlanks
+static uint64_t g_host_vblank = ~0ull;
+static uint16_t g_host_pressed;
+static FILE* g_record;
+
+static void record_host(uint64_t vblank, uint16_t pressed) {
+    if (g_cfg.record_input.empty()) return;
+    if (!g_record && !(g_record = std::fopen(g_cfg.record_input.c_str(), "w")))
+        sat_fatal("--record-input: cannot write %s", g_cfg.record_input.c_str());
+    std::string names;
+    for (auto& k : kButtons)
+        if (pressed & k.bit) names += (names.empty() ? "" : "+") + std::string(k.name);
+    std::fprintf(g_record, "%llu:%s,", (unsigned long long)vblank, names.c_str());
+    std::fflush(g_record);
+}
+
 // port 1's pad now, active low: byte 1 RIGHT LEFT DOWN UP START A C B, byte 2 R X Y Z L 1 1 1
 static uint16_t pad1_now() {
     while (g_script_pos < g_script.size() && g_script[g_script_pos].first <= sat_vblanks()) {
@@ -102,7 +133,13 @@ static uint16_t pad1_now() {
         sat_note("pad: %04X", g_script_pressed);
         ++g_script_pos;
     }
-    return (uint16_t)~(g_script_pressed | host_pad()) | 0x0007;
+    if (sat_vblanks() != g_host_vblank) {
+        g_host_vblank = sat_vblanks();
+        uint16_t h = host_pad();
+        if (h != g_host_pressed) record_host(g_host_vblank, h);
+        g_host_pressed = h;
+    }
+    return (uint16_t)~(g_script_pressed | g_host_pressed) | 0x0007;
 }
 
 // PDR1 read in direct mode: the lines the SH-2 drives (DDR1) read back as written,

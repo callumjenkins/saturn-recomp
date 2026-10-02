@@ -2,8 +2,8 @@
 // build and runs it, in a window or headless.
 //
 //     saturn --cue GAME.cue [--out DIR] [--headless] [--fullscreen] [--scale N]
-//            [--vblanks N] [--starts N] [--trace] [--realtime] [--input VBLANK:BUTTONS,...]
-//            [--shot N,...] [--dump N,...] [--peek ADDR[:WORDS],...] [--watch LO:HI]
+//            [--vblanks N] [--starts N] [--trace] [--realtime] [--input VBLANK:BUTTONS,...|@FILE]
+//            [--record-input FILE] [--shot N,...] [--dump N,...] [--peek ADDR[:WORDS],...] [--watch LO:HI]
 //            [--watch-vblanks FROM:TO] [--wav FILE] [--interp] [--hook ADDR:rN=VALUE ...]
 //
 // --vblanks and --starts end the run after that many VBlanks or program
@@ -14,7 +14,9 @@
 // recomp --hook). --watch LO:HI logs each access to a memory area in the
 // range with --trace; in the work RAMs, each store, with the function that
 // made it, with or without --trace; --watch-vblanks FROM:TO narrows that to
-// those VBlanks. --interp draws the fields between the game's frames with
+// those VBlanks. --record-input writes the pad as the host presses it (the
+// keyboard, a gamepad), sampled once a VBlank, as an --input script: given
+// back with --input @FILE, the run goes the same way again. --interp draws the fields between the game's frames with
 // everything moved part of the way (vdp1.cpp), one frame behind.
 #include "saturn.h"
 #include <cstdio>
@@ -46,6 +48,7 @@ int main(int argc, char** argv) {
         }
         else if (!std::strcmp(a, "--realtime")) cfg.realtime = true;
         else if (!std::strcmp(a, "--input") && more) cfg.input = argv[++i];
+        else if (!std::strcmp(a, "--record-input") && more) cfg.record_input = argv[++i];
         else if (!std::strcmp(a, "--dump") && more) cfg.dump = argv[++i];
         else if (!std::strcmp(a, "--shot") && more) cfg.shots = argv[++i];
         else if (!std::strcmp(a, "--headless")) cfg.headless = true;
@@ -63,8 +66,8 @@ int main(int argc, char** argv) {
         }
         else {
             std::fprintf(stderr, "usage: saturn --cue GAME.cue [--out DIR] [--headless] [--fullscreen] [--scale N]\n"
-                                 "             [--vblanks N] [--starts N] [--trace] [--realtime] [--input VBLANK:BUTTONS,...]\n"
-                                 "             [--shot N,...] [--dump N,...] [--peek ADDR[:WORDS],...] [--watch LO:HI]\n"
+                                 "             [--vblanks N] [--starts N] [--trace] [--realtime] [--input VBLANK:BUTTONS,...|@FILE]\n"
+                                 "             [--record-input FILE] [--shot N,...] [--dump N,...] [--peek ADDR[:WORDS],...] [--watch LO:HI]\n"
                                  "             [--wav FILE] [--hook ADDR:rN=VALUE ...]\n");
             return 2;
         }

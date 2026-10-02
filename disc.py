@@ -14,7 +14,12 @@ CUE   One FILE per track (Redump) or one FILE for all (older rips). Track 1 is
       Disc time (MSF, 75 frames a second) starts at 00:02:00 = LBA 0.
 
 Data  A MODE1/2352 sector is 12 sync bytes, 4 header bytes (M S F mode),
-      2048 user bytes, EDC/ECC. Only the user bytes matter above this layer.
+      2048 user bytes, EDC/ECC. A MODE2/2352 sector (CD-ROM XA) has the same
+      sync and header, then an 8-byte subheader (file number, channel,
+      submode, coding info, twice), then 2048 user bytes (Form 1, submode
+      bit 5 clear) or 2324 (Form 2). Only the user bytes matter above this
+      layer. A disc may hold its file system over several data tracks; a
+      sector is found by its disc LBA, whatever track holds it.
 
 IP    Sectors 0-15 of the data track are the system area. IP.BIN (usually
       0x1000-0x8000 bytes) starts at sector 0:
@@ -33,6 +38,13 @@ ISO   Standard ISO 9660 from sector 16 (PVD). The BIOS loads the 1st read
       file: the first file record in the root directory, i.e. the first
       entry after '.' and '..' (Sega's tools put it there; the name is
       conventional, 0.BIN, 1ST_READ.BIN, A0.BIN...), to the 1st read address.
+
+      A file record may be interleaved: its file unit size (byte 26) and
+      interleave gap (byte 27) say the file is `unit` sectors, then `gap`
+      sectors of other files, and so on. Its CD-ROM XA system use field
+      ("XA" at +6) gives the attributes and the file number the sectors'
+      subheaders carry (the CD block's filters select on it). An XA
+      attribute 0x4000 marks a record that points at a CD-DA track.
 """
 import argparse
 import os
@@ -59,6 +71,7 @@ class Track:
         self.file_offset = file_offset   # byte offset of INDEX 01 in path
         self.pregap = pregap             # frames between INDEX 00 and 01
         self.sector_size = 2048 if mode == "MODE1/2048" else SECTOR_RAW
+        self.user_offset = 24 if mode.startswith("MODE2") else 16
         self.frames = 0                  # filled in by parse_cue
         self.lba = 0                     # disc LBA of INDEX 01
 
@@ -133,27 +146,57 @@ class Disc:
             t.frames = size // t.sector_size
             self.tracks = [t]
         self.data = self.tracks[0]
-        self._fh = open(self.data.path, "rb")
+        self._fh = {}
         self.ip = IP(self.read_sectors(0, 16))
         self.iso = ISO9660(self)
 
+    def track_at(self, lba):
+        """The track holding disc LBA `lba` (its pregap counted as its own)."""
+        found = self.tracks[0]
+        for t in self.tracks:
+            if t.lba - t.pregap <= lba:
+                found = t
+        return found
+
+    def raw_sector(self, lba):
+        """(stored bytes, track) of the sector at disc LBA `lba`: 2352 bytes, or 2048 for a plain .iso."""
+        t = self.track_at(lba)
+        fh = self._fh.get(t.path)
+        if fh is None:
+            fh = self._fh[t.path] = open(t.path, "rb")
+        fh.seek(t.file_offset + (lba - t.lba) * t.sector_size)
+        return fh.read(t.sector_size), t
+
     def read_sectors(self, lba, count=1):
-        """User bytes of `count` data-track sectors from `lba` (track-relative)."""
-        t = self.data
+        """User bytes (2048 a sector) of `count` data sectors from disc LBA `lba`."""
         out = bytearray()
         for i in range(count):
-            self._fh.seek(t.file_offset + (lba + i) * t.sector_size)
-            raw = self._fh.read(t.sector_size)
-            out += raw[16:16 + SECTOR] if t.sector_size == SECTOR_RAW else raw
+            raw, t = self.raw_sector(lba + i)
+            out += raw[t.user_offset:t.user_offset + SECTOR] if t.sector_size == SECTOR_RAW else raw
         return bytes(out)
 
-    def read(self, lba, size):
-        return self.read_sectors(lba, (size + SECTOR - 1) // SECTOR)[:size]
+    def read(self, lba, size, unit=0, gap=0):
+        """`size` bytes from `lba`; interleaved if `unit`: `unit` sectors, then `gap` skipped, again."""
+        n = (size + SECTOR - 1) // SECTOR
+        if not unit:
+            return self.read_sectors(lba, n)[:size]
+        out = bytearray()
+        while len(out) < n * SECTOR:
+            out += self.read_sectors(lba, min(unit, n - len(out) // SECTOR))
+            lba += unit + gap
+        return bytes(out[:size])
+
+    def is_cdda(self, rec):
+        """A record of a CD-DA track: by its XA attribute, or by the track its LBA falls in."""
+        return rec.is_cdda or (not rec.is_dir and self.track_at(rec.lba).is_audio)
+
+    def read_file(self, rec):
+        return self.read(rec.lba, rec.size, rec.unit, rec.gap)
 
     def first_read(self):
         """(record, bytes) of the 1st read file."""
         rec = self.iso.first_file()
-        return rec, self.read(rec.lba, rec.size)
+        return rec, self.read_file(rec)
 
 
 # ---------------------------------------------------------------- IP.BIN
@@ -168,6 +211,8 @@ class IP:
         self.version = s(0x2A, 0x30)
         self.date = s(0x30, 0x38)
         self.device = s(0x38, 0x40)
+        if re.fullmatch(rb"\d{4}-\d\d-\d\d", data[0x30:0x3A]):   # some discs write YYYY-MM-DD into the device field
+            self.date, self.device = s(0x30, 0x3A), s(0x3A, 0x40).lstrip()
         self.areas = s(0x40, 0x50).replace(" ", "")
         self.peripherals = s(0x50, 0x60).replace(" ", "")
         self.title = s(0x60, 0xD0)
@@ -204,8 +249,14 @@ class IP:
 # ---------------------------------------------------------------- ISO 9660
 
 class Record:
-    def __init__(self, name, lba, size, is_dir, path):
+    def __init__(self, name, lba, size, is_dir, path, unit=0, gap=0, xa_attr=None, xa_file=0):
         self.name, self.lba, self.size, self.is_dir, self.path = name, lba, size, is_dir, path
+        self.unit, self.gap = unit, gap                # interleave: file unit size, gap (sectors)
+        self.xa_attr, self.xa_file = xa_attr, xa_file  # CD-ROM XA attributes and file number
+
+    @property
+    def is_cdda(self):
+        return self.xa_attr is not None and bool(self.xa_attr & 0x4000)
 
     def __repr__(self):
         return "<%s %s lba=%d size=%d>" % ("dir" if self.is_dir else "file", self.path, self.lba, self.size)
@@ -240,14 +291,16 @@ class ISO9660:
                 continue
             r = data[pos:pos + ln]
             lba, size = struct.unpack("<I", r[2:6])[0], struct.unpack("<I", r[10:14])[0]
-            flags, nlen = r[25], r[32]
+            flags, unit, gap, nlen = r[25], r[26], r[27], r[32]
             name = r[33:33 + nlen]
+            su = r[33 + nlen + (1 - nlen % 2):]      # system use, after the name's padding
+            xa_attr, xa_file = (struct.unpack(">H", su[4:6])[0], su[8]) if su[6:8] == b"XA" else (None, 0)
             pos += ln
             if name in (b"\x00", b"\x01"):
                 continue
             name = name.decode("latin-1").split(";")[0]
             out.append(Record(name, lba, size, bool(flags & 2),
-                              rec.path.rstrip("/") + "/" + name))
+                              rec.path.rstrip("/") + "/" + name, unit, gap, xa_attr, xa_file))
         return out
 
     def walk(self, rec=None):
@@ -319,21 +372,28 @@ def main(argv=None):
                 "  pregap %d" % t.pregap if t.pregap else ""))
     if a.list:
         for r in d.iso.walk():
-            print("%-40s %8s lba %6d" % (r.path, "<dir>" if r.is_dir else r.size, r.lba))
+            extra = "  CD-DA, track %02d" % d.track_at(r.lba).number if d.is_cdda(r) else ""
+            if r.unit:
+                extra += "  interleaved %d/%d, XA file %d" % (r.unit, r.gap, r.xa_file)
+            print("%-40s %8s lba %6d%s" % (r.path, "<dir>" if r.is_dir else r.size, r.lba, extra))
     if a.extract:
         os.makedirs(a.extract, exist_ok=True)
         with open(os.path.join(a.extract, "IP.BIN"), "wb") as f:
             f.write(d.ip.raw[:d.ip.ip_size or len(d.ip.raw)])
-        n = 0
+        n, cdda = 0, []
         for r in d.iso.walk():
             out = os.path.join(a.extract, *r.path.strip("/").split("/"))
             if r.is_dir:
                 os.makedirs(out, exist_ok=True)
+            elif d.is_cdda(r):                       # its sound is the track's: --audio
+                cdda.append("%s (track %02d)" % (r.path, d.track_at(r.lba).number))
             else:
                 with open(out, "wb") as f:
-                    f.write(d.read(r.lba, r.size))
+                    f.write(d.read_file(r))
                 n += 1
         print("%d files and IP.BIN extracted to %s" % (n, a.extract))
+        if cdda:
+            print("records of CD-DA tracks, not extracted: %s" % ", ".join(cdda))
     if a.audio:
         os.makedirs(a.audio, exist_ok=True)
         for t in d.tracks:

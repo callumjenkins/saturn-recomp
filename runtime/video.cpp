@@ -117,7 +117,10 @@ uint32_t video_read(uint32_t a, int size) {
     off = a & 0x1FF;
     if (off == 0x04 || off == 0x08 || off == 0x0A) {   // TVSTAT, HCNT, VCNT: from the raster
         int line = (int)(g_line_abs % kLines);
-        uint16_t tvstat = (uint16_t)((line >= display_lines() ? 8 : 0) | ((g_vblanks & 1) ? 2 : 0));
+        // HBLANK: the last sixth of every line (about 10.9 of NTSC's 63.6 us)
+        const uint64_t line_ns = kFrameNs / kLines;
+        bool hblank = sat_now() % line_ns >= line_ns - line_ns / 6;
+        uint16_t tvstat = (uint16_t)((line >= display_lines() ? 8 : 0) | (hblank ? 4 : 0) | ((g_vblanks & 1) ? 2 : 0));
         set16(g_vdp2_regs, 0x04, tvstat);
         set16(g_vdp2_regs, 0x0A, (uint16_t)line);
     }

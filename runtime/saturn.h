@@ -100,6 +100,7 @@ uint32_t smpc_read(uint32_t off);
 void smpc_write(uint32_t off, uint32_t v);
 void smpc_tick();
 void smpc_input_script(const std::string& spec);   // "VBLANK:BUTTON+BUTTON,..."
+void smpc_set_area(char symbol);                   // the disc's first area symbol (J T U B K A E L)
 
 // ---- CD block (cdblock.cpp, cdrom.cpp) ------------------------------------------------
 bool cdrom_open(const std::string& cue);

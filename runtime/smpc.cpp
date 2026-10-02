@@ -7,7 +7,16 @@
 // peripheral data, and raises the SMPC interrupt at the next poll; the
 // peripheral data comes when the program asks to continue (IREG0 bit 7).
 // Port 1 has a standard digital pad, pressed by a script (--input) and by
-// the host's keyboard and gamepad (host.cpp), port 2 nothing.
+// the host's keyboard and gamepad (host.cpp), port 2 nothing. The pad can
+// also be read directly (IOSEL set, the SH-2 driving TH and TR through
+// PDR1 and DDR1): each TH/TR pair selects four of its lines, active low,
+//   TH TR   D3    D2    D1    D0
+//    0  0   R     X     Y     Z
+//    0  1   RIGHT LEFT  DOWN  UP
+//    1  0   START A     C     B
+//    1  1   L     1     0     0     (with TL 1: the pad's ID, 0xB)
+// the same bits INTBACK reports in its two bytes (byte 1: 01 then 10, byte 2:
+// 00 then 11), and the order MAME's Saturn driver reads them in.
 #include "saturn.h"
 #include "video.h"
 #include <ctime>
@@ -17,7 +26,7 @@
 static uint8_t g_ireg[7], g_oreg[32], g_sr, g_sf, g_port[16];
 static uint8_t g_smem[4];
 static bool g_irq, g_peri_pending;
-static uint8_t g_area = 0x0C;              // Europe, PAL (the disc's area); TV timing is NTSC (video.cpp)
+static uint8_t g_area = 0x0C;              // the disc's area (smpc_set_area); TV timing is NTSC (video.cpp)
 static uint16_t g_script_pressed;         // what the script holds now
 
 // The pad, scripted: "VBLANK:BUTTON+BUTTON,..." (an empty list releases all).
@@ -79,13 +88,37 @@ static void intback_status() {
     g_oreg[31] = 0x10;
 }
 
-static void intback_peripheral() {
+void smpc_set_area(char symbol) {
+    static const char kSymbols[] = "JTUBKAEL";
+    static const uint8_t kCodes[] = {0x1, 0x2, 0x4, 0x5, 0x6, 0xA, 0xC, 0xD};
+    for (int i = 0; i < 8; ++i)
+        if (symbol == kSymbols[i]) g_area = kCodes[i];
+}
+
+// port 1's pad now, active low: byte 1 RIGHT LEFT DOWN UP START A C B, byte 2 R X Y Z L 1 1 1
+static uint16_t pad1_now() {
     while (g_script_pos < g_script.size() && g_script[g_script_pos].first <= sat_vblanks()) {
         g_script_pressed = g_script[g_script_pos].second;
         sat_note("pad: %04X", g_script_pressed);
         ++g_script_pos;
     }
-    uint16_t pad1 = (uint16_t)~(g_script_pressed | host_pad()) | 0x0007;   // active low
+    return (uint16_t)~(g_script_pressed | host_pad()) | 0x0007;
+}
+
+// PDR1 read in direct mode: the lines the SH-2 drives (DDR1) read back as written,
+// TH and TR pulled up when not driven, TL high, D3-D0 from the pad
+static uint8_t pdr1_direct() {
+    uint8_t out = g_port[0x5], ddr = g_port[0x9] & 0x7F;
+    uint8_t lines = (uint8_t)((out & ddr) | (0x60 & ~ddr));
+    bool th = lines & 0x40, tr = lines & 0x20;
+    uint16_t pad = pad1_now();
+    uint8_t nib = th ? (tr ? (uint8_t)((pad & 0x8) | 0x4) : (uint8_t)(pad >> 8 & 0xF))
+                     : (tr ? (uint8_t)(pad >> 12) : (uint8_t)(pad >> 4 & 0xF));
+    return (uint8_t)(0x80 | (lines & 0x60) | 0x10 | (nib & 0xF));
+}
+
+static void intback_peripheral() {
+    uint16_t pad1 = pad1_now();
     int i = 0;
     g_oreg[i++] = 0xF1;                      // port 1: direct, one peripheral
     g_oreg[i++] = 0x02;                      // digital pad, 2 bytes
@@ -137,7 +170,8 @@ uint32_t smpc_read(uint32_t off) {
     switch (off) {
     case 0x61: return g_sr;
     case 0x63: return g_sf;
-    case 0x75: case 0x77: return 0xFF;       // PDR: nothing pulled low
+    case 0x75: return (g_port[0xD] & 1) ? pdr1_direct() : 0xFF;   // PDR1: direct mode when IOSEL1 is set
+    case 0x77: return 0xFF;                  // PDR2: nothing pulled low
     }
     if (off >= 0x70) return g_port[off & 0xF];
     return 0;

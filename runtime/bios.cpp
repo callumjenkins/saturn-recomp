@@ -67,6 +67,7 @@ void bios_boot() {
     g_first_read = be(0xF0);
     std::string areas(reinterpret_cast<const char*>(ip + 0x40), 10);   // area symbols: J T U B K A E L
     g_pal = areas.find('E') != std::string::npos && areas.find_first_of("JTUBKAL") == std::string::npos;
+    smpc_set_area(areas[0]);
     sh2_mem_write(0x06002000u, ip, ip_size && ip_size <= sizeof ip ? ip_size : sizeof ip);
 
     std::string first = cdrom_first_file();

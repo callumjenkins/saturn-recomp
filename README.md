@@ -21,6 +21,8 @@ fixes live in the ports.
 | Port | Game | What it asked of saturnkit |
 |---|---|---|
 | [pc-virtualhydlide](https://github.com/vs-sr-dev/pc-virtualhydlide) | Virtual Hydlide (1995) | the disc, the SH-2 decoder, the address map, function discovery, cross-program matching, the interpreter, the recompiler, the runtime core (HLE boot and BIOS, SCU, SMPC, the slave as a coroutine, the CD block), VDP1 and VDP2 in software in a window with the pad, the 68000 and the SCSP (sound), recompiler hooks for a game layer, and the fields between a game's frames drawn moving (`--interp`) |
+| [pc-deepfear](https://github.com/vs-sr-dev/pc-deepfear) | Deep Fear (1998) | function discovery for GCC and SGL code (GCC's switches, `mova` tables and pointers, tables of records, computed jumps into unrolled code, SGL's hand-written handlers), the SCU DSP (a disassembler, and an interpreter in the runtime), `SYS_CHGUIPR` and the per-interrupt SCU masks, literal-pool slots that the code writes |
+| [pc-xjapan](https://github.com/vs-sr-dev/pc-xjapan) | X JAPAN Virtual Shock 001 (1995) | a file system over a Mode 1 and a CD-ROM XA track, interleaved files and records of CD-DA tracks, function discovery through far jumps and callbacks that do nothing, TVSTAT's HBLANK, the pad read directly through the SMPC's ports, the disc's area code, a game played in the window recorded and given back headless (`--record-input`, `--input @FILE`) |
 
 ## Using it
 
@@ -142,5 +144,5 @@ Musashi (the 68000, MIT) with SoftFloat, and its SCSP is in part derived
 from MAME's (BSD-3-Clause): their terms are in
 [THIRD_PARTY.md](THIRD_PARTY.md).
 
-saturnkit has been proven on one game so far (the ports table above); its interfaces will
-still change as a second one asks things of it.
+saturnkit has been proven on three games so far (the ports table above); its interfaces will
+still change as the next one asks things of it.

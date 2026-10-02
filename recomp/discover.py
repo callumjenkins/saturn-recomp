@@ -530,6 +530,10 @@ class Program:
                 succ = [a + 2]
             if ins.op in ("braf", "jmp"):
                 succ = (switches or {}).get(a) or self.switches.get(a, [])
+                # `jmp @rn` to a constant the descent followed (a far branch,
+                # or a tail into code not yet known as a function's entry)
+                if not succ and ins.op == "jmp" and state[a][ins.n] in code:
+                    succ = [state[a][ins.n]]
             for t in succ:
                 if t not in code:
                     continue
@@ -817,8 +821,10 @@ class Program:
             # record (passed to a function, or in a table of pointers) can decode
             # cleanly for a few halfwords; a handler is longer
             # (not rejected for good: it may yet become a boundary)
+            # (but `rts; nop` loaded as a literal is a callback that does nothing)
             weak = not self._boundary(v) and not self._is_prologue(self.img.u16(v))
-            if weak and len(f.code) < 8:
+            empty = v in literals and self.img.contains(v, 4) and self.img.u32(v) == 0x000B0009
+            if weak and len(f.code) < 8 and not empty:
                 continue
             self._descend(v)
             for t in f.calls | f.tails:

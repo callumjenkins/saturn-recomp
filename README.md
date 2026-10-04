@@ -73,6 +73,17 @@ build/recomp-build/saturn --cue GAME.cue --headless --input @play.txt --vblanks 
 build/recomp-build/saturn --cue GAME.cue --headless --watch 06058D6C:06058DCF --watch-vblanks 7300:7310   # every store, by function
 ```
 
+## Checking a change
+
+`tools/check.sh` runs every check that needs no game data. It's the same thing CI runs on every
+push:
+- the Python tests
+- the recompiler's instruction self-test
+- the runtime's unit tests
+
+All of these build without SDL. A change to the runtime should also pass each game's own frame
+tests, which need the game's disc.
+
 ## Layers
 
 | Layer | Question it answers | Now | Next |

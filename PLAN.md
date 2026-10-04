@@ -35,12 +35,13 @@ saturn-recomp/
      the task switch into the build (`g_sh2_tasks`), so the runtime needs no `--tasks`.
    - `python -m saturnrecomp.learn GAME.toml -- ARGS` is the run-and-seed loop each game had its
      own copy of.
-4. **Tests and CI.**
-   - pytest for the decoder and discovery on hand-assembled snippets.
-   - A null host, so the runtime builds and runs with no SDL.
-   - Unit tests for chips whose output is a function of their inputs, starting with VDP2
-     composition.
-   - A GitHub Actions job running all of it plus the instruction self-test.
+4. **Done.** Tests and CI. `tools/check.sh` runs everything that needs no game data, and the
+   GitHub workflow runs it on every push:
+   - pytest (`tests/`): the decoder, discovery on hand-assembled programs, resume points, `game.toml`.
+   - The instruction self-test.
+   - The runtime's unit tests (`runtime/tests/`), starting with VDP2 composition.
+   - All built with `host_null.cpp` in place of SDL, which a build also falls back to when SDL3 is
+     missing.
 5. **Done, with step 3.** Resume points in the recompiler. `saturnrecomp.analysis.resume` finds them
    from the config's `[tasks]`, and `saturnrecomp.build` adds them to that module's seeds.
 

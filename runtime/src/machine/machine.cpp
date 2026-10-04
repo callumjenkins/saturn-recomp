@@ -404,6 +404,7 @@ int saturn_main(const SaturnConfig& cfg) {
     sh2_activate(m);
     sat_note("boot: %s at %08X", m->name, entry);
     if (cfg.task_setjmp) tasks_configure(cfg.task_setjmp, cfg.task_longjmp);
+    else if (g_sh2_tasks[0]) tasks_configure(g_sh2_tasks[0], g_sh2_tasks[1]);
     for (;;) {
         try {
             SH2Func f = sh2_lookup(entry);

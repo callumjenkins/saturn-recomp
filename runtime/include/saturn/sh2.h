@@ -182,6 +182,7 @@ static inline void sh2_mac_l(SH2Context& c, int n, int m) {
 // sh2_call looks the target up in the active modules.
 extern const SH2Module* const g_sh2_modules[];
 extern const int g_sh2_nmodules;
+extern const uint32_t g_sh2_tasks[2];             // the game's setjmp and longjmp the build was given, 0 if none
 const SH2Module* sh2_module(const char* name);
 const SH2Module* sh2_identify(uint32_t base);     // the module whose image is in memory at base
 const SH2Module* sh2_identify_containing(uint32_t addr, bool* exact);   // a module whose image in memory holds addr

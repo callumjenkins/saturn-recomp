@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Static recompilation of Sega Saturn games to native PC: SH-2 to C++, and a runtime for the Saturn's hardware"
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = []
 
 [dependency-groups]

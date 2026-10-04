@@ -11,7 +11,7 @@ modules; the runtime activates the one whose image it finds in memory
     p_<name>_funcs.h        prototypes and the module descriptor
     p_<name>_NNN.cpp        the functions, split by instruction count
     p_<name>_table.cpp      the module: image base, size, crc32, entries
-    modules.cpp             every module of the build (g_sh2_modules)
+    modules.cpp             every module of the build (g_sh2_modules), the task switch (g_sh2_tasks)
     CMakeLists.txt          the library `recomp`, the runtime, the self-test
     report.txt              per module: functions, calls and jumps by how
                             they were resolved, targets outside the module
@@ -20,6 +20,10 @@ modules; the runtime activates the one whose image it finds in memory
 in program NAME (not a branch, not a delay slot): a place where the
 runtime can change what the game computed (runtime/core.cpp, `--hook` of
 the saturn executable).
+
+--tasks SETJMP:LONGJMP builds in the game's own task switch (runtime
+tasks.cpp), as if the saturn executable were given --tasks; hook both
+addresses as well.
 
 --optest adds saturn-recomp's own instruction test (recomp/selftest.py): a
 synthetic program with every SH-2 instruction form, as module OPTEST, and
@@ -217,8 +221,8 @@ endif()
 """
 
 
-def generate(specs, out, per_file=8000, comments=True, optest=False, log=print, hooks=None):
-    """hooks: {program name: [address, ...]}, see --hook."""
+def generate(specs, out, per_file=8000, comments=True, optest=False, log=print, hooks=None, tasks=None):
+    """hooks: {program name: [address, ...]}, see --hook. tasks: (setjmp, longjmp), see --tasks."""
     hooks = hooks or {}
     t0 = time.time()
     os.makedirs(out, exist_ok=True)
@@ -244,6 +248,7 @@ def generate(specs, out, per_file=8000, comments=True, optest=False, log=print, 
         for m in modules:
             f.write("    &%s::module,\n" % m.ns)
         f.write("};\nextern const int g_sh2_nmodules = %d;\n" % len(modules))
+        f.write("extern const uint32_t g_sh2_tasks[2] = {0x%08X, 0x%08X};\n" % (tasks or (0, 0)))
     srcs = [x for m in modules for x in m.files] + ["modules.cpp"]
     with Out(os.path.join(out, "CMakeLists.txt")) as f:
         f.write(CMAKE.format(rt=RUNTIME.replace("\\", "/"), srcs="\n    ".join(srcs)))
@@ -284,12 +289,14 @@ def main(argv=None):
     ap.add_argument("--no-comments", action="store_true")
     ap.add_argument("--optest", action="store_true", help="add saturn-recomp's instruction test module")
     ap.add_argument("--hook", action="append", default=[], help="NAME:ADDR,...: sh2_hook after these instructions")
+    ap.add_argument("--tasks", help="SETJMP:LONGJMP, the game's own task switch, built in")
     a = ap.parse_args(argv)
     hooks = {}
     for h in a.hook:
         name, _, addrs = h.partition(":")
         hooks.setdefault(name, []).extend(int(x, 16) for x in addrs.split(",") if x)
-    generate([parse_spec(s) for s in a.programs], a.out, a.per_file, not a.no_comments, a.optest, hooks=hooks)
+    tasks = tuple(int(x, 16) for x in a.tasks.split(":")) if a.tasks else None
+    generate([parse_spec(s) for s in a.programs], a.out, a.per_file, not a.no_comments, a.optest, hooks=hooks, tasks=tasks)
 
 
 if __name__ == "__main__":

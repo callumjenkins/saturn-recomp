@@ -31,6 +31,19 @@ uv add --editable ./saturn-recomp      # or: pip install -e saturn-recomp
 The install has to be editable: the recompiler points the build at the C++ runtime in the checkout.
 Each game pins a saturn-recomp commit and moves it forward deliberately.
 
+A game describes itself in a `game.toml`: the programs to recompile and where they load, names for
+addresses, the game's own task switch if it has one, hook points, and the file where learned seeds
+go. `src/saturnrecomp/config.py` documents the format. From it:
+
+```sh
+python -m saturnrecomp.build game.toml [--recompile]    # recompile if needed, then build
+python -m saturnrecomp.learn game.toml -- --cue GAME.cue --headless --vblanks 3600
+    # run; while it stops at code discovery missed, add the seed, recompile and run again
+python -m saturnrecomp.analysis.resume game.toml --check   # where the game's tasks can resume
+```
+
+The lower-level tools below take their inputs as arguments instead.
+
 ```sh
 python -m saturnrecomp.disc GAME.cue --info              # IP.BIN, ISO 9660, tracks
 python -m saturnrecomp.disc GAME.cue --list

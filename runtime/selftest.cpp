@@ -1,5 +1,5 @@
-// saturnkit runtime — the recompiler's self-test: recompiled functions run
-// on the vectors saturnkit/recomp/selftest.py recorded with the interpreter
+// saturn-recomp runtime — the recompiler's self-test: recompiled functions run
+// on the vectors src/saturnrecomp/recomp/selftest.py recorded with the interpreter
 // (sh2emu), and every result compared.
 //
 //     selftest VECTORS.txt ...

@@ -1,4 +1,4 @@
-// saturnkit runtime — the SCU: its interrupt controller, the two timers and
+// saturn-recomp runtime — the SCU: its interrupt controller, the two timers and
 // the three DMA levels (the DSP is in scudsp.cpp).
 //
 // Interrupts: a source sets its bit in IST; an interrupt whose bit is not

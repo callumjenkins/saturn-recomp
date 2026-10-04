@@ -1,6 +1,6 @@
 """The SCU DSP's instruction set: decoding and disassembly.
 
-    python -m saturnkit.scudsp FILE.BIN --base 06004000 --at 0605AB94 --count 256
+    python -m saturnrecomp.scudsp FILE.BIN --base 06004000 --at 0605AB94 --count 256
 
 The SCU's DSP runs a program of up to 256 32-bit words from its own
 program RAM, which the SH-2 fills through PPAF/PPD (0x25FE0080/84). Each

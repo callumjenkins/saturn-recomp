@@ -1,4 +1,4 @@
-// saturnkit runtime — the disc: a .cue with its .bin files (one per track or
+// saturn-recomp runtime — the disc: a .cue with its .bin files (one per track or
 // one for all), sectors by FAD, the TOC, and ISO 9660 lookups for the boot.
 //
 // FADs are absolute: the first track's INDEX 01 is FAD 150. A file's first

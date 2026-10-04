@@ -1,4 +1,4 @@
-// saturnkit runtime — the SMPC: its commands, INTBACK and the pads.
+// saturn-recomp runtime — the SMPC: its commands, INTBACK and the pads.
 //
 // Registers are bytes at odd addresses (IREG0-6 0x01-0x0D, COMREG 0x1F,
 // OREG0-31 0x21-0x5F, SR 0x61, SF 0x63, the ports 0x75-0x7F). A command

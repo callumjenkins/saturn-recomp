@@ -1,6 +1,6 @@
-# Third-party code in saturnkit
+# Third-party code in saturn-recomp
 
-saturnkit is MIT-licensed (`LICENSE`). Two parts of it come from, or
+saturn-recomp is MIT-licensed (`LICENSE`). Two parts of it come from, or
 follow, other people's work under their own permissive licences.
 
 ## Musashi (the 68000) — MIT
@@ -41,7 +41,7 @@ those paragraphs.
 
 ## MAME's SCSP (the envelope, the LFOs, FM, the DSP) — BSD-3-Clause
 
-`runtime/scsp.cpp` is saturnkit's own code, but its envelope times and key
+`runtime/scsp.cpp` is saturn-recomp's own code, but its envelope times and key
 scaling, its LFO tables and scales, its FM scaling and its DSP step (with
 the ring buffer's floating-point format) follow MAME's `scsp.cpp` and
 `scspdsp.cpp` closely enough to count as derived from them. Those files
@@ -82,4 +82,4 @@ carry `license:BSD-3-Clause`, `copyright-holders:ElSemi, R. Belmont`
 Mednafen (GPL-2.0) and Beetle Saturn were read for facts about the
 hardware (the SCSP timers' behaviour, the pan and level scales) and are
 used as the oracle the ports are compared with; no code of theirs is in
-saturnkit.
+saturn-recomp.

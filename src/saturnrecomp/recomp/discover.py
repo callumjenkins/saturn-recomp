@@ -1,6 +1,6 @@
 """Function discovery for flat SH-2 programs without symbols.
 
-    python -m saturnkit.recomp.discover FILE.BIN --base 0600B000 [--seeds a,b,..] [--report]
+    python -m saturnrecomp.recomp.discover FILE.BIN --base 0600B000 [--seeds a,b,..] [--report]
 
 On the SH-2, code and data share the text: every function is followed by
 its literal pool, switch tables sit right after the jump that reads them,

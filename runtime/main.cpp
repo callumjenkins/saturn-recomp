@@ -1,4 +1,4 @@
-// saturnkit runtime — boots a disc into the recompiled programs of this
+// saturn-recomp runtime — boots a disc into the recompiled programs of this
 // build and runs it, in a window or headless.
 //
 //     saturn --cue GAME.cue [--out DIR] [--headless] [--fullscreen] [--scale N]

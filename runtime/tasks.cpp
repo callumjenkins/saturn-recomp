@@ -1,4 +1,4 @@
-// saturnkit runtime — a game's own tasks, switched by its setjmp and longjmp.
+// saturn-recomp runtime — a game's own tasks, switched by its setjmp and longjmp.
 //
 // Some kernels run cooperative tasks, each on its own stack: a task saves its
 // registers with setjmp and longjmps into another's saved ones. Recompiled code

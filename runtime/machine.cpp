@@ -1,4 +1,4 @@
-// saturnkit runtime — the machine: the run loop, time, interrupts taken by a
+// saturn-recomp runtime — the machine: the run loop, time, interrupts taken by a
 // CPU, the slave SH-2, and program starts.
 //
 // Time. The recompiled code has no cycle counts; it has safe points (loop

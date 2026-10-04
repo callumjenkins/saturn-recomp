@@ -1,6 +1,6 @@
 """The Saturn's address map and register names, for annotating code.
 
-    python -m saturnkit.hw 25D00002 25F80114 06000310
+    python -m saturnrecomp.hw 25D00002 25F80114 06000310
 
 name(addr) returns "VDP1.FBCR", "WRAM-H", "BIOS.SYS_SETSINT"... or None.
 

@@ -1,9 +1,9 @@
 """Saturn disc images: .cue/.bin sets and plain .iso; IP.BIN, tracks, ISO 9660.
 
-    python -m saturnkit.disc GAME.cue --info
-    python -m saturnkit.disc GAME.cue --list
-    python -m saturnkit.disc GAME.cue --extract out/         # files + IP.BIN
-    python -m saturnkit.disc GAME.cue --audio out/           # CD-DA tracks as WAV
+    python -m saturnrecomp.disc GAME.cue --info
+    python -m saturnrecomp.disc GAME.cue --list
+    python -m saturnrecomp.disc GAME.cue --extract out/         # files + IP.BIN
+    python -m saturnrecomp.disc GAME.cue --audio out/           # CD-DA tracks as WAV
 
 Layers, from the outside in:
 

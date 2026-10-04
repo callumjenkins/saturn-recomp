@@ -1,57 +1,52 @@
-# saturnkit
+# saturn-recomp
 
-A game-agnostic toolkit for Sega Saturn reverse engineering and native PC
-ports: disc images, the SH-2 CPU, the hardware's address map, a static
-recompiler from SH-2 code to C++, and a runtime that replaces the Saturn's
-hardware under the recompiled game: both SH-2s, VDP1 and VDP2, the SCU, the
-SMPC, the CD block, and the sound side (the 68000 and the SCSP).
+Static recompilation of Sega Saturn games to native PC. It reads a disc, translates the games'
+SH-2 code to C++, and builds it against a runtime that replaces the Saturn's hardware: both
+SH-2s, VDP1 and VDP2, the SCU, the SMPC, the CD block, and the sound side (the 68000 and the SCSP).
 
-The same idea as [wiikit](https://github.com/vs-sr-dev/wiikit) and
-[ps2kit](https://github.com/vs-sr-dev/pc-extermination/tree/main/ps2kit),
-for the Saturn. Each Saturn game has its own engine and formats, but a
-large part of every port is the *same* work: the same disc layout, the same
-two SH-2s, the same VDP1, VDP2, SCU, SMPC, SCSP and CD block, and very
-often the same Sega libraries (SBL, SGL). saturnkit collects that shared
-part. It grows inside the ports: each piece is written because a game
-needed it, then kept free of that game's knowledge. Game formats and game
-fixes live in the ports.
+saturn-recomp began as a fork of Samuele Voltan's
+[saturnkit](https://github.com/vs-sr-dev/saturnkit), whose history it keeps, and is now developed
+separately. It holds what every Saturn game shares. What one game needs lives in that game's own
+repository, which takes saturn-recomp as a submodule.
 
-## Ports built on it
+## Games built on it
 
-| Port | Game | What it asked of saturnkit |
+| Game | Repository | What it added |
 |---|---|---|
-| [pc-virtualhydlide](https://github.com/vs-sr-dev/pc-virtualhydlide) | Virtual Hydlide (1995) | the disc, the SH-2 decoder, the address map, function discovery, cross-program matching, the interpreter, the recompiler, the runtime core (HLE boot and BIOS, SCU, SMPC, the slave as a coroutine, the CD block), VDP1 and VDP2 in software in a window with the pad, the 68000 and the SCSP (sound), recompiler hooks for a game layer, and the fields between a game's frames drawn moving (`--interp`) |
-| [pc-deepfear](https://github.com/vs-sr-dev/pc-deepfear) | Deep Fear (1998) | function discovery for GCC and SGL code (GCC's switches, `mova` tables and pointers, tables of records, computed jumps into unrolled code, SGL's hand-written handlers), the SCU DSP (a disassembler, and an interpreter in the runtime), `SYS_CHGUIPR` and the per-interrupt SCU masks, literal-pool slots that the code writes |
-| [pc-xjapan](https://github.com/vs-sr-dev/pc-xjapan) | X JAPAN Virtual Shock 001 (1995) | a file system over a Mode 1 and a CD-ROM XA track, interleaved files and records of CD-DA tracks, function discovery through far jumps and callbacks that do nothing, TVSTAT's HBLANK, the pad read directly through the SMPC's ports, the disc's area code, a game played in the window recorded and given back headless (`--record-input`, `--input @FILE`) |
+| Virtual Hydlide (1995) | [vs-sr-dev/pc-virtualhydlide](https://github.com/vs-sr-dev/pc-virtualhydlide) (on saturnkit) | the disc, the SH-2 decoder, the address map, function discovery, cross-program matching, the interpreter, the recompiler, the runtime core (HLE boot and BIOS, SCU, SMPC, the slave as a coroutine, the CD block), VDP1 and VDP2 in software in a window with the pad, the 68000 and the SCSP (sound), recompiler hooks for a game layer, and the fields between a game's frames drawn moving (`--interp`) |
+| Deep Fear (1998) | [vs-sr-dev/pc-deepfear](https://github.com/vs-sr-dev/pc-deepfear) (on saturnkit) | function discovery for GCC and SGL code (GCC's switches, `mova` tables and pointers, tables of records, computed jumps into unrolled code, SGL's hand-written handlers), the SCU DSP (a disassembler, and an interpreter in the runtime), `SYS_CHGUIPR` and the per-interrupt SCU masks, literal-pool slots that the code writes |
+| X JAPAN Virtual Shock 001 (1995) | [vs-sr-dev/pc-xjapan](https://github.com/vs-sr-dev/pc-xjapan) (on saturnkit) | a file system over a Mode 1 and a CD-ROM XA track, interleaved files and records of CD-DA tracks, function discovery through far jumps and callbacks that do nothing, TVSTAT's HBLANK, the pad read directly through the SMPC's ports, the disc's area code, recorded play (`--record-input`, `--input @FILE`) |
+| Saturn Bomberman (1996) | pc-saturnbomberman (private) | a game's own tasks switched with setjmp and longjmp (`--tasks`), 6-player multitaps, the 8-bit VDP1 framebuffer, VDP2 hi-res, interlace and windows, per-character special priority and colour calculation, the SMPC clock (`--clock`), discovery of jump tables reached over a `bra` |
 
 ## Using it
 
-A port takes saturnkit as a git submodule at `saturnkit/`, so that
-`python -m saturnkit.…` works from the port's root:
+A game's repository takes saturn-recomp as a submodule and installs it into its Python
+environment:
 
 ```sh
-git submodule add https://github.com/vs-sr-dev/saturnkit.git saturnkit
-git clone --recursive <port>          # or: git submodule update --init
+git submodule add https://github.com/callumjenkins/saturn-recomp.git saturn-recomp
+uv add --editable ./saturn-recomp      # or: pip install -e saturn-recomp
 ```
 
-Each port pins a saturnkit commit and moves it forward deliberately.
+The install has to be editable: the recompiler points the build at the C++ runtime in the checkout.
+Each game pins a saturn-recomp commit and moves it forward deliberately.
 
 ```sh
-python -m saturnkit.disc GAME.cue --info              # IP.BIN, ISO 9660, tracks
-python -m saturnkit.disc GAME.cue --list
-python -m saturnkit.disc GAME.cue --extract build/extract   # files + IP.BIN
-python -m saturnkit.disc GAME.cue --audio build/audio       # CD-DA as WAV
-python -m saturnkit.sh2 FILE.BIN --find-base               # where it loads
-python -m saturnkit.sh2 FILE.BIN --base 0600B000 --at 0600B000 --count 64
-python -m saturnkit.sh2 FILE.BIN --base 0600B000 --refs 25D00000:25D00018
-python -m saturnkit.sh2 FILE.BIN --base 0600B000 --census
-python -m saturnkit.hw 25D00002 25F80114 06000310
-python -m saturnkit.recomp.discover FILE.BIN --base 0600B000 --report     # functions, code/data
-python -m saturnkit.recomp.match A.BIN@0600B000 B.BIN@0600B000 --names a.tsv --out b.tsv
-python -m saturnkit.sh2emu FILE.BIN --base 0600B000 --call 060224DC --regs r1=100,r0=7
-python -m saturnkit.recomp --out build/recomp A=A.BIN@0600B000 B=B.BIN@0600B000 --optest   # to C++
-python -m saturnkit.recomp --out build/recomp A=A.BIN@0600B000 --hook A:0600B6F4   # sh2_hook after that instruction
-python -m saturnkit.recomp.selftest --out a.txt --image A=A.BIN@0600B000 --test A --auto  # vectors
+python -m saturnrecomp.disc GAME.cue --info              # IP.BIN, ISO 9660, tracks
+python -m saturnrecomp.disc GAME.cue --list
+python -m saturnrecomp.disc GAME.cue --extract build/extract   # files + IP.BIN
+python -m saturnrecomp.disc GAME.cue --audio build/audio       # CD-DA as WAV
+python -m saturnrecomp.sh2 FILE.BIN --find-base               # where it loads
+python -m saturnrecomp.sh2 FILE.BIN --base 0600B000 --at 0600B000 --count 64
+python -m saturnrecomp.sh2 FILE.BIN --base 0600B000 --refs 25D00000:25D00018
+python -m saturnrecomp.sh2 FILE.BIN --base 0600B000 --census
+python -m saturnrecomp.hw 25D00002 25F80114 06000310
+python -m saturnrecomp.recomp.discover FILE.BIN --base 0600B000 --report     # functions, code/data
+python -m saturnrecomp.recomp.match A.BIN@0600B000 B.BIN@0600B000 --names a.tsv --out b.tsv
+python -m saturnrecomp.sh2emu FILE.BIN --base 0600B000 --call 060224DC --regs r1=100,r0=7
+python -m saturnrecomp.recomp --out build/recomp A=A.BIN@0600B000 B=B.BIN@0600B000 --optest   # to C++
+python -m saturnrecomp.recomp --out build/recomp A=A.BIN@0600B000 --hook A:0600B6F4   # sh2_hook after that instruction
+python -m saturnrecomp.recomp.selftest --out a.txt --image A=A.BIN@0600B000 --test A --auto  # vectors
 cmake -S build/recomp -B build/recomp-build -G Ninja -DCMAKE_CXX_COMPILER=clang++
 ninja -C build/recomp-build && build/recomp-build/selftest build/recomp/selftest/optest.txt a.txt
 build/recomp-build/saturn --cue GAME.cue                              # the game in a window, with the pad and sound
@@ -78,10 +73,10 @@ build/recomp-build/saturn --cue GAME.cue --headless --watch 06058D6C:06058DCF --
 ## Principles
 
 * Pure Python, no dependencies, for layers 1–4; the runtime (layer 5) is
-  C++20 with SDL3 and OpenGL 4.5, built with CMake, Ninja and clang, as in wiikit.
+  C++20 with SDL3 and OpenGL 4.5, built with CMake, Ninja and clang.
 * Every claim is checked on a real disc before it goes in.
 * Game knowledge stays out.
-* Every change is checked on every port before it goes in.
+* Every change is checked on every game built on it before it goes in.
 
 ## Checks behind each module
 
@@ -121,8 +116,8 @@ build/recomp-build/saturn --cue GAME.cue --headless --watch 06058D6C:06058DCF --
   once a poll).
 * Sound: MIDI is not done (its input reads empty); CD-DA reaches the
   SCSP's external input but no game has played it yet. VDP1 draws in
-  software at the Saturn's resolution; VDP2's rotation planes, windows, line and cell scroll,
-  mosaic, line colour screen and special functions are not done (the
+  software at the Saturn's resolution; VDP2's rotation planes, the sprite window, line and
+  cell scroll, mosaic, line colour screen and shadows are not done (the
   runtime notes a register that asks for one). Not emulated: the
   SCU DSP, the SH-2's on-chip interrupts, the caches.
 * `match` needs a fingerprint unique on both sides; identical small
@@ -138,11 +133,10 @@ build/recomp-build/saturn --cue GAME.cue --headless --watch 06058D6C:06058DCF --
 
 ## Licence
 
-MIT — see [LICENSE](LICENSE). saturnkit contains no game data and no Sega
+MIT — see [LICENSE](LICENSE). saturn-recomp contains no game data and no Sega
 code; it reads and replaces, it does not include. The runtime includes
 Musashi (the 68000, MIT) with SoftFloat, and its SCSP is in part derived
 from MAME's (BSD-3-Clause): their terms are in
 [THIRD_PARTY.md](THIRD_PARTY.md).
 
-saturnkit has been proven on three games so far (the ports table above); its interfaces will
-still change as the next one asks things of it.
+Its interfaces will still change as the next game asks things of it.

@@ -1,4 +1,4 @@
-// saturnkit runtime — what the video chips share with each other and with
+// saturn-recomp runtime — what the video chips share with each other and with
 // the host window: VDP1 (vdp1.cpp), VDP2 (vdp2.cpp), the raster and the bus
 // (video.cpp), the window (host.cpp).
 #pragma once

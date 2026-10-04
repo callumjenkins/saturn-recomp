@@ -1,4 +1,4 @@
-// saturnkit runtime — VDP1: the command table drawn in software into its two
+// saturn-recomp runtime — VDP1: the command table drawn in software into its two
 // framebuffers, the frame change and the erase.
 //
 // A draw starts when PTMR is written with 1, or at a frame change with

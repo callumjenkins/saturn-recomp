@@ -1,4 +1,4 @@
-// saturnkit runtime — the SH-2 as seen by recompiled code.
+// saturn-recomp runtime — the SH-2 as seen by recompiled code.
 //
 // Recompiled functions have the signature `void f_XXXXXXXX(SH2Context& c)`,
 // one namespace per program (programs swapped at one address each have
@@ -8,7 +8,7 @@
 // sh2_io_*), and a few out-of-line services the runtime provides (calls
 // through registers, safe points for interrupts, sleep, trapa).
 //
-// Semantics are saturnkit/sh2emu.py's, instruction for instruction: the
+// Semantics are src/saturnrecomp/sh2emu.py's, instruction for instruction: the
 // self-test (runtime/selftest.cpp) holds the two together.
 #pragma once
 #include <cstddef>

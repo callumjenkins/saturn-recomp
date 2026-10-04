@@ -1,4 +1,4 @@
-// saturnkit runtime — the SCU DSP: its registers and an interpreter.
+// saturn-recomp runtime — the SCU DSP: its registers and an interpreter.
 //
 // The SH-2 reaches the DSP through four SCU registers: PPAF (0x80, program
 // control: run, load the PC, the flags), PPD (0x84, a program word at the

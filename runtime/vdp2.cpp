@@ -1,4 +1,4 @@
-// saturnkit runtime — VDP2: the picture of a field, composed in software
+// saturn-recomp runtime — VDP2: the picture of a field, composed in software
 // from VRAM, colour RAM, the registers and VDP1's framebuffer.
 //
 // What is done: the four normal scroll screens (NBG0-NBG3) in cell mode

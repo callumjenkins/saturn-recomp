@@ -1,9 +1,9 @@
 """The recompiler's self-test: the interpreter records, the recompiled code replays.
 
-    python -m saturnkit.recomp.selftest --out VECTORS.txt --image NAME=FILE@BASE [--image ...]
+    python -m saturnrecomp.recomp.selftest --out VECTORS.txt --image NAME=FILE@BASE [--image ...]
                                         --test NAME [--auto] [--funcs A,B,...] [--names TSV]
                                         [--vectors 16] [--seed 1]
-    python -m saturnkit.recomp.selftest --optest DIR
+    python -m saturnrecomp.recomp.selftest --optest DIR
 
 A vectors file (the format is in runtime/selftest.cpp) says which images to
 load and which modules to activate, then, function by function, the full
@@ -20,8 +20,8 @@ every function that does the same with r4-r7 pointing into random data
 A vector that faults in the interpreter is left out, and its writes are
 undone.
 
-The instruction test (`--optest`, or `python -m saturnkit.recomp --optest`)
-is saturnkit's own: a synthetic program with every instruction form the
+The instruction test (`--optest`, or `python -m saturnrecomp.recomp --optest`)
+is saturn-recomp's own: a synthetic program with every instruction form the
 decoder knows, alone and in a delay slot, with random registers, operands
 and memory; and sequences for the control flow (conditional and delayed
 branches, a branch into its own slot, loops, bsr/jsr/bsrf, a tail jmp, an
@@ -470,7 +470,7 @@ def write_optest(out_dir, seed=1, vectors=12):
             f.write(data)
     rng = random.Random(seed + 1)
     mem = new_memory([(code, OPTEST_BASE), (blob, BLOB)])
-    lines = ["# saturnkit instruction test: %d functions" % len(funcs),
+    lines = ["# saturn-recomp instruction test: %d functions" % len(funcs),
              "image %08X %s" % (OPTEST_BASE, code_path),
              "image %08X %s" % (BLOB, blob_path),
              "module OPTEST"]
@@ -528,7 +528,7 @@ def main(argv=None):
         for e, mode in found.items():
             funcs.setdefault(e, mode)
     names = load_names(a.names) if a.names else {}
-    lines = ["# saturnkit self-test: %s, %d functions" % (name, len(funcs))]
+    lines = ["# saturn-recomp self-test: %s, %d functions" % (name, len(funcs))]
     for (n, p, b, _) in specs:
         lines.append("image %08X %s" % (b, os.path.abspath(p).replace("\\", "/")))
     lines.append("image %08X %s" % (SCRATCH, scratch))

@@ -1,4 +1,4 @@
-// saturnkit runtime — the BIOS, high level: the boot and the services.
+// saturn-recomp runtime — the BIOS, high level: the boot and the services.
 //
 // The boot does what the BIOS does before it jumps to a game: IP.BIN to
 // 0x06002000, the 1st read file (the first file record of the root

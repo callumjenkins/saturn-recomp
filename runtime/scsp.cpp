@@ -1,4 +1,4 @@
-// saturnkit runtime — the SCSP (Yamaha YMF292): the 32 slots, the timers,
+// saturn-recomp runtime — the SCSP (Yamaha YMF292): the 32 slots, the timers,
 // the interrupts to the 68000 and to the SCU, the DMA, the DSP and the
 // mixer. One call to scsp_sample makes one stereo sample at 44 100 Hz;
 // sound.cpp runs the 68000 between them.
@@ -38,7 +38,7 @@
 // scales, the FM scaling, and the DSP step with its floating-point
 // PACK/UNPACK of the ring buffer. Those parts are derived from MAME's code:
 //   Copyright (c) ElSemi, R. Belmont (thanks-to kingshriek), BSD-3-Clause;
-//   the licence's text is in THIRD_PARTY.md at the root of saturnkit.
+//   the licence's text is in THIRD_PARTY.md at the root of saturn-recomp.
 // The timers' behaviour (free-running, loaded at the next count) is the
 // hardware's as Mednafen documents it. Not done: MIDI (its input reads empty), the DSP's
 // ring-buffer writes on even steps.

@@ -1,4 +1,4 @@
-// saturnkit runtime — the part every build shares: the work RAMs, the
+// saturn-recomp runtime — the part every build shares: the work RAMs, the
 // address map outside them, and the address -> function dispatch over the
 // active modules (one per address range: the resident programs and the one
 // swapped in).
@@ -136,7 +136,7 @@ void sh2_activate(const SH2Module* m) {
         if (a && a->base < m->base + m->size && m->base < a->base + a->size) a = nullptr;
     for (auto& a : g_active)
         if (!a) { a = m; return; }
-    std::fprintf(stderr, "saturnkit: more than %d modules active\n", kSlots);
+    std::fprintf(stderr, "saturn-recomp: more than %d modules active\n", kSlots);
 }
 
 SH2Func sh2_lookup(uint32_t addr) {

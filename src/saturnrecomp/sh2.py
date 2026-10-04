@@ -1,9 +1,9 @@
 """SH-2 (SH7604) decoding, disassembly and cross-references.
 
-    python -m saturnkit.sh2 FILE.BIN --base 0600B000 --at 0600B000 [--count 64]
-    python -m saturnkit.sh2 FILE.BIN --base 0600B000 --census
-    python -m saturnkit.sh2 FILE.BIN --base 0600B000 --refs 25C00000[:25D00000]
-    python -m saturnkit.sh2 FILE.BIN --find-base            # where does it load?
+    python -m saturnrecomp.sh2 FILE.BIN --base 0600B000 --at 0600B000 [--count 64]
+    python -m saturnrecomp.sh2 FILE.BIN --base 0600B000 --census
+    python -m saturnrecomp.sh2 FILE.BIN --base 0600B000 --refs 25C00000[:25D00000]
+    python -m saturnrecomp.sh2 FILE.BIN --find-base            # where does it load?
 
 Every instruction is 16 bits, big-endian. Branches with a delay slot
 (bra, bsr, jmp, jsr, rts, rte, braf, bsrf, bt/s, bf/s) run the next

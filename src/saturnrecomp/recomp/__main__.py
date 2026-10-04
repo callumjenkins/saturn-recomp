@@ -1,6 +1,6 @@
 """Recompile flat SH-2 programs to C++, one module per program.
 
-    python -m saturnkit.recomp --out build/recomp NAME=FILE@BASE[+SEED,...] ... [--optest]
+    python -m saturnrecomp.recomp --out build/recomp NAME=FILE@BASE[+SEED,...] ... [--optest]
                                [--per-file 8000] [--no-comments] [--hook NAME:ADDR,...]
 
 Each program is discovered (recomp/discover.py) and emitted into its own
@@ -21,7 +21,7 @@ in program NAME (not a branch, not a delay slot): a place where the
 runtime can change what the game computed (runtime/core.cpp, `--hook` of
 the saturn executable).
 
---optest adds saturnkit's own instruction test (recomp/selftest.py): a
+--optest adds saturn-recomp's own instruction test (recomp/selftest.py): a
 synthetic program with every SH-2 instruction form, as module OPTEST, and
 its vectors in --out/selftest/optest.txt.
 """
@@ -34,7 +34,7 @@ from .. import sh2
 from . import discover
 from . import emit as E
 
-RUNTIME = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "runtime"))
+RUNTIME = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "runtime"))
 
 
 class Out:
@@ -193,28 +193,28 @@ def classify(modules):
 
 
 CMAKE = """cmake_minimum_required(VERSION 3.20)
-project(saturnkit_recomp CXX)
+project(saturn_recomp CXX)
 set(CMAKE_CXX_STANDARD 20)
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
-set(SATURNKIT_RUNTIME "{rt}")
+set(SATURN_RUNTIME "{rt}")
 add_library(recomp STATIC
     {srcs})
-target_include_directories(recomp PUBLIC ${{SATURNKIT_RUNTIME}})
+target_include_directories(recomp PUBLIC ${{SATURN_RUNTIME}})
 target_compile_options(recomp PRIVATE -Wno-unused-label -Wno-tautological-compare)
-# the runtime: saturnkit_core (memory, dispatch over the modules),
-# saturnkit_stub (no hardware: tests that only run the game's own code) and
-# saturnkit_hw (the Saturn)
-include(${{SATURNKIT_RUNTIME}}/runtime.cmake)
-add_executable(selftest ${{SATURNKIT_RUNTIME}}/selftest.cpp)
-target_link_libraries(selftest saturnkit_core saturnkit_stub recomp)
+# the runtime: saturn_core (memory, dispatch over the modules),
+# saturn_stub (no hardware: tests that only run the game's own code) and
+# saturn_hw (the Saturn)
+include(${{SATURN_RUNTIME}}/runtime.cmake)
+add_executable(selftest ${{SATURN_RUNTIME}}/selftest.cpp)
+target_link_libraries(selftest saturn_core saturn_stub recomp)
 # the Saturn with no screen: boots a disc into these modules
-add_executable(saturn ${{SATURNKIT_RUNTIME}}/main.cpp)
-target_link_libraries(saturn saturnkit_core saturnkit_hw recomp Threads::Threads)
-# a project can add its own targets (the game) with -DSATURNKIT_EXTRA=file.cmake
-if(DEFINED SATURNKIT_EXTRA)
-  include(${{SATURNKIT_EXTRA}})
+add_executable(saturn ${{SATURN_RUNTIME}}/main.cpp)
+target_link_libraries(saturn saturn_core saturn_hw recomp Threads::Threads)
+# a project can add its own targets (the game) with -DSATURN_EXTRA=file.cmake
+if(DEFINED SATURN_EXTRA)
+  include(${{SATURN_EXTRA}})
 endif()
 """
 
@@ -284,7 +284,7 @@ def main(argv=None):
     ap.add_argument("--out", required=True)
     ap.add_argument("--per-file", type=int, default=8000)
     ap.add_argument("--no-comments", action="store_true")
-    ap.add_argument("--optest", action="store_true", help="add saturnkit's instruction test module")
+    ap.add_argument("--optest", action="store_true", help="add saturn-recomp's instruction test module")
     ap.add_argument("--hook", action="append", default=[], help="NAME:ADDR,...: sh2_hook after these instructions")
     a = ap.parse_args(argv)
     hooks = {}

@@ -1,6 +1,6 @@
 """Match functions between programs that link the same code at other addresses.
 
-    python -m saturnkit.recomp.match A.BIN@0600B000 B.BIN@0600B000 [--names names.tsv] [--out b-names.tsv]
+    python -m saturnrecomp.recomp.match A.BIN@0600B000 B.BIN@0600B000 [--names names.tsv] [--out b-names.tsv]
 
 A game made of several programs (overlays, or complete programs swapped at
 one address) repeats its engine in each, shifted. A function's fingerprint

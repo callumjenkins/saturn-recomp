@@ -1,4 +1,4 @@
-// saturnkit runtime — the Saturn under the recompiled code: the machine
+// saturn-recomp runtime — the Saturn under the recompiled code: the machine
 // (time, the two CPUs, program starts), the HLE BIOS, and the devices at
 // their registers. sh2.h is the recompiled code's view; this header is the
 // devices' view of each other.

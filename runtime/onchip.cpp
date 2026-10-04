@@ -1,4 +1,4 @@
-// saturnkit runtime — the SH7604's on-chip registers, one set per CPU
+// saturn-recomp runtime — the SH7604's on-chip registers, one set per CPU
 // (0xFFFFFE00-0xFFFFFFFF): the division unit, the free-running timer, the
 // DMA controller, the watchdog's interval timer; the rest (serial port, bus
 // and cache control) kept as written.

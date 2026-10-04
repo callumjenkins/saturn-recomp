@@ -1,4 +1,4 @@
-// saturnkit runtime — the sound side's CPU and its pace: the 68000 that runs
+// saturn-recomp runtime — the sound side's CPU and its pace: the 68000 that runs
 // the driver the game loads into sound RAM, the SCSP beside it, the SH-2's
 // view of both, and where the samples go.
 //

@@ -1,4 +1,4 @@
-// saturnkit runtime — the host: a window (SDL3, OpenGL 4.5) that shows each
+// saturn-recomp runtime — the host: a window (SDL3, OpenGL 4.5) that shows each
 // field VDP2 composes, the pad from the keyboard and a gamepad, the pace,
 // and PNG files.
 //
@@ -68,7 +68,7 @@ bool host_open() {
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
     int s = std::max(1, g_cfg.scale);
-    g_win = SDL_CreateWindow("saturnkit", 320 * s, 240 * s, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE |
+    g_win = SDL_CreateWindow("saturn-recomp", 320 * s, 240 * s, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE |
                              SDL_WINDOW_HIGH_PIXEL_DENSITY | (g_cfg.fullscreen ? SDL_WINDOW_FULLSCREEN : 0));
     if (!g_win) { sat_note("SDL: %s", SDL_GetError()); return false; }
     if (!SDL_GL_CreateContext(g_win)) { sat_note("SDL: no OpenGL 4.5 context: %s", SDL_GetError()); return false; }

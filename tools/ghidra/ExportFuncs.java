@@ -1,9 +1,9 @@
 // Export the functions Ghidra's auto-analysis found, as "ENTRY<TAB>SIZE" lines,
-// to compare with saturnkit.recomp.discover on the same program.
+// to compare with saturnrecomp.recomp.discover on the same program.
 //
 //   analyzeHeadless PROJDIR NAME -import FILE.BIN -overwrite \
 //       -processor SuperH:BE:32:SH-2 -loader BinaryLoader -loader-baseAddr 0x0600B000 \
-//       -scriptPath saturnkit/ghidra -postScript ExportFuncs.java OUT.tsv
+//       -scriptPath saturn-recomp/tools/ghidra -postScript ExportFuncs.java OUT.tsv
 //
 // (JAVA_HOME must point at a JDK 21 for Ghidra 12.)
 import ghidra.app.script.GhidraScript;

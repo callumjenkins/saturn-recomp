@@ -1,6 +1,6 @@
 """An SH-2 interpreter, for running isolated guest functions.
 
-    python -m saturnkit.sh2emu FILE.BIN --base 0600B000 --call 0603E918 --regs r0=7,r1=100
+    python -m saturnrecomp.sh2emu FILE.BIN --base 0600B000 --call 0603E918 --regs r0=7,r1=100
 
 It is the reference the recompiler is checked against, and a way to ask
 the game's own code a question (what does this helper compute?) without an

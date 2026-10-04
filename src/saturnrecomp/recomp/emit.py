@@ -1,7 +1,7 @@
-"""SH-2 instruction -> C++ statement(s), against saturnkit/runtime/sh2.h.
+"""SH-2 instruction -> C++ statement(s), against runtime/sh2.h.
 
 stmt(ins, literal) gives the C++ for one instruction that does not branch,
-with the semantics of saturnkit/sh2emu.py. Body turns a discovered function
+with the semantics of src/saturnrecomp/sh2emu.py. Body turns a discovered function
 into a C++ function:
 
 * a label wherever something jumps; straight-line order otherwise, with a

@@ -1,4 +1,4 @@
-// saturnkit runtime — the raster timing that drives the frame, and the video
+// saturn-recomp runtime — the raster timing that drives the frame, and the video
 // and sound chips' place on the bus (the sound side is sound.cpp's).
 //
 // Timing is NTSC: 263 lines at 59.94 Hz, whatever the disc's area (TVSTAT's

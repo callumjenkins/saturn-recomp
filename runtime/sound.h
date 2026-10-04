@@ -1,4 +1,4 @@
-// saturnkit runtime — what the sound side shares: the SCSP (scsp.cpp), the
+// saturn-recomp runtime — what the sound side shares: the SCSP (scsp.cpp), the
 // 68000 and the timing that drives both (sound.cpp), and where the samples
 // go (host.cpp's audio stream, a WAV file).
 #pragma once

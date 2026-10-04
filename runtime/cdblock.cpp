@@ -1,4 +1,4 @@
-// saturnkit runtime — the CD block (the "CS2") at its registers.
+// saturn-recomp runtime — the CD block (the "CS2") at its registers.
 //
 // The host writes a command into CR1-CR4 (CR4 last) and reads the answer
 // from the same registers; HIRQ holds the flags (writing clears the bits

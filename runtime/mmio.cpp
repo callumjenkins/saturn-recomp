@@ -1,4 +1,4 @@
-// saturnkit runtime — the address map outside the work RAMs, and a log of
+// saturn-recomp runtime — the address map outside the work RAMs, and a log of
 // every access to it.
 //
 // sh2_io_* (core.cpp) folds the cache-through mirror and WRAM-H's mirrors,

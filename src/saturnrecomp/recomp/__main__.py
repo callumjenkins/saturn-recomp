@@ -151,7 +151,7 @@ class Module:
         flush()
 
         with Out(os.path.join(out, self.ns + "_funcs.h")) as f:
-            f.write('#pragma once\n#include "sh2.h"\n\nnamespace %s {\n' % self.ns)
+            f.write('#pragma once\n#include "saturn/sh2.h"\n\nnamespace %s {\n' % self.ns)
             for e in self.entries:
                 f.write("void %s(SH2Context& c);\n" % E.fname(e))
             f.write("extern const SH2Module module;\n}  // namespace %s\n" % self.ns)
@@ -201,17 +201,15 @@ endif()
 set(SATURN_RUNTIME "{rt}")
 add_library(recomp STATIC
     {srcs})
-target_include_directories(recomp PUBLIC ${{SATURN_RUNTIME}})
+target_include_directories(recomp PUBLIC ${{SATURN_RUNTIME}}/include)
 target_compile_options(recomp PRIVATE -Wno-unused-label -Wno-tautological-compare)
-# the runtime: saturn_core (memory, dispatch over the modules),
-# saturn_stub (no hardware: tests that only run the game's own code) and
-# saturn_hw (the Saturn)
+# the runtime's targets (runtime/runtime.cmake)
 include(${{SATURN_RUNTIME}}/runtime.cmake)
-add_executable(selftest ${{SATURN_RUNTIME}}/selftest.cpp)
+add_executable(selftest ${{SATURN_RUNTIME}}/src/app/selftest.cpp)
 target_link_libraries(selftest saturn_core saturn_stub recomp)
-# the Saturn with no screen: boots a disc into these modules
-add_executable(saturn ${{SATURN_RUNTIME}}/main.cpp)
-target_link_libraries(saturn saturn_core saturn_hw recomp Threads::Threads)
+# the Saturn: boots a disc into these modules
+add_executable(saturn ${{SATURN_RUNTIME}}/src/app/main.cpp)
+target_link_libraries(saturn saturn_core saturn_machine saturn_host recomp Threads::Threads)
 # a project can add its own targets (the game) with -DSATURN_EXTRA=file.cmake
 if(DEFINED SATURN_EXTRA)
   include(${{SATURN_EXTRA}})

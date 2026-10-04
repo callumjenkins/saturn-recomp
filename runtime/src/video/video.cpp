@@ -13,6 +13,7 @@
 // colour RAM keep what is written.
 #include "saturn.h"
 #include "video.h"
+#include "host.h"
 #include <algorithm>
 #include <cstdio>
 #include <string>

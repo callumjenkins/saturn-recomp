@@ -5,7 +5,7 @@
                                         [--vectors 16] [--seed 1]
     python -m saturnrecomp.recomp.selftest --optest DIR
 
-A vectors file (the format is in runtime/selftest.cpp) says which images to
+A vectors file (the format is in runtime/src/app/selftest.cpp) says which images to
 load and which modules to activate, then, function by function, the full
 register state before and after each call as sh2emu computed it, and the
 crc32 of both work RAMs after the function's vectors. The `selftest`

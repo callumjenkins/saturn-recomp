@@ -1,8 +1,9 @@
 // saturn-recomp runtime — the Saturn under the recompiled code: the machine
 // (time, the two CPUs, program starts), the HLE BIOS, and the devices at
-// their registers. sh2.h is the recompiled code's view; this header is the
-// devices' view of each other.
+// their registers. saturn/sh2.h is the recompiled code's view; this header is the
+// devices' view of each other. By folder under runtime/src:
 //
+//   machine/
 //   machine.cpp   the run loop, time, interrupts to a CPU, the slave as a
 //                 coroutine, program starts (the host stack unwound)
 //   bios.cpp      the boot (IP.BIN, the 1st read file) and the BIOS services
@@ -11,14 +12,19 @@
 //   smpc.cpp      commands, INTBACK, the pads
 //   cdblock.cpp   the CD block at its registers, over cdrom.cpp's disc
 //   onchip.cpp    the SH7604's own registers, per CPU (DIVU, FRT, DMAC...)
+//   tasks.cpp     a game's own tasks, switched by its setjmp and longjmp
+//   video/
 //   video.cpp     the raster timing, the video chips on the bus
-//   sound.cpp     the 68000, the pace of the sound side, sound RAM and the SCSP on the SH-2's bus
-//   scsp.cpp      the SCSP: slots, timers, interrupts, DSP, the mix
 //   vdp1.cpp      VDP1: the command table drawn in software, the framebuffers
 //   vdp2.cpp      VDP2: the picture composed from its layers and VDP1's
-//   host.cpp      the window, the pad, the pace, PNG files
+//   png.cpp       a frame as a PNG file
+//   sound/
+//   sound.cpp     the 68000, the pace of the sound side, sound RAM and the SCSP on the SH-2's bus
+//   scsp.cpp      the SCSP: slots, timers, interrupts, DSP, the mix
+//   host/
+//   host.cpp      the window, the pad, the pace, the audio stream (the only SDL code)
 #pragma once
-#include "sh2.h"
+#include "saturn/sh2.h"
 #include <cstdint>
 #include <string>
 
@@ -137,7 +143,7 @@ void onchip_input_capture(int cpu);   // SINIT/MINIT: the FRT's input-capture fl
 void onchip_reset(int cpu);
 bool onchip_deliver(SH2Context& c);   // the watchdog's interval interrupt, if due and above c's mask; taken?
 
-// ---- video (video.cpp; vdp1.cpp, vdp2.cpp, host.cpp through video.h) --------------------------
+// ---- video (video.cpp; vdp1.cpp, vdp2.cpp, host.cpp through video.h and host.h) --------------------------
 void video_init();
 void video_tick(uint64_t now);        // raster timing: VBlank in/out, lines, VDP1 frames
 uint32_t video_read(uint32_t a, int size);    // VDP1, VDP2, SCSP (canonical addresses)

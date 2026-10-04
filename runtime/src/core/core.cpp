@@ -2,7 +2,7 @@
 // address map outside them, and the address -> function dispatch over the
 // active modules (one per address range: the resident programs and the one
 // swapped in).
-#include "sh2.h"
+#include "saturn/sh2.h"
 #include <cstdio>
 #include <cstring>
 

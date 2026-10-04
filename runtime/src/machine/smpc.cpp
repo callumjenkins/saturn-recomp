@@ -23,6 +23,7 @@
 // 00 then 11), and the order MAME's Saturn driver reads them in.
 #include "saturn.h"
 #include "video.h"
+#include "host.h"
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>

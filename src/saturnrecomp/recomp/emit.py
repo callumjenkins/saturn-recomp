@@ -1,4 +1,4 @@
-"""SH-2 instruction -> C++ statement(s), against runtime/sh2.h.
+"""SH-2 instruction -> C++ statement(s), against runtime/include/saturn/sh2.h.
 
 stmt(ins, literal) gives the C++ for one instruction that does not branch,
 with the semantics of src/saturnrecomp/sh2emu.py. Body turns a discovered function

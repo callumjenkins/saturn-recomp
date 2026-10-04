@@ -2,7 +2,7 @@
 // game's own code (the self-test, the link check). A hardware access or an
 // exception is reported and ends the run; so does a return that went
 // elsewhere, which would mean the recompiled control flow is wrong.
-#include "sh2.h"
+#include "saturn/sh2.h"
 #include <cstdio>
 #include <cstdlib>
 

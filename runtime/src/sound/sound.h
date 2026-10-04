@@ -1,6 +1,6 @@
 // saturn-recomp runtime — what the sound side shares: the SCSP (scsp.cpp), the
 // 68000 and the timing that drives both (sound.cpp), and where the samples
-// go (host.cpp's audio stream, a WAV file).
+// go (the host's audio stream, a WAV file).
 #pragma once
 #include <cstdint>
 
@@ -16,8 +16,3 @@ uint32_t scsp_active_slots();                         // a mask, for the log
 // ---- the 68000 and the pace (sound.cpp) ----------------------------------------------------
 void sound_irq_changed();                             // the SCSP's interrupt to the 68000 moved
 void sound_main_irq();                                // the SCSP asks the SCU for a sound request
-
-// ---- the host (host.cpp) ------------------------------------------------------------------
-bool host_audio_open();                               // with a window; false: no device
-void host_audio_push(const int16_t* lr, int frames);  // interleaved stereo, 44 100 Hz
-void host_audio_report();                             // how the stream fared, to stderr

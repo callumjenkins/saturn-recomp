@@ -9,7 +9,7 @@
 // through registers, safe points for interrupts, sleep, trapa).
 //
 // Semantics are src/saturnrecomp/sh2emu.py's, instruction for instruction: the
-// self-test (runtime/selftest.cpp) holds the two together.
+// self-test (runtime/src/app/selftest.cpp) holds the two together.
 #pragma once
 #include <cstddef>
 #include <cstdint>

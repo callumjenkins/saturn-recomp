@@ -11,7 +11,7 @@
 //     v IN... OUT...         22 hex words each: r0-r15, sr, gbr, vbr, mach, macl, pr
 //     mem CRC_L CRC_H        crc32 of WRAM-L and WRAM-H after the function's vectors
 // Memory is shared by all vectors in order, as in the interpreter's run.
-#include "sh2.h"
+#include "saturn/sh2.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>

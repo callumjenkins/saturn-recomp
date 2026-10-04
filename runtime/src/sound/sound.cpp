@@ -22,10 +22,11 @@
 // to a 16-bit stereo WAV file of the whole run.
 #include "saturn.h"
 #include "sound.h"
+#include "host.h"
 #include <cstdio>
 #include <vector>
 extern "C" {
-#include "third_party/musashi/m68k.h"
+#include "m68k.h"
 }
 
 static bool g_on;                                // SNDON: the 68000 runs

@@ -33,10 +33,4 @@ struct Frame {
 void vdp2_compose(Frame& out);                       // the picture of the field that has just ended
 int vdp2_lines();                                    // 224, 240 or 256 (TVMD VRESO)
 
-// ---- the host (host.cpp) ------------------------------------------------------------------
-bool host_open();                                    // the window (unless headless); false if it failed
-void host_present(const Frame& f);                   // show it, take the events
-void host_pace(uint64_t now);                        // wait until the host's clock has caught up
-bool host_wants_frame();                             // a window to show it in
-uint16_t host_pad();                                 // buttons held, smpc.cpp's bits
-void write_png(const std::string& path, const Frame& f);
+void write_png(const std::string& path, const Frame& f);   // png.cpp

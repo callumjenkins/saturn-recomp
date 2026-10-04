@@ -15,12 +15,13 @@
 // colour calculation; the colour offsets A and B; the back screen (one
 // colour or one a line); the display bit; the high resolutions (640 and 704
 // dots), with double-density interlace composed as one picture of both
-// fields' lines (448, 480 or 512), the scroll screens a dot row a line.
+// fields' lines (448, 480 or 512), the scroll screens a dot row a line;
+// shadows (normal, MSB and transparent) on the scroll screens, the back
+// screen and the sprite itself.
 // What is not: RBG0 and RBG1 (rotation), line and vertical-cell scroll,
 // mosaic, the sprite window, the line colour screen, special priority and
-// colour calculation by dot (the special function codes), shadows on VDP2's
-// layers, gradation, extended colour calculation, the exclusive
-// resolutions. A register that asks for one of them is noted once.
+// colour calculation by dot (the special function codes), gradation,
+// extended colour calculation, the exclusive resolutions. A register that asks for one of them is noted once.
 #include "saturn.h"
 #include "video.h"
 #include <algorithm>
@@ -70,6 +71,7 @@ struct Pix {
     bool offset_b;                              // ... offset B rather than A
     bool spr, scc;                              // the character's special priority and colour calculation bits
     bool msb;                                   // the colour data's MSB
+    bool shade;                                 // an MSB shadow: the sprite dot at half brightness
 };
 
 enum { L_SPRITE, L_NBG0, L_NBG1, L_NBG2, L_NBG3, L_COUNT };
@@ -248,15 +250,20 @@ static const SpriteType kTypes[16] = {
     {7, 1, 0, 0, 0xFF},    {7, 1, 6, 1, 0xFF},    {6, 3, 0, 0, 0xFF},    {0, 0, 6, 3, 0xFF},
 };
 
-static bool sprite_pixel(uint16_t d, Pix& p) {
+// S_SHADOW is a dot that shows nothing itself and halves the brightness of what is under it.
+enum SpriteDot { S_NONE, S_DOT, S_SHADOW };
+
+static SpriteDot sprite_pixel(uint16_t d, Pix& p) {
     uint16_t spctl = reg(0xE0);
     int type = spctl & 0xF;
+    bool window = spctl >> 4 & 1;
     bool mixed = spctl >> 5 & 1;
     int ccmode = spctl >> 12 & 3, ccnum = spctl >> 8 & 7;
-    if (d == 0) return false;
+    if (d == 0) return S_NONE;
     auto prio_of = [](int i) { return (uint8_t)(reg(0xF0 + (i / 2) * 2) >> ((i & 1) * 8) & 7); };
     auto ratio_of = [](int i) { return (uint8_t)(reg(0x100 + (i / 2) * 2) >> ((i & 1) * 8) & 0x1F); };
     bool msb;
+    SpriteDot kind = S_DOT;
     if (mixed && (d & 0x8000)) {
         p.rgb = rgb555(d);
         p.prio = prio_of(0);
@@ -266,7 +273,14 @@ static bool sprite_pixel(uint16_t d, Pix& p) {
         const SpriteType& t = kTypes[type];
         if (type >= 8) d &= 0xFF;
         uint16_t dc = d & t.dc_mask;
-        if (dc == 0) return false;
+        // Types 2-7 leave the MSB free, for the sprite window when SPWINEN is set and for shadows when not.
+        bool msb_shadow = type >= 2 && type <= 7 && !window && (d & 0x8000);
+        if (dc == t.dc_mask - 1) kind = S_SHADOW;                       // a normal shadow
+        else if (msb_shadow && !(d & 0x7FFF)) {
+            if (!(reg(0xE2) >> 8 & 1)) return S_NONE;                    // transparent shadows off (TPSDSL)
+            kind = S_SHADOW;
+        } else if (dc == 0) return S_NONE;
+        p.shade = msb_shadow;
         int pr = t.pr_mask ? d >> t.pr_shift & t.pr_mask : 0;
         int cc = t.cc_mask ? d >> t.cc_shift & t.cc_mask : 0;
         p.prio = prio_of(pr);
@@ -283,7 +297,7 @@ static bool sprite_pixel(uint16_t d, Pix& p) {
     p.cc = p.cc && (reg(0xEC) >> 6 & 1);
     p.offset = reg(0x110) >> 6 & 1;
     p.offset_b = reg(0x112) >> 6 & 1;
-    return p.prio != 0;
+    return p.prio ? kind : S_NONE;
 }
 
 // ---- windows ----------------------------------------------------------------------------------
@@ -322,7 +336,7 @@ static bool windowed(uint8_t ctl, const Win w[2], int x) {
 
 // ---- composing ------------------------------------------------------------------------------
 static void note_unsupported() {
-    static bool noted[9];
+    static bool noted[8];
     bool fresh = false;
     auto once = [&](int i, bool cond, const char* what, uint16_t v) {
         if (cond && !noted[i]) { noted[i] = fresh = true; sat_note("VDP2: %s (%04X) is not done", what, v); }
@@ -331,15 +345,14 @@ static void note_unsupported() {
     once(1, reg(0x9A) & 0x3F3F, "line or vertical cell scroll (SCRCTL)", reg(0x9A));
     once(2, reg(0x22) & 0xF, "mosaic (MZCTL)", reg(0x22));
     once(3, (reg(0xD0) | reg(0xD2) | reg(0xD4) | reg(0xD6)) & 0x2020, "the sprite window (WCTL)", reg(0xD0));
-    once(4, reg(0xE2) & 0x13F, "shadows on VDP2's layers (SDCTL)", reg(0xE2));
-    once(5, reg(0xEC) & 0x8600 && reg(0xEC) & 0x5F, "extended colour calculation or gradation (CCCTL)", reg(0xEC));
-    once(6, (reg(0x00) & 7) >= 4, "an exclusive resolution (TVMD)", reg(0x00));
+    once(4, reg(0xEC) & 0x8600 && reg(0xEC) & 0x5F, "extended colour calculation or gradation (CCCTL)", reg(0xEC));
+    once(5, (reg(0x00) & 7) >= 4, "an exclusive resolution (TVMD)", reg(0x00));
     auto mode = [](uint16_t r, int m) {
         for (int n = 0; n < 4; ++n) if ((r >> (n * 2) & 3) == m) return true;
         return false;
     };
-    once(7, reg(0xE8) & 0x3F, "the line colour screen (LNCLEN)", reg(0xE8));
-    once(8, mode(reg(0xEA), 2) || mode(reg(0xEE), 2), "special priority or colour calculation by dot (SFPRMD, SFCCMD)", reg(0xEA));
+    once(6, reg(0xE8) & 0x3F, "the line colour screen (LNCLEN)", reg(0xE8));
+    once(7, mode(reg(0xEA), 2) || mode(reg(0xEE), 2), "special priority or colour calculation by dot (SFPRMD, SFCCMD)", reg(0xEA));
 }
 
 static uint32_t apply_offset(uint32_t rgb, bool b) {
@@ -375,6 +388,7 @@ void vdp2_compose(Frame& f) {
     uint8_t wctl[L_COUNT] = {(uint8_t)(reg(0xD4) >> 8), (uint8_t)reg(0xD0), (uint8_t)(reg(0xD0) >> 8),
                              (uint8_t)reg(0xD2), (uint8_t)(reg(0xD2) >> 8)};
     uint8_t cc_wctl = (uint8_t)(reg(0xD6) >> 8);
+    uint16_t sdctl = reg(0xE2);
     for (int y = 0; y < f.h; ++y) {
         int line = dd ? y >> 1 : y;
         Win win[2] = {window_line(0, y, dd), window_line(1, y, dd)};
@@ -389,8 +403,14 @@ void vdp2_compose(Frame& f) {
             };
             // in the order that wins ties: sprite, then NBG0..NBG3
             l[L_SPRITE] = {};
-            if (!windowed(wctl[L_SPRITE], win, x) && sprite_pixel(vdp1_dot(x, y, dd), l[L_SPRITE]))
-                consider(L_SPRITE);
+            uint8_t shadow = 0;                  // the priority of a shadow dot here
+            if (!windowed(wctl[L_SPRITE], win, x)) {
+                switch (sprite_pixel(vdp1_dot(x, y, dd), l[L_SPRITE])) {
+                case S_DOT: consider(L_SPRITE); break;
+                case S_SHADOW: shadow = l[L_SPRITE].prio; l[L_SPRITE] = {}; break;
+                case S_NONE: break;
+                }
+            }
             for (int n = 0; n < 4; ++n) {
                 Pix& p = l[L_NBG0 + n];
                 p = {};
@@ -421,6 +441,10 @@ void vdp2_compose(Frame& f) {
                 rgb = out;
             }
             if (t.offset) rgb = apply_offset(rgb, t.offset_b);
+            // A shadow halves the top screen under it when SDCTL enables that screen (bit 5: the back screen).
+            bool shaded = top == L_SPRITE ? t.shade
+                        : shadow && shadow >= t.prio && (sdctl >> (top >= 0 ? top - L_NBG0 : 5) & 1);
+            if (shaded) rgb = rgb >> 1 & 0x7F7F7F;
             f.px[(size_t)y * f.w + x] = rgb;
         }
     }

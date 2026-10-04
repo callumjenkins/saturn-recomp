@@ -7,10 +7,17 @@ namespace {
 
 const uint32_t kRed = 0xF80000, kGreen = 0x00F800, kBlue = 0x0000F8;   // RGB555 0x001F, 0x03E0, 0x7C00
 
+// VDP1 shows dot d in columns x0 to x1 of every line, and nothing elsewhere.
+void show_sprites(uint16_t d = 0, int x0 = 0, int x1 = -1) {
+    for (uint32_t i = 0; i < 512 * 256; ++i) vdp1_fb_write(i * 2, i % 512 >= (uint32_t)x0 && i % 512 <= (uint32_t)x1 ? d : 0, 2);
+    vdp1_vblank_out();
+}
+
 void reset() {
     std::memset(g_vdp2_regs, 0, sizeof g_vdp2_regs);
     std::memset(g_vdp2_vram, 0, sizeof g_vdp2_vram);
     std::memset(g_vdp2_cram, 0, sizeof g_vdp2_cram);
+    show_sprites();
 }
 
 void reg(uint32_t off, uint16_t v) { g_vdp2_regs[off] = v >> 8; g_vdp2_regs[off + 1] = (uint8_t)v; }
@@ -123,4 +130,62 @@ TEST(higher_priority_wins_and_nbg0_wins_ties) {
     reg(0xF8, 0x0202);                           // a tie
     vdp2_compose(f);
     CHECK_EQ(at(f, 0, 0), kGreen);
+}
+
+// The sprite layer as type 2 (priority bit 14, colour bits 0-10) at priority 3, over green NBG0 at 1.
+void sprites_over_green() {
+    red_screen();
+    green_bitmap_nbg0();
+    reg(0xE0, 0x0002);                           // SPCTL: type 2
+    reg(0xF0, 0x0003);                           // PRISA: sprite priority 0 is 3
+}
+
+TEST(normal_shadow_halves_an_enabled_screen) {
+    sprites_over_green();
+    show_sprites(0x07FE, 10, 19);                // every colour bit 1 but the lowest
+    Frame f;
+    vdp2_compose(f);
+    CHECK_EQ(at(f, 10, 0), kGreen);              // SDCTL enables no screen
+    reg(0xE2, 0x0001);                           // SDCTL: NBG0
+    vdp2_compose(f);
+    CHECK_EQ(at(f, 10, 0), 0x007C00);
+    CHECK_EQ(at(f, 20, 0), kGreen);
+    reg(0x20, 0x0000);                           // BGON: nothing, so the back screen is on top
+    reg(0xE2, 0x0020);                           // SDCTL: the back screen
+    vdp2_compose(f);
+    CHECK_EQ(at(f, 10, 0), 0x7C0000);
+}
+
+TEST(shadow_needs_a_priority_over_the_screen) {
+    sprites_over_green();
+    reg(0xE2, 0x0001);
+    reg(0xF8, 0x0004);                           // PRINA: NBG0 4, over the shadow's 3
+    show_sprites(0x07FE, 10, 19);
+    Frame f;
+    vdp2_compose(f);
+    CHECK_EQ(at(f, 10, 0), kGreen);
+}
+
+TEST(msb_shadow_halves_the_sprite_itself) {
+    sprites_over_green();
+    cram16(2, 0x7C00);
+    show_sprites(0x8002, 10, 19);
+    Frame f;
+    vdp2_compose(f);
+    CHECK_EQ(at(f, 10, 0), 0x00007C);
+    reg(0xE0, 0x0012);                           // SPCTL: SPWINEN, so the MSB is the sprite window's
+    vdp2_compose(f);
+    CHECK_EQ(at(f, 10, 0), kBlue);
+}
+
+TEST(transparent_shadow_needs_tpsdsl) {
+    sprites_over_green();
+    reg(0xE2, 0x0001);
+    show_sprites(0x8000, 10, 19);
+    Frame f;
+    vdp2_compose(f);
+    CHECK_EQ(at(f, 10, 0), kGreen);
+    reg(0xE2, 0x0101);                           // SDCTL: TPSDSL and NBG0
+    vdp2_compose(f);
+    CHECK_EQ(at(f, 10, 0), 0x007C00);
 }

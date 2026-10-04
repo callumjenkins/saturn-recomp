@@ -16,7 +16,7 @@ uint32_t vdp1_fb_read(uint32_t off, int size);       // the draw framebuffer, 0x
 void vdp1_fb_write(uint32_t off, uint32_t v, int size);
 void vdp1_vblank_out();                              // erase, frame change, the draw PTMR 2 asks for
 void vdp1_tick(uint64_t now);                        // the end of a draw
-const uint16_t* vdp1_display();                      // the framebuffer VDP2 shows: 512x256, 16 bits
+uint16_t vdp1_dot(int x, int y, bool dd);           // the sprite dot VDP2 shows at x, line y (dd: double-density, 2 lines a framebuffer line)
 uint64_t vdp1_frame_changes();
 uint64_t vdp1_draws();
 void vdp1_dump(FILE* f);                             // VRAM, the draw framebuffer, the registers

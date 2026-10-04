@@ -5,6 +5,7 @@
 //            [--vblanks N] [--starts N] [--trace] [--realtime] [--input VBLANK:BUTTONS,...|@FILE]
 //            [--record-input FILE] [--shot N,...] [--dump N,...] [--peek ADDR[:WORDS],...] [--watch LO:HI]
 //            [--watch-vblanks FROM:TO] [--wav FILE] [--interp] [--hook ADDR:rN=VALUE ...]
+//            [--tasks SETJMP:LONGJMP] [--multitap N] [--clock YYYY-MM-DDTHH:MM:SS]
 //
 // --vblanks and --starts end the run after that many VBlanks or program
 // starts; the log of the hardware touched goes to DIR/hw-log.txt. --shot
@@ -17,11 +18,27 @@
 // those VBlanks. --record-input writes the pad as the host presses it (the
 // keyboard, a gamepad), sampled once a VBlank, as an --input script: given
 // back with --input @FILE, the run goes the same way again. --interp draws the fields between the game's frames with
-// everything moved part of the way (vdp1.cpp), one frame behind.
+// everything moved part of the way (vdp1.cpp), one frame behind. --tasks names
+// the game's setjmp and longjmp when it switches its own tasks with them
+// (tasks.cpp); the build hooks both addresses. --multitap puts 6-player
+// multitaps on port 1, or (2) on both ports (smpc.cpp); --input then takes
+// "N." before a pad's buttons. --clock sets the SMPC's clock at power-on,
+// which then runs with the run's time; without it the clock is the host's.
 #include "saturn.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+
+// YYYY-MM-DDTHH:MM:SS as seconds since 1970, no time zone; -1 if it does not parse.
+static int64_t clock_seconds(const char* s) {
+    int y, mo, d, h, mi, se;
+    if (std::sscanf(s, "%d-%d-%dT%d:%d:%d", &y, &mo, &d, &h, &mi, &se) != 6 || y < 1970 || mo < 1 || mo > 12) return -1;
+    y -= mo <= 2;                                // days from civil (H. Hinnant's algorithm)
+    int64_t era = y / 400, yoe = y - era * 400;
+    int64_t doy = (153 * (mo + (mo > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    int64_t days = era * 146097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719468;
+    return days * 86400 + h * 3600 + mi * 60 + se;
+}
 
 int main(int argc, char** argv) {
     SaturnConfig cfg;
@@ -56,6 +73,17 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--scale") && more) cfg.scale = std::atoi(argv[++i]);
         else if (!std::strcmp(a, "--wav") && more) cfg.wav = argv[++i];
         else if (!std::strcmp(a, "--interp")) cfg.interp = true;
+        else if (!std::strcmp(a, "--multitap") && more) cfg.multitap = std::atoi(argv[++i]);
+        else if (!std::strcmp(a, "--clock") && more) {
+            cfg.clock = clock_seconds(argv[++i]);
+            if (cfg.clock < 0) { std::fprintf(stderr, "--clock: YYYY-MM-DDTHH:MM:SS\n"); return 2; }
+        }
+        else if (!std::strcmp(a, "--tasks") && more) {
+            if (std::sscanf(argv[++i], "%x:%x", &cfg.task_setjmp, &cfg.task_longjmp) != 2) {
+                std::fprintf(stderr, "saturn: --tasks SETJMP:LONGJMP, not %s\n", argv[i]);
+                return 2;
+            }
+        }
         else if (!std::strcmp(a, "--hook") && more) {
             unsigned addr, reg, v;
             if (std::sscanf(argv[++i], "%x:r%u=%x", &addr, &reg, &v) != 3 || reg > 15) {
@@ -68,7 +96,8 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "usage: saturn --cue GAME.cue [--out DIR] [--headless] [--fullscreen] [--scale N]\n"
                                  "             [--vblanks N] [--starts N] [--trace] [--realtime] [--input VBLANK:BUTTONS,...|@FILE]\n"
                                  "             [--record-input FILE] [--shot N,...] [--dump N,...] [--peek ADDR[:WORDS],...] [--watch LO:HI]\n"
-                                 "             [--wav FILE] [--hook ADDR:rN=VALUE ...]\n");
+                                 "             [--wav FILE] [--hook ADDR:rN=VALUE ...] [--tasks SETJMP:LONGJMP] [--multitap N]\n"
+                                 "             [--clock YYYY-MM-DDTHH:MM:SS]\n");
             return 2;
         }
     }

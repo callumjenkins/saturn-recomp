@@ -95,6 +95,12 @@ static const char* area_of(uint32_t a) {
     return nullptr;
 }
 
+// The two places software looks for a NetLink modem's UART. None is fitted:
+// reads float high, so its scratch-register test fails.
+static bool modem_port(uint32_t a) {
+    return (a >= 0x05825000u && a < 0x05825040u) || (a >= 0x05895000u && a < 0x05895040u);
+}
+
 uint32_t sh2_mmio_read(uint32_t a, int size) {
     if (a >= 0xFFFFFE00u) { log_reg(a, size, 'R'); return onchip_read(*g_cpu, a, size); }
     uint32_t area = a >> 29;
@@ -105,13 +111,14 @@ uint32_t sh2_mmio_read(uint32_t a, int size) {
         if (a >= 0x00180000u && a < 0x00190000u) return mem_rd(g_backup, a & 0xFFFF, size);
         if (video_owns(a)) return video_read(a, size);
         if (a >= 0x02000000u && a < 0x05000000u) return size == 1 ? 0xFF : size == 2 ? 0xFFFF : 0xFFFFFFFFu;
-        return 0;                               // the BIOS ROM is not here
+        return bios_rom_read(a, size);          // the BIOS ROM is not here
     }
     log_reg(a, size, 'R');
     if (a >= 0x00100000u && a < 0x00100080u) {
         if (size != 1) sat_fatal("%d-byte read of the SMPC at %08X", size, a);
         return smpc_read(a & 0x7F);
     }
+    if (modem_port(a)) return size == 1 ? 0xFF : size == 2 ? 0xFFFF : 0xFFFFFFFFu;
     if (a >= 0x05800000u && a < 0x05900000u) return cd_read(a & 0xFFFFF, size);
     if (a >= 0x05FE0000u && a < 0x05FE0100u) return scu_read(a & 0xFF, size);
     if (video_owns(a)) return video_read(a, size);
@@ -137,6 +144,7 @@ void sh2_mmio_write(uint32_t a, uint32_t v, int size) {
     }
     if (a >= 0x01000000u && a < 0x01800000u) { slave_kick(); return; }             // SINIT
     if (a >= 0x01800000u && a < 0x02000000u) { onchip_input_capture(0); return; }  // MINIT
+    if (modem_port(a)) return;
     if (a >= 0x05800000u && a < 0x05900000u) { cd_write(a & 0xFFFFF, v, size); return; }
     if (a >= 0x05FE0000u && a < 0x05FE0100u) { scu_write(a & 0xFF, v, size); return; }
     if (video_owns(a)) { video_write(a, v, size); return; }

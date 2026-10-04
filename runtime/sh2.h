@@ -184,6 +184,7 @@ extern const SH2Module* const g_sh2_modules[];
 extern const int g_sh2_nmodules;
 const SH2Module* sh2_module(const char* name);
 const SH2Module* sh2_identify(uint32_t base);     // the module whose image is in memory at base
+const SH2Module* sh2_identify_containing(uint32_t addr, bool* exact);   // a module whose image in memory holds addr
 void    sh2_activate(const SH2Module* m);          // replaces any active module it overlaps
 SH2Func sh2_lookup(uint32_t addr);                  // nullptr if not an entry of an active module
 void    sh2_call_unknown(SH2Context& c, uint32_t addr);   // services: not an entry (the BIOS...)

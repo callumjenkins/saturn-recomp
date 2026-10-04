@@ -420,7 +420,7 @@ class Program:
         bound or the mask before it in the same straight line, or None."""
         img = self.img
         scaled = False
-        for a in range(at - 2, at - 24, -2):
+        for a in self._back(at, 11):
             if not self.inside(a):
                 return None
             ins = img.insn(a)
@@ -428,7 +428,7 @@ class Program:
                 return None
             if ins.op in ("shll", "shll2") or (ins.fmt == "add Rm,Rn" and ins.m == ins.n):
                 scaled = True
-            if ins.op in ("cmp/hi", "cmp/hs") and a + 2 < at and img.insn(a + 2).op in ("bt", "bt/s"):
+            if ins.op in ("cmp/hi", "cmp/hs") and a + 2 < at and self._out_of_range(a + 2):
                 k = self._reg_const(a, ins.m)
                 if k is None:
                     return None
@@ -440,10 +440,49 @@ class Program:
                 return m + 1 if scaled else m // size + 1
         return None
 
+    def _skipped_bra(self, a):
+        """The conditional branch that jumps over the `bra` at `a` to the code
+        after its slot (`bf/s L; slot; bra FAR; nop; L:`), or None."""
+        img = self.img
+        for c in (a - 4, a - 2):
+            if self.inside(c):
+                ins = img.insn(c)
+                if (ins.op in ("bt", "bf", "bt/s", "bf/s") and ins.target == a + 4
+                        and ins.delay == (c == a - 4)):
+                    return c
+        return None
+
+    def _back(self, at, count):
+        """Up to `count` instruction addresses walking back from `at`. GCC
+        reaches a far default by a conditional branch over a `bra`; the walk
+        steps over that `bra` to the branch's slot, which runs on the way."""
+        img = self.img
+        a = at - 2
+        while count > 0:
+            if self.inside(a - 2) and img.insn(a - 2).op == "bra":
+                c = self._skipped_bra(a - 2)
+                if c is not None:
+                    a = c + 2 if img.insn(c).delay else c
+            yield a
+            a -= 2
+            count -= 1
+
+    def _out_of_range(self, b):
+        """Whether the branch at `b`, just after a `cmp/hi` or `cmp/hs`, is
+        taken when the index is out of range: `bt` to the default, or `bf`
+        over a `bra` to it."""
+        ins = self.img.insn(b)
+        if ins.op in ("bt", "bt/s"):
+            return True
+        if ins.op in ("bf", "bf/s"):
+            bra = ins.target - 4
+            return self.inside(bra) and self.img.insn(bra).op == "bra" and self._skipped_bra(bra) == b
+        return False
+
     def _reg_const(self, at, reg):
         """The constant `mov #imm,reg` or a literal load gives `reg` in the few instructions before `at`."""
         img = self.img
-        for a in range(at - 2, at - 12, -2):
+        for a in self._back(at, 5):
             if not self.inside(a):
                 return None
             ins = img.insn(a)

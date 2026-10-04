@@ -1,20 +1,32 @@
 // saturnkit runtime — the SH7604's on-chip registers, one set per CPU
 // (0xFFFFFE00-0xFFFFFFFF): the division unit, the free-running timer, the
-// DMA controller; the rest (serial port, watchdog, bus and cache control,
-// interrupt priorities) kept as written.
+// DMA controller, the watchdog's interval timer; the rest (serial port, bus
+// and cache control) kept as written.
 //
 // DIVU: a write to DVDNT (or DVDNTL) starts a 32/32 (or 64/32) signed
 // division; the quotient is read at once from DVDNT/DVDNTL, the remainder from
 // DVDNTH. Overflow sets DVCR.OVF. The FRT's counter runs from time at φ/8
-// (TCR selects /8, /32, /128); SINIT/MINIT set the input-capture flag and
+// (TCR selects /8, /32, /128), clears on matching OCRA when FTCSR.CCLRA is
+// set, and interrupts on that match when TIER.OCIAE is, at IPRB's FRT
+// priority and VCRC's vector. SINIT/MINIT set the input-capture flag and
 // latch the count in FICR. The DMAC transfers at once when enabled in
-// auto-request mode.
+// auto-request mode. The watchdog in interval mode counts from time at the
+// rate WTCSR selects and interrupts on each overflow, at IPRA's WDT priority
+// and VCRWDT's vector.
 #include "saturn.h"
 
 struct OnChip {
     uint8_t regs[0x200];
     uint64_t frc_t0;                        // time the FRC was last written
     uint16_t frc0;
+    uint16_t ocrb;                          // OCRA lives in regs; TOCR.OCRS picks which one 0x14 reaches
+    uint64_t frc_matches;                   // OCRA matches since frc_t0 already raised
+    uint32_t frc_period;                    // the OCRA period frc_matches was counted in
+    bool frc_pending;
+    uint64_t wdt_t0;                        // time WTCNT was last written or the timer started
+    uint8_t wtcnt0;
+    uint64_t wdt_overflows;                 // overflows since wdt_t0 already raised
+    bool wdt_pending;
 };
 static OnChip g_oc[2];
 
@@ -27,16 +39,97 @@ void onchip_reset(int cpu) {
     o.frc_t0 = sat_now();
     o.frc0 = 0;
     o.regs[0x11] = 0x01;                    // FTCSR
+    o.regs[0x14] = o.regs[0x15] = 0xFF;     // OCRA
     o.regs[0x16] = 0x00;                    // TCR
     o.regs[0xE2] = 0; o.regs[0xE3] = 0;     // IPRA
     o.regs[0x92] = 0;                       // CCR
+    o.regs[0x67] = 0x65;                    // VCRC and VCRWDT: the vectors games hook with SYS_SETSINT
+    o.regs[0xE4] = 0x68;
+    o.ocrb = 0xFFFF;
+    o.frc_matches = 0;
+    o.frc_period = 0;
+    o.frc_pending = false;
+    o.wdt_t0 = sat_now();
+    o.wtcnt0 = 0;
+    o.wdt_overflows = 0;
+    o.wdt_pending = false;
 }
 
-static uint16_t frc(OnChip& o) {
+static uint64_t frc_ticks(const OnChip& o) {
     static const int div[4] = {8, 32, 128, 1};
     int d = div[o.regs[0x16] & 3];
     uint64_t clocks = (sat_now() - o.frc_t0) * 28636 / 1000000;   // φ = 28.6 MHz
-    return (uint16_t)(o.frc0 + clocks / d);
+    return o.frc0 + clocks / d;
+}
+
+static uint32_t ocra_period(const OnChip& o) {
+    if (!(o.regs[0x11] & 0x01)) return 0;   // CCLRA
+    return (uint32_t)(o.regs[0x14] << 8 | o.regs[0x15]) + 1;
+}
+
+static uint16_t frc(OnChip& o) {
+    uint32_t period = ocra_period(o);
+    return (uint16_t)(period ? frc_ticks(o) % period : frc_ticks(o));
+}
+
+static bool wdt_counting(const OnChip& o) { return (o.regs[0x80] & 0x60) == 0x20; }   // TME, interval mode
+
+static uint64_t wdt_count(const OnChip& o) {
+    static const int div[8] = {2, 64, 128, 256, 512, 1024, 4096, 8192};
+    if (!wdt_counting(o)) return o.wtcnt0;
+    uint64_t clocks = (sat_now() - o.wdt_t0) * 28636 / 1000000;
+    return o.wtcnt0 + clocks / div[o.regs[0x80] & 7];
+}
+
+static void wdt_restart(OnChip& o, uint8_t count) {
+    o.wtcnt0 = count;
+    o.wdt_t0 = sat_now();
+    o.wdt_overflows = 0;
+}
+
+// WTCSR and WTCNT share a word: the high byte of a write says which one it sets.
+static void wdt_write(OnChip& o, uint32_t v) {
+    uint8_t b = (uint8_t)v;
+    if ((v >> 8 & 0xFF) == 0x5A) { wdt_restart(o, b); return; }
+    if ((v >> 8 & 0xFF) != 0xA5) return;
+    bool was = wdt_counting(o);
+    uint8_t now = (uint8_t)wdt_count(o);
+    o.regs[0x80] = (uint8_t)((b & 0x7F) | (o.regs[0x80] & b & 0x80));   // OVF only clears
+    if (was != wdt_counting(o)) wdt_restart(o, now);
+}
+
+bool onchip_deliver(SH2Context& c) {
+    OnChip& o = g_oc[c.cpu];
+    if (uint32_t period = ocra_period(o)) {
+        uint64_t n = frc_ticks(o) / period;
+        if (period != o.frc_period) {
+            o.frc_period = period;
+            o.frc_matches = n;
+        } else if (n > o.frc_matches) {
+            o.frc_matches = n;
+            o.regs[0x11] |= 0x08;           // OCFA
+            if (o.regs[0x10] & 0x08) o.frc_pending = true;   // TIER.OCIAE
+        }
+    }
+    uint32_t frt_level = o.regs[0x60] & 0x0F;   // IPRB: the FRT's priority
+    if (o.frc_pending && frt_level > c.imask) {
+        o.frc_pending = false;
+        sat_interrupt(c, o.regs[0x67] & 0x7F, frt_level);
+        return true;
+    }
+    if (wdt_counting(o)) {
+        uint64_t n = wdt_count(o) / 256;
+        if (n > o.wdt_overflows) {
+            o.wdt_overflows = n;
+            o.regs[0x80] |= 0x80;           // OVF
+            o.wdt_pending = true;
+        }
+    }
+    uint32_t level = o.regs[0xE3] >> 4;     // IPRA: the WDT's priority
+    if (!o.wdt_pending || level <= c.imask) return false;
+    o.wdt_pending = false;
+    sat_interrupt(c, o.regs[0xE4] & 0x7F, level);
+    return true;
 }
 
 void onchip_input_capture(int cpu) {
@@ -103,6 +196,7 @@ uint32_t onchip_read(SH2Context& c, uint32_t a, int size) {
         if (size == 2) return f;
         return off == 0x12 ? f >> 8 : f & 0xFF;
     }
+    if (off == 0x81 && size == 1) return (uint8_t)wdt_count(o);   // WTCNT
     uint32_t v = rd(o, off, size);
     if (off == 0x11 && size == 1) {         // FTCSR: a slave waiting here has nothing to do
         slave_idle_check(v);
@@ -122,6 +216,16 @@ void onchip_write(SH2Context& c, uint32_t a, uint32_t v, int size) {
         if (size == 2) o.frc0 = (uint16_t)v;
         else o.frc0 = off == 0x12 ? (uint16_t)((v & 0xFF) << 8 | (frc(o) & 0xFF)) : (uint16_t)((frc(o) & 0xFF00) | (v & 0xFF));
         o.frc_t0 = sat_now();
+        o.frc_matches = 0;
+        return;
+    case 0x14: case 0x15:
+        if (o.regs[0x17] & 0x10) {          // TOCR.OCRS: OCRB
+            o.ocrb = off == 0x14 ? (uint16_t)((v & 0xFF) << 8 | (o.ocrb & 0xFF)) : (uint16_t)((o.ocrb & 0xFF00) | (v & 0xFF));
+            return;
+        }
+        break;
+    case 0x80:
+        if (size == 2) wdt_write(o, v);
         return;
     }
     // DIVU at 0x100-0x11F and its mirror at 0x120-0x13F

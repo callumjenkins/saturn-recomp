@@ -43,6 +43,9 @@ struct SaturnConfig {
     int scale = 3;                  // the window: 320x240 times this
     std::string wav;                // the run's sound to this file (16-bit stereo, 44 100 Hz)
     bool interp = false;            // fields between the game's frames drawn moving (vdp1.cpp)
+    int multitap = 0;               // 6-player multitaps: 1 on port 1, 2 on both ports
+    int64_t clock = -1;             // the SMPC's clock at power-on, seconds since 1970 (no time zone); -1: the host's
+    uint32_t task_setjmp = 0, task_longjmp = 0;   // the game's own task switch (tasks.cpp), 0: none
 };
 extern SaturnConfig g_cfg;
 extern SH2Context g_master, g_slave;
@@ -56,6 +59,7 @@ void sat_note(const char* fmt, ...) __attribute__((format(printf, 1, 2)));   // 
 [[noreturn]] void sat_fatal(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
 [[noreturn]] void sat_stop(const char* why);                  // ends the run cleanly
 void sat_interrupt(SH2Context& c, uint32_t vec, uint32_t level);   // take it now (a safe point)
+bool sat_in_interrupt();            // the master is running an interrupt handler
 void slave_on();                    // SMPC SSHON: the slave boots
 void slave_off();                   // SSHOFF: held in reset
 void slave_idle_check(uint32_t ftcsr);   // the slave read its FTCSR: yield if nothing is there
@@ -67,6 +71,7 @@ void bios_boot();                   // the state the BIOS leaves, the 1st read f
 uint32_t bios_first_read();         // where it was loaded (the entry)
 bool bios_pal();                    // IP.BIN's areas: Europe alone, a PAL disc
 bool bios_call(SH2Context& c, uint32_t addr);        // a BIOS ROM address: true if handled
+uint32_t bios_rom_read(uint32_t a, int size);   // the few BIOS ROM words a program reads
 bool bios_is_dispatcher(uint32_t vec, uint32_t target);
 void bios_dispatch(SH2Context& c, uint32_t vec);     // the handler SYS_SETUINT installed
 void bios_save();                   // the backup memory to its file
@@ -118,11 +123,19 @@ uint32_t cd_read(uint32_t off, int size);
 void cd_write(uint32_t off, uint32_t v, int size);
 void cd_audio_sample(int16_t lr[2]);                 // CD-DA at 44 100 Hz, to the SCSP's EXTS
 
+// ---- the game's tasks (tasks.cpp) --------------------------------------------------------
+struct TaskUnwind { uint32_t pc; };   // a fiber's host stack unwinds to its base loop, to go on at pc
+void tasks_configure(uint32_t setjmp_addr, uint32_t longjmp_addr);
+bool tasks_pending();               // a longjmp ran and its switch has not happened yet
+void tasks_route(SH2Context& c, uint32_t expected);   // switch; returns only if resumed at expected
+void tasks_reset();                 // a program start: no tasks
+
 // ---- SH7604 on-chip (onchip.cpp) ------------------------------------------------------
 uint32_t onchip_read(SH2Context& c, uint32_t a, int size);
 void onchip_write(SH2Context& c, uint32_t a, uint32_t v, int size);
 void onchip_input_capture(int cpu);   // SINIT/MINIT: the FRT's input-capture flag
 void onchip_reset(int cpu);
+bool onchip_deliver(SH2Context& c);   // the watchdog's interval interrupt, if due and above c's mask; taken?
 
 // ---- video (video.cpp; vdp1.cpp, vdp2.cpp, host.cpp through video.h) --------------------------
 void video_init();

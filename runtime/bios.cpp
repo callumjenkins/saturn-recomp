@@ -143,8 +143,29 @@ void bios_dispatch(SH2Context& c, uint32_t vec) {
     scu_set_mask(mask);
 }
 
+// IP.BIN's own code reaches three BIOS ROM routines through pointers at
+// 0x5E4, 0x5E8 and 0x5EC. The first two draw the SEGA logo and return at
+// once here, so the logo is not drawn. The third starts the program at
+// IP.BIN's 1st read address, with its master stack, without the area check.
+static const uint32_t kRomLogo = 0x00002000;
+
+uint32_t bios_rom_read(uint32_t a, int size) {
+    if (size == 4 && (a == 0x5E4 || a == 0x5E8 || a == 0x5EC)) return kRomLogo + a;
+    return 0;
+}
+
 bool bios_call(SH2Context& c, uint32_t addr) {
     addr &= 0x1FFFFFFFu;
+    if (addr == kRomLogo + 0x5E4 || addr == kRomLogo + 0x5E8) {
+        sat_trace("BIOS ROM routine at %03X: the logo, not drawn", addr - kRomLogo);
+        c.pc = c.pr;
+        return true;
+    }
+    if (addr == kRomLogo + 0x5EC) {
+        uint32_t mstack = ld32(0x060020E8u);
+        c.r[15] = mstack ? mstack : 0x06002000u;
+        sh2_program_start(c, ld32(0x060020F0u));
+    }
     if (addr >= kDefaultHandler && addr < kDefaultHandler + 0x200) {   // an SCU default handler
         c.pc = c.pr;
         return true;

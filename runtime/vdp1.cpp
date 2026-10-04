@@ -22,8 +22,12 @@
 // transparent pixels (SPD), end codes (ECD), system and user clipping
 // (inside or outside), mesh, MSB on, and the colour calculations: replace,
 // shadow, half-luminance, half-transparency, each with Gouraud shading. The
-// framebuffer is 16 bits a pixel, 512x256 (TVMR 0); 8 bits a pixel and
-// rotation are not done.
+// framebuffer is 16 bits a pixel, 512x256 (TVMR 0), or 8 bits a pixel,
+// 1024x256 in the same memory (TVMR 1), where a pixel keeps the low byte of
+// its colour and only replace is done; rotation is not done. With FBCR.DIE
+// (double-density interlace) a draw's lines of the field FBCR.DIL names go to
+// the framebuffer, a line each in turn, and every line goes to a full-height
+// copy (1024x512, a dot a word) that VDP2 shows both fields from at once.
 //
 // Frames (FBCR): the frame changes as the VBlank ends (VBlank-OUT), as in
 // Mednafen: a game that asks for it in its VBlank-IN handler (Virtual
@@ -44,6 +48,10 @@
 uint8_t g_vdp1_vram[0x80000];
 static uint16_t g_fb[2][512 * 256];             // host order
 static uint16_t* g_target = g_fb[0];            // where commands draw
+static uint16_t g_hi[2][1024 * 512];            // each framebuffer's draw at full height, under FBCR.DIE
+static bool g_hi_on[2];                         // ... drawn so
+static uint16_t* g_hi_target;                   // the one being drawn, or null
+static int g_dil;                               // the field FBCR.DIL names for the framebuffer
 static int g_draw_fb;                           // the other one is shown
 static uint16_t g_reg[0x10];                    // TVMR FBCR PTMR EWDR EWLR EWRR ENDR - EDSR LOPR COPR MODR
 enum { TVMR, FBCR, PTMR, EWDR, EWLR, EWRR, ENDR, EDSR = 8, LOPR, COPR, MODR };
@@ -131,14 +139,35 @@ static bool texel(const Cmd& c, int u, int v, uint16_t& out, bool& end) {
     return !(is_zero && !c.spd);
 }
 
+static bool g_fb8;                              // 8 bits a pixel (TVMR 1) for this draw
+
+static void put(uint16_t& d, const Cmd& c, uint16_t pix, const Rgb* g);
+
 static void plot(const Cmd& c, int x, int y, uint16_t pix, const Rgb* g) {
-    if (x < 0 || y < 0 || x > g_sys_x || y > g_sys_y || x >= 512 || y >= 256) return;
+    if (x < 0 || y < 0 || x > g_sys_x || y > g_sys_y || x >= (g_fb8 ? 1024 : 512) || y >= (g_hi_target ? 512 : 256)) return;
     if (c.clip) {
         bool in = x >= g_ux0 && x <= g_ux1 && y >= g_uy0 && y <= g_uy1;
         if (in == c.outside) return;
     }
     if (c.mesh && ((x ^ y) & 1)) return;
-    uint16_t& d = g_target[y * 512 + x];
+    if (g_hi_target) {
+        uint16_t& h = g_hi_target[y * 1024 + x];
+        if (g_fb8) { if (!c.mon) h = pix & 0xFF; }
+        else put(h, c, pix, g);
+        if ((y & 1) != g_dil) return;
+        y >>= 1;
+    }
+    if (g_fb8) {
+        if (c.mon) return;
+        uint16_t& w = g_target[y * 512 + x / 2];
+        w = x & 1 ? (uint16_t)((w & 0xFF00) | (pix & 0xFF)) : (uint16_t)((w & 0x00FF) | (pix & 0xFF) << 8);
+        return;
+    }
+    put(g_target[y * 512 + x], c, pix, g);
+}
+
+// A 16-bit pixel over d: MSB on, Gouraud shading, the colour calculation
+static void put(uint16_t& d, const Cmd& c, uint16_t pix, const Rgb* g) {
     if (c.mon) { d |= 0x8000; return; }
     if (g && (pix & 0x8000)) {
         int r = std::clamp((pix & 0x1F) + g->r - 16, 0, 31);
@@ -230,7 +259,7 @@ static int step_to(int a, int b, int i, int n) {   // a + (b - a) * i / n, round
 
 // the area a pixel can land in: system clipping, and the user clipping inside it
 static bool outside_clip(const Cmd& c, int x0, int y0, int x1, int y1) {
-    if (x1 < 0 || y1 < 0 || x0 > std::min(g_sys_x, 511) || y0 > std::min(g_sys_y, 255)) return true;
+    if (x1 < 0 || y1 < 0 || x0 > std::min(g_sys_x, g_fb8 ? 1023 : 511) || y0 > std::min(g_sys_y, g_hi_target ? 511 : 255)) return true;
     return c.clip && !c.outside && (x1 < g_ux0 || y1 < g_uy0 || x0 > g_ux1 || y0 > g_uy1);
 }
 
@@ -373,12 +402,30 @@ static std::vector<uint64_t> g_next_keys;       // vdp1_next_draw_keys: by comma
 
 void vdp1_next_draw_keys(std::vector<uint64_t> keys) { g_next_keys = std::move(keys); }
 
-const uint16_t* vdp1_display() { return g_show_ifb ? g_ifb : g_fb[g_draw_fb ^ 1]; }
+uint16_t vdp1_dot(int x, int y, bool dd) {
+    if (g_show_ifb) return x < 512 && y < 256 ? g_ifb[y * 512 + x] : 0;
+    int shown = g_draw_fb ^ 1;
+    bool fb8 = g_reg[TVMR] & 1;
+    if (x >= (fb8 ? 1024 : 512)) return 0;
+    if (dd) {
+        if (g_hi_on[shown]) return y < 512 ? g_hi[shown][y * 1024 + x] : 0;
+        y >>= 1;
+    }
+    if (y >= 256) return 0;
+    const uint16_t* fb = g_fb[shown];
+    if (!fb8) return fb[y * 512 + x];
+    uint16_t w = fb[y * 512 + x / 2];
+    return x & 1 ? w & 0xFF : w >> 8;
+}
 
 static void draw() {
     g_reg[EDSR] = (uint16_t)(g_reg[EDSR] >> 1 & 1);   // BEF <- CEF, CEF <- 0
-    if (g_reg[TVMR] & 3) sat_fatal("VDP1: TVMR %04X (8 bpp or rotation) is not done", g_reg[TVMR]);
+    if (g_reg[TVMR] & 2) sat_fatal("VDP1: TVMR %04X (rotation) is not done", g_reg[TVMR]);
+    g_fb8 = g_reg[TVMR] & 1;
     g_target = g_fb[g_draw_fb];
+    g_hi_on[g_draw_fb] = g_reg[FBCR] & 8;
+    g_hi_target = g_hi_on[g_draw_fb] ? g_hi[g_draw_fb] : nullptr;
+    g_dil = g_reg[FBCR] >> 2 & 1;
     RecDraw* rec = nullptr;
     if (g_cfg.interp) {
         g_rec_cur.draws.push_back({g_sys_x, g_sys_y, g_ux0, g_uy0, g_ux1, g_uy1, g_local_x, g_local_y, {}});
@@ -609,6 +656,7 @@ static void draw_between(float alpha) {
     }
     g_sys_x = sx; g_sys_y = sy; g_ux0 = u0; g_uy0 = v0; g_ux1 = u1; g_uy1 = v1; g_local_x = lx; g_local_y = ly;
     g_target = g_fb[g_draw_fb];
+    g_hi_target = g_hi_on[g_draw_fb] ? g_hi[g_draw_fb] : nullptr;
     g_tex = g_vdp1_vram;
 }
 
@@ -658,6 +706,12 @@ static void erase(int which) {
     int x1 = (g_reg[EWRR] >> 9 & 0x7F) * 8, y1 = g_reg[EWRR] & 0x1FF;
     for (int y = y0; y <= y1 && y < 256; ++y)
         for (int x = x0; x < x1 && x < 512; ++x) g_fb[which][y * 512 + x] = g_reg[EWDR];
+    if (!g_hi_on[which]) return;
+    bool fb8 = g_reg[TVMR] & 1;                  // 8 bits a pixel: EWDR is two dots, X counts 16 of them
+    int d0 = fb8 ? x0 * 2 : x0, d1 = fb8 ? x1 * 2 : x1;
+    for (int y = y0 * 2; y <= y1 * 2 + 1 && y < 512; ++y)
+        for (int x = d0; x < d1 && x < 1024; ++x)
+            g_hi[which][y * 1024 + x] = fb8 ? (x & 1 ? g_reg[EWDR] & 0xFF : g_reg[EWDR] >> 8) : g_reg[EWDR];
 }
 
 void vdp1_vblank_out() {

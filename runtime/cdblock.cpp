@@ -466,13 +466,17 @@ static void command() {
         answer(status_hi(), 0, 0, 0); g_hirq |= CMOK | EHST;
         break;
     case 0x67: answer(status_hi(), 0, 0, 0); g_hirq |= CMOK; break;   // Get Copy Error: none
-    case 0x70: case 0x71: {                     // Change / Read Directory
+    case 0x70: {                                // Change Directory
         uint32_t fid = (uint32_t)(cr3 & 0xFF) << 16 | cr4;
         if (fid == 0xFFFFFF || g_dir.empty()) root_dir();
         else if (fid < g_dir.size()) load_dir(g_dir[fid].fad, g_dir[fid].size);
         report(); g_hirq |= CMOK | EFLS;
         break;
     }
+    case 0x71:                                  // Read Directory: the current one, from a file ID; all of it is kept
+        if (g_dir.empty()) root_dir();
+        report(); g_hirq |= CMOK | EFLS;
+        break;
     case 0x72:                                  // Get File System Scope
         if (g_dir.empty()) root_dir();
         answer(status_hi(), (uint16_t)(g_dir.size() - 2), 0x0100, 0x0002);

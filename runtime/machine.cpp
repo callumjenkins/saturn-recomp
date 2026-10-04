@@ -305,9 +305,15 @@ void sh2_poll(SH2Context& c) {
     g_vtime += kBudget * kNsPerSafePoint;
     master_poll_devices();
     scu_deliver(c);
+    onchip_deliver(c);
 }
 
+static int g_int_depth;
+
+bool sat_in_interrupt() { return g_int_depth > 0; }
+
 void sat_interrupt(SH2Context& c, uint32_t vec, uint32_t level) {
+    struct Depth { Depth() { ++g_int_depth; } ~Depth() { --g_int_depth; } } depth;
     ++g_ints[vec & 0x7F];
     SH2Context saved = c;
     uint32_t target = ld32(c.vbr + vec * 4);
@@ -331,7 +337,7 @@ void sh2_sleep(SH2Context& c, uint32_t pc) {
     for (int i = 0; i < 100000; ++i) {
         g_vtime += kBudget * kNsPerSafePoint;
         master_poll_devices();
-        if (scu_deliver(c)) return;
+        if (scu_deliver(c) | onchip_deliver(c)) return;
     }
     sat_fatal("sleep at %08X: nothing woke it", pc);
 }
@@ -342,11 +348,22 @@ void sh2_trapa(SH2Context& c, uint32_t imm, uint32_t pc) {
 }
 
 void sh2_bad_return(SH2Context& c, uint32_t expected) {
+    if (tasks_pending()) { tasks_route(c, expected); return; }
     sat_fatal("returned to %08X, expected %08X", c.pc, expected);
 }
 
 void sh2_call_unknown(SH2Context& c, uint32_t addr) {
     if (bios_call(c, addr)) return;
+    // Code called inside an image no program start activated, such as IP.BIN's
+    bool exact;
+    if (const SH2Module* m = sh2_identify_containing(addr, &exact)) {
+        sh2_activate(m);
+        if (SH2Func f = sh2_lookup(addr)) {
+            sat_note("%s activated by a call to %08X%s", m->name, addr, exact ? "" : " (its data differs from the image's)");
+            f(c);
+            return;
+        }
+    }
     mmio_log_call(addr, c.pr);
     sat_fatal("call to %08X, not an entry of an active module (from pr %08X)", addr, c.pr);
 }
@@ -386,13 +403,18 @@ int saturn_main(const SaturnConfig& cfg) {
     if (!m) { std::fprintf(stderr, "no module matches the 1st read file at %08X\n", entry); return 2; }
     sh2_activate(m);
     sat_note("boot: %s at %08X", m->name, entry);
+    if (cfg.task_setjmp) tasks_configure(cfg.task_setjmp, cfg.task_longjmp);
     for (;;) {
         try {
             SH2Func f = sh2_lookup(entry);
             if (!f) sat_fatal("no function at %08X", entry);
             f(g_master);
-            sat_fatal("the program at %08X returned", entry);
+            if (!tasks_pending()) sat_fatal("the program at %08X returned", entry);
+            tasks_route(g_master, ~0u);
+        } catch (TaskUnwind& u) {
+            entry = u.pc;
         } catch (ProgramStart& s) {
+            tasks_reset();
             entry = s.addr;
             if (cfg.stop_starts && g_starts >= cfg.stop_starts) { g_stop_why = "program-start limit"; break; }
         } catch (RunStop&) {

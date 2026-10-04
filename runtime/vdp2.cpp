@@ -8,13 +8,19 @@
 // the sprite layer from VDP1's framebuffer, every sprite type, palette and
 // RGB mixed (SPCLMD), with its priorities and colour-calculation ratios;
 // priorities with the chip's order for ties (sprite, NBG0, NBG1, NBG2,
-// NBG3); colour calculation of the top two layers (ratio of the top one, or
-// add); the colour offsets A and B; the back screen (one colour or one a
-// line); the display bit. What is not: RBG0 and RBG1 (rotation), line and
-// vertical-cell scroll, mosaic, windows, the line colour screen, special
-// priority and special colour calculation, shadows on VDP2's layers,
-// gradation, extended colour calculation, high and exclusive resolutions.
-// A register that asks for one of them is noted once.
+// NBG3); special priority and special colour calculation by screen or by
+// character, and colour calculation by the colour's MSB; colour calculation
+// of the top two layers (ratio of the top one, or add); windows 0 and 1, as
+// rectangles or line windows, on the scroll screens, the sprite layer and
+// colour calculation; the colour offsets A and B; the back screen (one
+// colour or one a line); the display bit; the high resolutions (640 and 704
+// dots), with double-density interlace composed as one picture of both
+// fields' lines (448, 480 or 512), the scroll screens a dot row a line.
+// What is not: RBG0 and RBG1 (rotation), line and vertical-cell scroll,
+// mosaic, the sprite window, the line colour screen, special priority and
+// colour calculation by dot (the special function codes), shadows on VDP2's
+// layers, gradation, extended colour calculation, the exclusive
+// resolutions. A register that asks for one of them is noted once.
 #include "saturn.h"
 #include "video.h"
 #include <algorithm>
@@ -62,6 +68,8 @@ struct Pix {
     bool cc;                                    // colour calculation on
     bool offset;                                // colour offset on
     bool offset_b;                              // ... offset B rather than A
+    bool spr, scc;                              // the character's special priority and colour calculation bits
+    bool msb;                                   // the colour data's MSB
 };
 
 enum { L_SPRITE, L_NBG0, L_NBG1, L_NBG2, L_NBG3, L_COUNT };
@@ -77,6 +85,7 @@ struct Nbg {
     int bm_w, bm_h;                             // bitmap size
     uint32_t bm_addr;
     uint16_t bm_pal;
+    bool bm_spr, bm_scc;
     uint32_t caos;                              // colour RAM offset, in entries
     int32_t sx, sy, dx, dy;                     // scroll and increments, 8 fraction bits
     uint8_t prio, ratio;
@@ -123,6 +132,8 @@ static void setup_nbg(int n, Nbg& s) {
         s.bm_addr = mpof * 0x20000;
         uint16_t bmpn = (uint16_t)(reg(0x2C) >> sh);
         s.bm_pal = (uint16_t)((bmpn & 7) << 4);
+        s.bm_spr = bmpn >> 5 & 1;
+        s.bm_scc = bmpn >> 4 & 1;
     }
     int caos_sh = n * 4;
     s.caos = (uint32_t)(reg(0xE4) >> caos_sh & 7) << 8;
@@ -159,18 +170,20 @@ static bool dot(const Nbg& s, uint32_t base, int x, int y, int width, uint32_t p
         uint16_t w = vw(base + i * 2);
         if (!(w & 0x8000) && !s.opaque) return false;
         p.rgb = rgb555(w);
+        p.msb = w >> 15;
         return true;
     }
     default: {
         uint32_t w = (uint32_t)vw(base + i * 4) << 16 | vw(base + i * 4 + 2);
         if (!(w & 0x80000000u) && !s.opaque) return false;
         p.rgb = (w & 0xFF) << 16 | (w & 0xFF00) | (w >> 16 & 0xFF);
+        p.msb = w >> 31;
         return true;
     }
     }
     if (v == 0 && !s.opaque) return false;
     uint32_t index = s.colors == 0 ? pal * 16 + v : s.colors == 1 ? (pal & 0x70) * 16 + v : v;
-    p.rgb = cram(index + s.caos, nullptr);
+    p.rgb = cram(index + s.caos, &p.msb);
     return true;
 }
 
@@ -179,6 +192,8 @@ static bool nbg_pixel(const Nbg& s, int x, int y, Pix& p) {
     if (s.bitmap) {
         sx &= (uint32_t)s.bm_w - 1;
         sy &= (uint32_t)s.bm_h - 1;
+        p.spr = s.bm_spr;
+        p.scc = s.bm_scc;
         return dot(s, s.bm_addr, (int)sx, (int)sy, s.bm_w, s.bm_pal, p);
     }
     uint32_t pw = (uint32_t)s.plane_w * 512, ph = (uint32_t)s.plane_h * 512;
@@ -195,6 +210,8 @@ static bool nbg_pixel(const Nbg& s, int x, int y, Pix& p) {
     bool hf, vf;
     if (s.word1) {
         uint16_t w = vw(pnd_addr);
+        p.spr = s.supp >> 9 & 1;
+        p.scc = s.supp >> 8 & 1;
         pal = s.colors == 0 ? (uint32_t)(w >> 12 & 0xF) | (s.supp >> 1 & 0x70) : (uint32_t)(w >> 8 & 0x70);
         if (!s.cnsm) {
             hf = w & 0x400; vf = w & 0x800;
@@ -208,6 +225,8 @@ static bool nbg_pixel(const Nbg& s, int x, int y, Pix& p) {
     } else {
         uint16_t w0 = vw(pnd_addr), w1 = vw(pnd_addr + 2);
         hf = w0 & 0x4000; vf = w0 & 0x8000;
+        p.spr = w0 >> 13 & 1;
+        p.scc = w0 >> 12 & 1;
         pal = w0 & 0x7F;
         chr = w1 & 0x7FFF;
     }
@@ -267,20 +286,60 @@ static bool sprite_pixel(uint16_t d, Pix& p) {
     return p.prio != 0;
 }
 
+// ---- windows ----------------------------------------------------------------------------------
+// Window 0 or 1 on one line: the line in its Y range, and its X span there.
+struct Win { bool on_line; int xs, xe; };
+
+static Win window_line(int w, int y, bool dd) {
+    uint32_t b = 0xC0 + w * 8;
+    int xs = reg(b) & 0x3FF, xe = reg(b + 4) & 0x3FF;
+    uint16_t lwta = reg(0xD8 + w * 4);
+    if (lwta & 0x8000) {                         // a line window: a span a line from the table
+        uint32_t a = (((uint32_t)(lwta & 7) << 16 | reg(0xDA + w * 4)) & 0x7FFFE) * 2 + (uint32_t)y * 4;
+        xs = vw(a) & 0x3FF;
+        xe = vw(a + 2) & 0x3FF;
+    }
+    if (!(reg(0x00) & 2)) { xs >>= 1; xe >>= 1; } // X counts half dots below the high resolutions
+    int ys = reg(b + 2) & 0x3FF, ye = reg(b + 6) & 0x3FF;
+    if (!dd) { ys &= 0x1FF; ye &= 0x1FF; }
+    return {y >= ys && y <= ye, xs, xe};
+}
+
+// Whether a layer's window control byte (WCTLA-D) makes dot x transparent: each enabled window's
+// area (bit 0 or 2: inside when clear, outside when set), joined by OR or by AND (bit 7).
+static bool windowed(uint8_t ctl, const Win w[2], int x) {
+    bool any = false, all = true, used = false;
+    for (int i = 0; i < 2; ++i) {
+        if (!(ctl >> (i * 2 + 1) & 1)) continue;
+        bool in = w[i].on_line && x >= w[i].xs && x <= w[i].xe;
+        bool area = (ctl >> (i * 2) & 1) ? !in : in;
+        any |= area;
+        all &= area;
+        used = true;
+    }
+    return used && (ctl & 0x80 ? all : any);
+}
+
 // ---- composing ------------------------------------------------------------------------------
 static void note_unsupported() {
-    static bool noted[8];
-    auto once = [](int i, bool cond, const char* what, uint16_t v) {
-        if (cond && !noted[i]) { noted[i] = true; sat_note("VDP2: %s (%04X) is not done", what, v); }
+    static bool noted[9];
+    bool fresh = false;
+    auto once = [&](int i, bool cond, const char* what, uint16_t v) {
+        if (cond && !noted[i]) { noted[i] = fresh = true; sat_note("VDP2: %s (%04X) is not done", what, v); }
     };
     once(0, reg(0x20) & 0x30, "RBG0/RBG1", reg(0x20));
     once(1, reg(0x9A) & 0x3F3F, "line or vertical cell scroll (SCRCTL)", reg(0x9A));
     once(2, reg(0x22) & 0xF, "mosaic (MZCTL)", reg(0x22));
-    once(3, (reg(0xC0) | reg(0xC2) | reg(0xC4) | reg(0xC6)) & 0x2A2A, "windows (WCTL)", reg(0xC0));
+    once(3, (reg(0xD0) | reg(0xD2) | reg(0xD4) | reg(0xD6)) & 0x2020, "the sprite window (WCTL)", reg(0xD0));
     once(4, reg(0xE2) & 0x13F, "shadows on VDP2's layers (SDCTL)", reg(0xE2));
     once(5, reg(0xEC) & 0x8600 && reg(0xEC) & 0x5F, "extended colour calculation or gradation (CCCTL)", reg(0xEC));
-    once(6, (reg(0x00) & 7) >= 2, "a high or exclusive resolution (TVMD)", reg(0x00));
-    once(7, (reg(0xE8) & 0x0F) || reg(0xEA) || reg(0xEE), "special priority, line colour or special colour calculation", reg(0xE8));
+    once(6, (reg(0x00) & 7) >= 4, "an exclusive resolution (TVMD)", reg(0x00));
+    auto mode = [](uint16_t r, int m) {
+        for (int n = 0; n < 4; ++n) if ((r >> (n * 2) & 3) == m) return true;
+        return false;
+    };
+    once(7, reg(0xE8) & 0x3F, "the line colour screen (LNCLEN)", reg(0xE8));
+    once(8, mode(reg(0xEA), 2) || mode(reg(0xEE), 2), "special priority or colour calculation by dot (SFPRMD, SFCCMD)", reg(0xEA));
 }
 
 static uint32_t apply_offset(uint32_t rgb, bool b) {
@@ -296,22 +355,30 @@ static uint32_t apply_offset(uint32_t rgb, bool b) {
 
 void vdp2_compose(Frame& f) {
     uint16_t tvmd = reg(0x00);
-    f.w = (tvmd & 7) == 1 ? 352 : 320;
-    f.h = vdp2_lines();
+    static const int kWidths[4] = {320, 352, 640, 704};
+    int hreso = tvmd & 7;
+    f.w = kWidths[hreso < 4 ? hreso : hreso & 1];
+    bool dd = (tvmd >> 6 & 3) == 3;              // double-density interlace
+    f.h = vdp2_lines() * (dd ? 2 : 1);
     f.px.assign((size_t)f.w * f.h, 0);
     if (!(tvmd & 0x8000)) return;                // display off
     note_unsupported();
     Nbg nbg[4];
     for (int n = 0; n < 4; ++n) setup_nbg(n, nbg[n]);
-    const uint16_t* fb = vdp1_display();
     uint32_t bk = ((uint32_t)(reg(0xAC) & 7) << 16 | reg(0xAE)) * 2;
     bool bk_lines = reg(0xAC) & 0x8000;
     bool add = reg(0xEC) >> 8 & 1;
     Pix back{};
     back.offset = reg(0x110) >> 5 & 1;
     back.offset_b = reg(0x112) >> 5 & 1;
+    uint16_t sfprmd = reg(0xEA), sfccmd = reg(0xEE);
+    uint8_t wctl[L_COUNT] = {(uint8_t)(reg(0xD4) >> 8), (uint8_t)reg(0xD0), (uint8_t)(reg(0xD0) >> 8),
+                             (uint8_t)reg(0xD2), (uint8_t)(reg(0xD2) >> 8)};
+    uint8_t cc_wctl = (uint8_t)(reg(0xD6) >> 8);
     for (int y = 0; y < f.h; ++y) {
-        back.rgb = rgb555(vw(bk + (bk_lines ? (uint32_t)y * 2 : 0)));
+        int line = dd ? y >> 1 : y;
+        Win win[2] = {window_line(0, y, dd), window_line(1, y, dd)};
+        back.rgb = rgb555(vw(bk + (bk_lines ? (uint32_t)line * 2 : 0)));
         for (int x = 0; x < f.w; ++x) {
             Pix l[L_COUNT];
             int top = -1, second = -1;
@@ -322,20 +389,29 @@ void vdp2_compose(Frame& f) {
             };
             // in the order that wins ties: sprite, then NBG0..NBG3
             l[L_SPRITE] = {};
-            if (sprite_pixel(fb[y * 512 + x], l[L_SPRITE])) consider(L_SPRITE);
+            if (!windowed(wctl[L_SPRITE], win, x) && sprite_pixel(vdp1_dot(x, y, dd), l[L_SPRITE]))
+                consider(L_SPRITE);
             for (int n = 0; n < 4; ++n) {
                 Pix& p = l[L_NBG0 + n];
                 p = {};
                 const Nbg& s = nbg[n];
-                if (!s.on || !s.prio) continue;
+                if (!s.on || !s.prio || windowed(wctl[L_NBG0 + n], win, x)) continue;
                 if (!nbg_pixel(s, x, y, p)) continue;
-                p.prio = s.prio; p.ratio = s.ratio; p.cc = s.cc; p.offset = s.offset; p.offset_b = s.offset_b;
+                p.prio = s.prio;
+                if ((sfprmd >> (n * 2) & 3) == 1) p.prio = (uint8_t)((s.prio & 6) | p.spr);
+                if (!p.prio) continue;
+                switch (sfccmd >> (n * 2) & 3) {
+                case 1: p.cc = s.cc && p.scc; break;
+                case 3: p.cc = s.cc && p.msb; break;
+                default: p.cc = s.cc; break;
+                }
+                p.ratio = s.ratio; p.offset = s.offset; p.offset_b = s.offset_b;
                 consider(L_NBG0 + n);
             }
             const Pix& t = top >= 0 ? l[top] : back;
             const Pix& u = second >= 0 ? l[second] : back;
             uint32_t rgb = t.rgb;
-            if (top >= 0 && t.cc) {
+            if (top >= 0 && t.cc && !windowed(cc_wctl, win, x)) {
                 uint32_t out = 0;
                 for (int sh = 16; sh >= 0; sh -= 8) {
                     int a = (int)(t.rgb >> sh & 0xFF), b = (int)(u.rgb >> sh & 0xFF);

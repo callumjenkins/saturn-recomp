@@ -104,6 +104,30 @@ const SH2Module* sh2_identify(uint32_t base) {
     return nullptr;
 }
 
+static bool has_entry(const SH2Module* m, uint32_t addr) {
+    uint32_t lo = 0, hi = m->nfuncs;
+    while (lo < hi) {
+        uint32_t mid = (lo + hi) / 2;
+        if (m->funcs[mid].addr < addr) lo = mid + 1; else hi = mid;
+    }
+    return lo < m->nfuncs && m->funcs[lo].addr == addr;
+}
+
+// An image whose bytes match the module, or failing that the one module with an
+// entry at addr: a library loaded once rewrites its own tables and variables.
+const SH2Module* sh2_identify_containing(uint32_t addr, bool* exact) {
+    const SH2Module* by_entry = nullptr;
+    int entries = 0;
+    for (int i = 0; i < g_sh2_nmodules; ++i) {
+        const SH2Module* m = g_sh2_modules[i];
+        if (addr - m->base >= m->size) continue;
+        if (sh2_identify(m->base) == m) { *exact = true; return m; }
+        if (has_entry(m, addr)) { by_entry = m; ++entries; }
+    }
+    *exact = false;
+    return entries == 1 ? by_entry : nullptr;
+}
+
 static const int kSlots = 8;
 static const SH2Module* g_active[kSlots];
 

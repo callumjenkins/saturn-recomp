@@ -13,6 +13,7 @@
 //   cdblock.cpp   the CD block at its registers, over cdrom.cpp's disc
 //   onchip.cpp    the SH7604's own registers, per CPU (DIVU, FRT, DMAC...)
 //   tasks.cpp     a game's own tasks, switched by its setjmp and longjmp
+//   agent.cpp     another program playing the run through a socket (--agent)
 //   video/
 //   video.cpp     the raster timing, the video chips on the bus
 //   vdp1.cpp      VDP1: the command table drawn in software, the framebuffers
@@ -52,6 +53,7 @@ struct SaturnConfig {
     int multitap = 0;               // 6-player multitaps: 1 on port 1, 2 on both ports
     int64_t clock = -1;             // the SMPC's clock at power-on, seconds since 1970 (no time zone); -1: the host's
     uint32_t task_setjmp = 0, task_longjmp = 0;   // the game's own task switch (tasks.cpp), 0: none
+    int agent_fd = -1;              // a socket another program plays the run through (agent.cpp)
 };
 extern SaturnConfig g_cfg;
 extern SH2Context g_master, g_slave;
@@ -112,7 +114,11 @@ uint32_t smpc_read(uint32_t off);
 void smpc_write(uint32_t off, uint32_t v);
 void smpc_tick();
 void smpc_input_script(const std::string& spec);   // "VBLANK:BUTTON+BUTTON,..."
+bool smpc_press(const std::string& spec, std::string& error);   // "[N.]BUTTON+BUTTON" from this VBlank on
 void smpc_set_area(char symbol);                   // the disc's first area symbol (J T U B K A E L)
+
+// ---- another program playing the run (agent.cpp) ----------------------------------------
+void agent_poll();                   // pause for the agent's commands, if a step has ended
 
 // ---- CD block (cdblock.cpp, cdrom.cpp) ------------------------------------------------
 bool cdrom_open(const std::string& cue);

@@ -5,7 +5,7 @@
 //            [--vblanks N] [--starts N] [--trace] [--realtime] [--input VBLANK:BUTTONS,...|@FILE]
 //            [--record-input FILE] [--shot N,...] [--dump N,...] [--peek ADDR[:WORDS],...] [--watch LO:HI]
 //            [--watch-vblanks FROM:TO] [--wav FILE] [--interp] [--hook ADDR:rN=VALUE ...]
-//            [--tasks SETJMP:LONGJMP] [--multitap N] [--clock YYYY-MM-DDTHH:MM:SS]
+//            [--tasks SETJMP:LONGJMP] [--multitap N] [--clock YYYY-MM-DDTHH:MM:SS] [--agent FD]
 //
 // --vblanks and --starts end the run after that many VBlanks or program
 // starts; the log of the hardware touched goes to DIR/hw-log.txt. --shot
@@ -24,6 +24,8 @@
 // multitaps on port 1, or (2) on both ports (smpc.cpp); --input then takes
 // "N." before a pad's buttons. --clock sets the SMPC's clock at power-on,
 // which then runs with the run's time; without it the clock is the host's.
+// --agent hands the run to another program through the socket at FD
+// (agent.cpp): it steps VBlanks, presses the pads, reads memory and frames.
 #include "saturn.h"
 #include <cstdio>
 #include <cstdlib>
@@ -74,6 +76,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--wav") && more) cfg.wav = argv[++i];
         else if (!std::strcmp(a, "--interp")) cfg.interp = true;
         else if (!std::strcmp(a, "--multitap") && more) cfg.multitap = std::atoi(argv[++i]);
+        else if (!std::strcmp(a, "--agent") && more) cfg.agent_fd = std::atoi(argv[++i]);
         else if (!std::strcmp(a, "--clock") && more) {
             cfg.clock = clock_seconds(argv[++i]);
             if (cfg.clock < 0) { std::fprintf(stderr, "--clock: YYYY-MM-DDTHH:MM:SS\n"); return 2; }
@@ -97,7 +100,7 @@ int main(int argc, char** argv) {
                                  "             [--vblanks N] [--starts N] [--trace] [--realtime] [--input VBLANK:BUTTONS,...|@FILE]\n"
                                  "             [--record-input FILE] [--shot N,...] [--dump N,...] [--peek ADDR[:WORDS],...] [--watch LO:HI]\n"
                                  "             [--wav FILE] [--hook ADDR:rN=VALUE ...] [--tasks SETJMP:LONGJMP] [--multitap N]\n"
-                                 "             [--clock YYYY-MM-DDTHH:MM:SS]\n");
+                                 "             [--clock YYYY-MM-DDTHH:MM:SS] [--agent FD]\n");
             return 2;
         }
     }

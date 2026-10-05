@@ -52,8 +52,15 @@ static const struct { const char* name; uint16_t bit; } kButtons[] = {
     {"A", 0x0400}, {"C", 0x0200}, {"B", 0x0100}, {"R", 0x0080}, {"X", 0x0040}, {"Y", 0x0020},
     {"Z", 0x0010}, {"L", 0x0008}};
 
-static uint16_t buttons(const std::string& list) {
-    uint16_t pressed = 0;
+// "[N.]BUTTON+BUTTON" as a step at `vblank`; false, with what is wrong in `error`, if it does not parse.
+static bool parse_press(uint64_t vblank, std::string list, ScriptStep& step, std::string& error) {
+    step = {vblank, 0, 0};
+    size_t dot = list.find('.');
+    if (dot != std::string::npos) {
+        step.pad = std::atoi(list.substr(0, dot).c_str()) - 1;
+        if (step.pad < 0 || step.pad >= kPads) { error = "no pad " + list.substr(0, dot); return false; }
+        list = list.substr(dot + 1);
+    }
     size_t i = 0;
     while (i < list.size()) {
         size_t j = list.find('+', i);
@@ -61,10 +68,10 @@ static uint16_t buttons(const std::string& list) {
         i = j == std::string::npos ? list.size() : j + 1;
         bool known = false;
         for (auto& k : kButtons)
-            if (b == k.name) { pressed |= k.bit; known = true; }
-        if (!known && !b.empty()) sat_fatal("--input: no button %s", b.c_str());
+            if (b == k.name) { step.pressed |= k.bit; known = true; }
+        if (!known && !b.empty()) { error = "no button " + b; return false; }
     }
-    return pressed;
+    return true;
 }
 
 void smpc_input_script(const std::string& given) {
@@ -84,18 +91,24 @@ void smpc_input_script(const std::string& given) {
         i = j == std::string::npos ? spec.size() : j + 1;
         size_t colon = item.find(':');
         if (colon == std::string::npos) sat_fatal("--input: %s is not VBLANK:BUTTONS", item.c_str());
-        std::string list = item.substr(colon + 1);
-        int pad = 0;
-        size_t dot = list.find('.');
-        if (dot != std::string::npos) {
-            pad = std::atoi(list.substr(0, dot).c_str()) - 1;
-            if (pad < 0 || pad >= kPads) sat_fatal("--input: no pad %s", list.substr(0, dot).c_str());
-            list = list.substr(dot + 1);
-        }
-        g_script.push_back({std::stoull(item.substr(0, colon)), pad, buttons(list)});
+        ScriptStep step;
+        std::string error;
+        if (!parse_press(std::stoull(item.substr(0, colon)), item.substr(colon + 1), step, error))
+            sat_fatal("--input: %s", error.c_str());
+        g_script.push_back(step);
     }
     std::stable_sort(g_script.begin(), g_script.end(),
                      [](const ScriptStep& x, const ScriptStep& y) { return x.vblank < y.vblank; });
+}
+
+bool smpc_press(const std::string& spec, std::string& error) {
+    ScriptStep step;
+    if (!parse_press(sat_vblanks(), spec, step, error)) return false;
+    // after the steps already due, so that it acts as a script's step at this VBlank would
+    auto at = std::upper_bound(g_script.begin() + (std::ptrdiff_t)g_script_pos, g_script.end(), step.vblank,
+                               [](uint64_t v, const ScriptStep& x) { return v < x.vblank; });
+    g_script.insert(at, step);
+    return true;
 }
 
 static uint8_t bcd(int v) { return (uint8_t)((v / 10) << 4 | (v % 10)); }

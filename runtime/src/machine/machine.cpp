@@ -288,6 +288,7 @@ void slave_kick() {
 void master_poll_devices() {
     uint64_t now = sat_now();
     video_tick(now);
+    agent_poll();
     cd_tick();
     smpc_tick();
     sound_tick();

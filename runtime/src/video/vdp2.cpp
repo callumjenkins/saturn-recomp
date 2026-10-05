@@ -12,7 +12,8 @@
 // character, and colour calculation by the colour's MSB; colour calculation
 // of the top two layers (the top one's ratio or the second's, or add), with
 // the line colour screen (one colour, or one a line) as the second image
-// under a top screen that LNCLEN names; windows 0 and 1, as
+// under a top screen that LNCLEN names, or gradation (the screen BOKN names,
+// blurred along the line, as the second image); windows 0 and 1, as
 // rectangles or line windows, on the scroll screens, the sprite layer and
 // colour calculation; the colour offsets A and B; the back screen (one
 // colour or one a line); the display bit; the high resolutions (640 and 704
@@ -22,12 +23,13 @@
 // screen and the sprite itself.
 // What is not: RBG0 and RBG1 (rotation), line and vertical-cell scroll,
 // mosaic, the sprite window, special priority and colour calculation by dot
-// (the special function codes), gradation, extended colour calculation, the
-// exclusive resolutions. A register that asks for one of them is noted once.
+// (the special function codes), gradation of RBG0, extended colour
+// calculation, the exclusive resolutions. A register that asks for one of them is noted once.
 #include "saturn.h"
 #include "video.h"
 #include <algorithm>
 #include <cstring>
+#include <vector>
 
 uint8_t g_vdp2_vram[0x80000], g_vdp2_cram[0x1000], g_vdp2_regs[0x200];
 
@@ -338,7 +340,7 @@ static bool windowed(uint8_t ctl, const Win w[2], int x) {
 
 // ---- composing ------------------------------------------------------------------------------
 static void note_unsupported() {
-    static bool noted[8];
+    static bool noted[9];
     bool fresh = false;
     auto once = [&](int i, bool cond, const char* what, uint16_t v) {
         if (cond && !noted[i]) { noted[i] = fresh = true; sat_note("VDP2: %s (%04X) is not done", what, v); }
@@ -347,7 +349,8 @@ static void note_unsupported() {
     once(1, reg(0x9A) & 0x3F3F, "line or vertical cell scroll (SCRCTL)", reg(0x9A));
     once(2, reg(0x22) & 0xF, "mosaic (MZCTL)", reg(0x22));
     once(3, (reg(0xD0) | reg(0xD2) | reg(0xD4) | reg(0xD6)) & 0x2020, "the sprite window (WCTL)", reg(0xD0));
-    once(4, reg(0xEC) & 0x8600 && reg(0xEC) & 0x5F, "extended colour calculation or gradation (CCCTL)", reg(0xEC));
+    once(4, (reg(0xEC) & 0x8400) == 0x0400 && reg(0xEC) & 0x5F, "extended colour calculation (CCCTL)", reg(0xEC));
+    once(8, reg(0xEC) & 0x8000 && (reg(0xEC) >> 12 & 7) == 1, "gradation of RBG0 (CCCTL)", reg(0xEC));
     once(5, (reg(0x00) & 7) >= 4, "an exclusive resolution (TVMD)", reg(0x00));
     auto mode = [](uint16_t r, int m) {
         for (int n = 0; n < 4; ++n) if ((r >> (n * 2) & 3) == m) return true;
@@ -399,12 +402,32 @@ void vdp2_compose(Frame& f) {
                              (uint8_t)reg(0xD2), (uint8_t)(reg(0xD2) >> 8)};
     uint8_t cc_wctl = (uint8_t)(reg(0xD6) >> 8);
     uint16_t sdctl = reg(0xE2);
+    // gradation: the screen BOKN names, blurred along the line, as the second image wherever it is the
+    // top or second image of a colour calculation
+    static const int kGradLayer[8] = {L_SPRITE, -1, L_NBG0, -1, L_NBG1, L_NBG2, L_NBG3, -1};
+    int grad = reg(0xEC) & 0x8000 && hreso < 2 && cram_mode() == 0 ? kGradLayer[reg(0xEC) >> 12 & 7] : -1;
+    std::vector<uint32_t> blur(grad >= 0 ? f.w : 0);
     for (int y = 0; y < f.h; ++y) {
         int line = dd ? y >> 1 : y;
         Win win[2] = {window_line(0, y, dd), window_line(1, y, dd)};
         back.rgb = rgb555(vw(bk + (bk_lines ? (uint32_t)line * 2 : 0)));
         // a table word a line, a line of either field in double-density interlace
         line_colour.rgb = cram(vw(lc_table + (lc_lines ? (uint32_t)y * 2 : 0)) & 0x7FF, nullptr);
+        if (grad >= 0) {
+            // each dot averaged with the average of the two before it; a dot the screen does not draw is black
+            auto avg = [](uint32_t a, uint32_t b) { return (a + b - ((a ^ b) & 0x010101)) >> 1; };
+            uint32_t prev[2] = {0, 0};
+            for (int x = 0; x < f.w; ++x) {
+                Pix p{};
+                bool drawn = grad == L_SPRITE ? sprite_pixel(vdp1_dot(x, y, dd), p) == S_DOT
+                                              : nbg[grad - L_NBG0].on && nbg_pixel(nbg[grad - L_NBG0], x, y, p);
+                uint32_t here = drawn ? p.rgb : 0;
+                if (x == 0) prev[0] = prev[1] = here;
+                blur[x] = avg(avg(prev[0], prev[1]), here);
+                prev[0] = prev[1];
+                prev[1] = here;
+            }
+        }
         for (int x = 0; x < f.w; ++x) {
             Pix l[L_COUNT];
             int top = -1, second = -1;
@@ -441,8 +464,9 @@ void vdp2_compose(Frame& f) {
                 consider(L_NBG0 + n);
             }
             const Pix& t = top >= 0 ? l[top] : back;
-            const Pix& u = top >= 0 && (lnclen >> (top == L_SPRITE ? 5 : top - L_NBG0) & 1) ? line_colour
-                         : second >= 0 ? l[second] : back;
+            Pix u = top >= 0 && (lnclen >> (top == L_SPRITE ? 5 : top - L_NBG0) & 1) && grad < 0 ? line_colour
+                  : second >= 0 ? l[second] : back;
+            if (grad >= 0 && (top == grad || second == grad)) u.rgb = blur[x];
             uint32_t rgb = t.rgb;
             if (top >= 0 && t.cc && !windowed(cc_wctl, win, x)) {
                 uint32_t out = 0;

@@ -223,3 +223,35 @@ TEST(line_colour_a_line) {
     CHECK_EQ(at(f, 0, 0), 0x007C7C);
     CHECK_EQ(at(f, 0, 1), 0x7C7C00);             // line 1: red
 }
+
+// Green NBG1 mixed half and half over NBG0, whose bitmap is blue for x 0-9 and black from x 10.
+void green_over_blue_then_black() {
+    red_screen();
+    reg(0x20, 0x0003);                           // BGON: NBG0, NBG1
+    reg(0x28, 0x1212);                           // CHCTLA: both bitmaps of 256 colours
+    reg(0x3C, 0x0010);                           // MPOFN: NBG1's bitmap at 0x20000
+    reg(0x78, 0x0001); reg(0x7C, 0x0001);        // ZMXIN0, ZMYIN0
+    reg(0x88, 0x0001); reg(0x8C, 0x0001);        // ZMXIN1, ZMYIN1
+    reg(0xF8, 0x0201);                           // PRINA: NBG1 2 over NBG0 1
+    reg(0x108, 0x1000);                          // CCRNA: NBG1 ratio 16 of 32
+    for (int y = 0; y < 256; ++y)
+        for (int x = 0; x < 512; ++x) g_vdp2_vram[y * 512 + x] = x < 10 ? 2 : 5;
+    std::memset(g_vdp2_vram + 0x20000, 1, 512 * 256);
+    cram16(1, 0x03E0);
+    cram16(2, 0x7C00);
+    cram16(5, 0x0000);
+}
+
+TEST(gradation_blurs_the_second_image_along_the_line) {
+    green_over_blue_then_black();
+    reg(0xEC, 0x0002);                           // CCCTL: NBG1
+    Frame f;
+    vdp2_compose(f);
+    CHECK_EQ(at(f, 10, 0), 0x007C00);            // no gradation: half green, half black
+    reg(0xEC, 0xA002);                           // CCCTL: BOKEN, BOKN NBG0, and NBG1
+    vdp2_compose(f);
+    CHECK_EQ(at(f, 5, 0), 0x007C7C);             // all blue around it
+    CHECK_EQ(at(f, 10, 0), 0x007C3E);            // blue, blue, black: half blue
+    CHECK_EQ(at(f, 11, 0), 0x007C1F);            // blue, black, black: a quarter
+    CHECK_EQ(at(f, 12, 0), 0x007C00);
+}

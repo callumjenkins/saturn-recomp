@@ -6,7 +6,7 @@
 //            [--record-input FILE] [--shot N,...] [--dump N,...] [--peek ADDR[:WORDS],...] [--watch LO:HI]
 //            [--watch-vblanks FROM:TO] [--wav FILE] [--interp] [--hook ADDR:rN=VALUE ...]
 //            [--tasks SETJMP:LONGJMP] [--multitap N] [--clock YYYY-MM-DDTHH:MM:SS] [--agent FD]
-//            [--write VBLANK:ADDR=HEX,...]
+//            [--write VBLANK:ADDR=HEX,...] [--video FILE]
 //
 // --vblanks and --starts end the run after that many VBlanks or program
 // starts; the log of the hardware touched goes to DIR/hw-log.txt. --shot
@@ -27,6 +27,8 @@
 // which then runs with the run's time; without it the clock is the host's.
 // --agent hands the run to another program through the socket at FD
 // (agent.cpp): it steps VBlanks, presses the pads, reads memory and frames.
+// --video writes the run's pictures and sound as an MP4 through ffmpeg, an
+// error that ends it included (movie.cpp).
 // --write sets memory at a VBlank-IN, as the agent's write does: a stage
 // select, say, given as data.
 #include "saturn.h"
@@ -77,6 +79,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--fullscreen")) cfg.fullscreen = true;
         else if (!std::strcmp(a, "--scale") && more) cfg.scale = std::atoi(argv[++i]);
         else if (!std::strcmp(a, "--wav") && more) cfg.wav = argv[++i];
+        else if (!std::strcmp(a, "--video") && more) cfg.video = argv[++i];
         else if (!std::strcmp(a, "--interp")) cfg.interp = true;
         else if (!std::strcmp(a, "--multitap") && more) cfg.multitap = std::atoi(argv[++i]);
         else if (!std::strcmp(a, "--agent") && more) cfg.agent_fd = std::atoi(argv[++i]);
@@ -104,7 +107,7 @@ int main(int argc, char** argv) {
                                  "             [--vblanks N] [--starts N] [--trace] [--realtime] [--input VBLANK:BUTTONS,...|@FILE]\n"
                                  "             [--record-input FILE] [--shot N,...] [--dump N,...] [--peek ADDR[:WORDS],...] [--watch LO:HI]\n"
                                  "             [--wav FILE] [--hook ADDR:rN=VALUE ...] [--tasks SETJMP:LONGJMP] [--multitap N]\n"
-                                 "             [--clock YYYY-MM-DDTHH:MM:SS] [--agent FD] [--write VBLANK:ADDR=HEX,...]\n");
+                                 "             [--clock YYYY-MM-DDTHH:MM:SS] [--agent FD] [--write VBLANK:ADDR=HEX,...] [--video FILE]\n");
             return 2;
         }
     }

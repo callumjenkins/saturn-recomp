@@ -49,6 +49,7 @@ struct SaturnConfig {
     bool fullscreen = false;
     int scale = 3;                  // the window: 320x240 times this
     std::string wav;                // the run's sound to this file (16-bit stereo, 44 100 Hz)
+    std::string video;              // the run's pictures and sound to this MP4 (movie.cpp)
     bool interp = false;            // fields between the game's frames drawn moving (vdp1.cpp)
     int multitap = 0;               // 6-player multitaps: 1 on port 1, 2 on both ports
     int64_t clock = -1;             // the SMPC's clock at power-on, seconds since 1970 (no time zone); -1: the host's

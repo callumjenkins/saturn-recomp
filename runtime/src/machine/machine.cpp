@@ -29,6 +29,7 @@
 // entry on a fresh host stack: the old program's C++ frames do not pile up
 // under the new one.
 #include "saturn.h"
+#include "video.h"
 #include <chrono>
 #include <condition_variable>
 #include <cstdarg>
@@ -215,6 +216,12 @@ void sat_fatal(const char* fmt, ...) {
     report_ints();
     hot_spots();
     mmio_log_write(g_cfg.out + "/hw-log.txt");
+    static bool closing;                        // a fatal error while closing them must not come back here
+    if (!closing && (movie_on() || !g_cfg.wav.empty())) {
+        closing = true;
+        sound_close();                          // a run that ends in an error is the one most worth watching
+        movie_finish();
+    }
     std::fflush(stderr);
     std::_Exit(1);
 }
@@ -466,6 +473,7 @@ int saturn_main(const SaturnConfig& cfg) {
     hot_spots();
     peek(cfg.peek);
     sound_close();
+    movie_finish();
     mmio_log_write(cfg.out + "/hw-log.txt");
     bios_save();
     std::fflush(stderr);

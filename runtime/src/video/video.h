@@ -34,3 +34,9 @@ void vdp2_compose(Frame& out);                       // the picture of the field
 int vdp2_lines();                                    // 224, 240 or 256 (TVMD VRESO)
 
 void write_png(const std::string& path, const Frame& f);   // png.cpp
+
+// ---- --video (movie.cpp) ----------------------------------------------------------------
+bool movie_on();
+std::string movie_wav();                             // where the sound goes for it
+void movie_frame(const Frame& f);                    // each field, as composed
+void movie_finish();                                 // after sound_close: join the sound to the pictures

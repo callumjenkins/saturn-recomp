@@ -19,10 +19,11 @@
 // EXTS 0-1, a sample for a sample.
 //
 // The samples go to the window's audio stream (host.cpp) and, with --wav,
-// to a 16-bit stereo WAV file of the whole run.
+// to a 16-bit stereo WAV file of the whole run (--wav, or --video's).
 #include "saturn.h"
 #include "sound.h"
 #include "host.h"
+#include "video.h"
 #include <cstdio>
 #include <vector>
 extern "C" {
@@ -95,9 +96,10 @@ void sound_init() {
     m68k_init();
     m68k_set_cpu_type(M68K_CPU_TYPE_68000);
     scsp_reset();
-    if (!g_cfg.wav.empty()) {
-        g_wav = std::fopen(g_cfg.wav.c_str(), "wb");
-        if (!g_wav) sat_fatal("cannot write %s", g_cfg.wav.c_str());
+    std::string wav = movie_on() ? movie_wav() : g_cfg.wav;
+    if (!wav.empty()) {
+        g_wav = std::fopen(wav.c_str(), "wb");
+        if (!g_wav) sat_fatal("cannot write %s", wav.c_str());
         wav_header();
     }
     g_audio = host_audio_open();

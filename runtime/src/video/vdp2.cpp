@@ -10,7 +10,9 @@
 // priorities with the chip's order for ties (sprite, NBG0, NBG1, NBG2,
 // NBG3); special priority and special colour calculation by screen or by
 // character, and colour calculation by the colour's MSB; colour calculation
-// of the top two layers (ratio of the top one, or add); windows 0 and 1, as
+// of the top two layers (the top one's ratio or the second's, or add), with
+// the line colour screen (one colour, or one a line) as the second image
+// under a top screen that LNCLEN names; windows 0 and 1, as
 // rectangles or line windows, on the scroll screens, the sprite layer and
 // colour calculation; the colour offsets A and B; the back screen (one
 // colour or one a line); the display bit; the high resolutions (640 and 704
@@ -19,9 +21,9 @@
 // shadows (normal, MSB and transparent) on the scroll screens, the back
 // screen and the sprite itself.
 // What is not: RBG0 and RBG1 (rotation), line and vertical-cell scroll,
-// mosaic, the sprite window, the line colour screen, special priority and
-// colour calculation by dot (the special function codes), gradation,
-// extended colour calculation, the exclusive resolutions. A register that asks for one of them is noted once.
+// mosaic, the sprite window, special priority and colour calculation by dot
+// (the special function codes), gradation, extended colour calculation, the
+// exclusive resolutions. A register that asks for one of them is noted once.
 #include "saturn.h"
 #include "video.h"
 #include <algorithm>
@@ -351,7 +353,7 @@ static void note_unsupported() {
         for (int n = 0; n < 4; ++n) if ((r >> (n * 2) & 3) == m) return true;
         return false;
     };
-    once(6, reg(0xE8) & 0x3F, "the line colour screen (LNCLEN)", reg(0xE8));
+    once(6, reg(0xE8) & 0x10, "the line colour screen under RBG0 (LNCLEN)", reg(0xE8));
     once(7, mode(reg(0xEA), 2) || mode(reg(0xEE), 2), "special priority or colour calculation by dot (SFPRMD, SFCCMD)", reg(0xEA));
 }
 
@@ -381,9 +383,17 @@ void vdp2_compose(Frame& f) {
     uint32_t bk = ((uint32_t)(reg(0xAC) & 7) << 16 | reg(0xAE)) * 2;
     bool bk_lines = reg(0xAC) & 0x8000;
     bool add = reg(0xEC) >> 8 & 1;
+    bool second_ratio = reg(0xEC) >> 9 & 1;      // CCRTMD: the ratio is the second image's
     Pix back{};
     back.offset = reg(0x110) >> 5 & 1;
     back.offset_b = reg(0x112) >> 5 & 1;
+    back.ratio = (uint8_t)(reg(0x10E) >> 8 & 0x1F);
+    // the line colour screen: inserted as the second image under a top screen LNCLEN names
+    uint16_t lnclen = reg(0xE8);
+    uint32_t lc_table = ((uint32_t)(reg(0xA8) & 7) << 16 | reg(0xAA)) * 2;
+    bool lc_lines = reg(0xA8) & 0x8000;
+    Pix line_colour{};
+    line_colour.ratio = (uint8_t)(reg(0x10E) & 0x1F);
     uint16_t sfprmd = reg(0xEA), sfccmd = reg(0xEE);
     uint8_t wctl[L_COUNT] = {(uint8_t)(reg(0xD4) >> 8), (uint8_t)reg(0xD0), (uint8_t)(reg(0xD0) >> 8),
                              (uint8_t)reg(0xD2), (uint8_t)(reg(0xD2) >> 8)};
@@ -393,6 +403,8 @@ void vdp2_compose(Frame& f) {
         int line = dd ? y >> 1 : y;
         Win win[2] = {window_line(0, y, dd), window_line(1, y, dd)};
         back.rgb = rgb555(vw(bk + (bk_lines ? (uint32_t)line * 2 : 0)));
+        // a table word a line, a line of either field in double-density interlace
+        line_colour.rgb = cram(vw(lc_table + (lc_lines ? (uint32_t)y * 2 : 0)) & 0x7FF, nullptr);
         for (int x = 0; x < f.w; ++x) {
             Pix l[L_COUNT];
             int top = -1, second = -1;
@@ -429,13 +441,15 @@ void vdp2_compose(Frame& f) {
                 consider(L_NBG0 + n);
             }
             const Pix& t = top >= 0 ? l[top] : back;
-            const Pix& u = second >= 0 ? l[second] : back;
+            const Pix& u = top >= 0 && (lnclen >> (top == L_SPRITE ? 5 : top - L_NBG0) & 1) ? line_colour
+                         : second >= 0 ? l[second] : back;
             uint32_t rgb = t.rgb;
             if (top >= 0 && t.cc && !windowed(cc_wctl, win, x)) {
                 uint32_t out = 0;
+                int ratio = second_ratio ? u.ratio : t.ratio;
                 for (int sh = 16; sh >= 0; sh -= 8) {
                     int a = (int)(t.rgb >> sh & 0xFF), b = (int)(u.rgb >> sh & 0xFF);
-                    int c = add ? std::min(a + b, 255) : (a * (32 - t.ratio) + b * t.ratio) >> 5;
+                    int c = add ? std::min(a + b, 255) : (a * (32 - ratio) + b * ratio) >> 5;
                     out |= (uint32_t)c << sh;
                 }
                 rgb = out;

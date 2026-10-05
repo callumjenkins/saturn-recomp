@@ -189,3 +189,37 @@ TEST(transparent_shadow_needs_tpsdsl) {
     vdp2_compose(f);
     CHECK_EQ(at(f, 10, 0), 0x007C00);
 }
+
+// Green NBG0 mixed half and half, over a line colour table at VRAM 0x50000.
+void line_colour_over_green() {
+    red_screen();
+    green_bitmap_nbg0();
+    reg(0xEC, 0x0001);                           // CCCTL: NBG0
+    reg(0x108, 16);                              // CCRNA: NBG0 ratio 16 of 32
+    reg(0xAA, 0x8000);                           // LCTAL: the table at word 0x28000
+    reg(0xA8, 0x0002);                           // LCTAU: one colour for the screen
+    vram16(0x50000, 3);                          // the colour RAM entry for it
+    cram16(3, 0x7C00);
+}
+
+TEST(line_colour_is_the_second_image_where_lnclen_names_the_top) {
+    line_colour_over_green();
+    Frame f;
+    vdp2_compose(f);
+    CHECK_EQ(at(f, 0, 0), 0x7C7C00);             // LNCLEN off: green with the red back screen
+    reg(0xE8, 0x0001);                           // LNCLEN: NBG0
+    vdp2_compose(f);
+    CHECK_EQ(at(f, 0, 0), 0x007C7C);             // green with the blue line colour
+}
+
+TEST(line_colour_a_line) {
+    line_colour_over_green();
+    reg(0xE8, 0x0001);
+    reg(0xA8, 0x8002);                           // LCTAU: LCCLMD, a colour a line
+    vram16(0x50002, 4);                          // line 1's entry
+    cram16(4, 0x001F);
+    Frame f;
+    vdp2_compose(f);
+    CHECK_EQ(at(f, 0, 0), 0x007C7C);
+    CHECK_EQ(at(f, 0, 1), 0x7C7C00);             // line 1: red
+}

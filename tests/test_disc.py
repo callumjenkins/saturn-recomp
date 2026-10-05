@@ -66,13 +66,13 @@ def test_a_truncated_data_track_fails(tmp_path):
     iso = tmp_path / "a.iso"
     iso.write_bytes(iso.read_bytes()[:-2048])
     errors, _ = disc.check(cue, want)
-    assert errors == [f"{cue}: cannot be read: /DATA.DAT: sector 23 is past the end of the data track"]
+    assert errors == ["cannot be read: /DATA.DAT: sector 23 is past the end of the data track"]
 
 
 def test_another_revision_is_refused_by_its_header(tmp_path):
     want = expected(tmp_path)
     errors, _ = disc.check(image(tmp_path, product=b"T-0001    "), want)
-    assert errors == [f"{tmp_path}/game.cue: this disc is T-0001 V1.000, not T-0000 V1.000"]
+    assert errors == ["this disc is T-0001 V1.000, not T-0000 V1.000"]
 
 
 def test_files_added_or_removed_are_errors(tmp_path):
@@ -87,7 +87,7 @@ def test_a_missing_track_file_is_named(tmp_path):
     cue = image(tmp_path)
     os.remove(tmp_path / "b.bin")
     errors, _ = disc.check(cue, want)
-    assert errors == [f"{tmp_path}/game.cue: cannot be read: {cue}: track 02's file 'b.bin' is missing"]
+    assert errors == ["cannot be read: track 02's file 'b.bin' is missing"]
 
 
 def test_a_different_audio_track_is_a_warning(tmp_path):
@@ -99,7 +99,7 @@ def test_not_a_disc(tmp_path):
     want = expected(tmp_path)
     (tmp_path / "x.iso").write_bytes(bytes(20 * 2048))
     errors, _ = disc.check(str(tmp_path / "x.iso"), want)
-    assert errors == [f"{tmp_path}/x.iso: cannot be read: not a Saturn disc (no SEGA SEGASATURN header)"]
+    assert errors == ["cannot be read: not a Saturn disc (no SEGA SEGASATURN header)"]
 
 
 def test_the_command_line_exits_1_on_an_error(tmp_path, capsys):

@@ -126,10 +126,10 @@ def parse_cue(path):
     for t in tracks:
         by_file.setdefault(t.path, []).append(t)
     if not tracks:
-        raise DiscError(f"{path}: no tracks")
+        raise DiscError("the .cue lists no tracks")
     for f, ts in by_file.items():
         if f is None or not os.path.isfile(f):
-            raise DiscError(f"{path}: track {ts[0].number:02d}'s file {f and os.path.basename(f)!r} is missing")
+            raise DiscError(f"track {ts[0].number:02d}'s file {f and os.path.basename(f)!r} is missing")
         size = os.path.getsize(f)
         for i, t in enumerate(ts):
             end = ts[i + 1].file_offset - ts[i + 1].pregap * ts[i + 1].sector_size \
@@ -383,16 +383,16 @@ def manifest(d):
 
 
 def check(image, expected):
-    """(errors, warnings) for the image against an expected manifest. An error means the image's
+    """(errors, warnings) for the image at path `image` against an expected manifest. An error means the image's
     code or data differ from the disc the manifest describes; a warning, its music alone."""
     want = f"{expected['product']} {expected['version']}"
     try:
         d = Disc(image)
         if (d.ip.product, d.ip.version) != (expected["product"], expected["version"]):
-            return [f"{image}: this disc is {d.ip.product} {d.ip.version}, not {want}"], []
+            return [f"this disc is {d.ip.product} {d.ip.version}, not {want}"], []
         got = manifest(d)
     except (DiscError, ValueError, KeyError, struct.error, OSError) as e:
-        return [f"{image}: cannot be read: {e}"], []
+        return [f"cannot be read: {e}"], []
     errors, warnings = [], []
     if got["ip_sha1"] != expected["ip_sha1"]:
         errors.append("IP.BIN differs")

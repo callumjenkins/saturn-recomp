@@ -253,6 +253,7 @@ static const uint32_t kBupSize = 32768, kBupBlock = 64;
 struct BupFile { std::string comment; uint8_t language; uint32_t date; std::vector<uint8_t> data; };
 static std::map<std::string, BupFile> g_bup;
 static bool g_bup_loaded;
+static bool g_bup_changed;                           // since the file was last written
 static std::string g_bup_path;                       // empty: the saves last for the run alone
 
 // The user's data directory, by the platform's convention; empty if the environment names none.
@@ -321,7 +322,8 @@ static void bup_load() {
 
 // Written beside the file and renamed over it, so a run that ends partway through leaves the last whole one.
 void bios_save() {
-    if (!g_bup_loaded || g_bup_path.empty()) return;
+    if (!g_bup_changed || g_bup_path.empty()) return;
+    g_bup_changed = false;
     namespace fs = std::filesystem;
     std::error_code ec;
     if (fs::path(g_bup_path).has_parent_path()) fs::create_directories(fs::path(g_bup_path).parent_path(), ec);
@@ -396,6 +398,7 @@ static bool bup_call(SH2Context& c, uint32_t k) {
         for (uint32_t i = 0; i < size; ++i) b.data[i] = (uint8_t)ld8(r6 + i);
         g_bup[name] = b;
         sat_note("BUP: wrote %s (%u bytes)", name.c_str(), size);
+        g_bup_changed = true;
         bios_save();
         c.r[0] = 0;
         return true;
@@ -409,6 +412,7 @@ static bool bup_call(SH2Context& c, uint32_t k) {
     }
     case 6: {                                   // Delete(device, name)
         c.r[0] = g_bup.erase(gstr(r5, 11)) ? 0 : 5;
+        g_bup_changed = c.r[0] == 0;
         bios_save();
         return true;
     }

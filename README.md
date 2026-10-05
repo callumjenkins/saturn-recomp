@@ -42,6 +42,27 @@ python -m saturnrecomp.learn game.toml -- --cue GAME.cue --headless --vblanks 36
 python -m saturnrecomp.analysis.resume game.toml --check   # where the game's tasks can resume
 ```
 
+A program can also play a run, which is how a bot or a test plays a game it cannot script ahead of
+time. `saturnrecomp.agent` starts the executable with `--agent`, pauses it at VBlank 1, and from
+there steps VBlanks, presses the pads, reads and writes memory and takes frames:
+
+```python
+from saturnrecomp import agent
+
+with agent.start("build/recomp-build/saturn", ["--cue", "GAME.cue", "--headless"], "build/run/bot") as run:
+    run.step(1900)
+    run.pad("START")
+    run.step(10)
+    run.pad("")
+    work_ram = run.read(0x06000000, 64)    # bytes, as the CPU reads them
+    run.frame().save_png("build/run/bot/now.png")
+    print(",".join(run.presses))    # the presses as an --input script, to replay the run
+```
+
+A pause takes no time on the Saturn's clock, so the same presses at the same VBlanks play the same
+whichever way they come. The protocol is a line of text a command, documented in
+`runtime/src/machine/agent.cpp`.
+
 The lower-level tools below take their inputs as arguments instead.
 
 ```sh

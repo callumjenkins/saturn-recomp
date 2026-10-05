@@ -79,6 +79,8 @@ class Run:
 
     def step(self, n=1):
         """Run n VBlanks; the VBlank it pauses at."""
+        if n < 1:
+            raise AgentError(f"step {n}: n has to be at least 1")
         self._sock.sendall(f"step {n}\n".encode())
         self.vblank = self._expect_vblank()
         return self.vblank

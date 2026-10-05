@@ -38,7 +38,6 @@ static const uint32_t kRet = 0xFFFFFFE8u;            // the dispatcher's return 
 static uint32_t g_first_read = 0x06004000u;
 static bool g_pal;                                   // the disc is for Europe (PAL) alone
 static uint32_t g_uint[0x80];                        // SYS_SETUINT's handlers, vectors 0x00-0x7F
-static void bup_path(const uint8_t* ip);
 static uint32_t g_uipr[0x20];                        // SYS_CHGUIPR's table: the SCU mask while 0x40+i runs
 static uint8_t g_sem[0x100];
 
@@ -73,7 +72,7 @@ void bios_boot() {
     std::string areas(reinterpret_cast<const char*>(ip + 0x40), 10);   // area symbols: J T U B K A E L
     g_pal = areas.find('E') != std::string::npos && areas.find_first_of("JTUBKAL") == std::string::npos;
     smpc_set_area(areas[0]);
-    bup_path(ip);
+    bios_select_save(ip);
     sh2_mem_write(0x06002000u, ip, ip_size && ip_size <= sizeof ip ? ip_size : sizeof ip);
 
     std::string first = cdrom_first_file();
@@ -283,7 +282,9 @@ static std::string default_save(const uint8_t* ip) {
     return dir + "/saturn-recomp/" + field(0x20, 10) + "_" + field(0x2A, 6) + "/backup.bin";
 }
 
-static void bup_path(const uint8_t* ip) {
+void bios_select_save(const uint8_t* ip) {
+    g_bup.clear();
+    g_bup_loaded = g_bup_changed = false;
     g_bup_path = g_cfg.save == "-" ? "" : !g_cfg.save.empty() ? g_cfg.save : default_save(ip);
     if (g_bup_path.empty()) sat_note("backup memory: kept for this run alone");
     else sat_note("backup memory: %s", g_bup_path.c_str());
@@ -393,7 +394,7 @@ static bool bup_call(SH2Context& c, uint32_t k) {
         std::string name = gstr(r5, 11);
         BupFile b{gstr(r5 + 12, 10), (uint8_t)ld8(r5 + 23), ld32(r5 + 24), {}};
         uint32_t size = ld32(r5 + 28);
-        if (g_bup.count(name) && r7 == 1) { c.r[0] = 6; return true; }   // exists, no overwrite (BUP_FOUND?)
+        if (g_bup.count(name) && r7 != 0) { c.r[0] = 6; return true; }   // exists, and r7 asks to keep it
         b.data.resize(size);
         for (uint32_t i = 0; i < size; ++i) b.data[i] = (uint8_t)ld8(r6 + i);
         g_bup[name] = b;

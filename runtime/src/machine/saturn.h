@@ -86,6 +86,7 @@ uint32_t bios_rom_read(uint32_t a, int size);   // the few BIOS ROM words a prog
 bool bios_is_dispatcher(uint32_t vec, uint32_t target);
 void bios_dispatch(SH2Context& c, uint32_t vec);     // the handler SYS_SETUINT installed
 void bios_save();                   // the backup memory to its file
+void bios_select_save(const uint8_t* ip);   // the save file for the disc with this IP.BIN, none loaded yet
 
 // ---- the address map (mmio.cpp) ---------------------------------------------------
 void mmio_log_write(const std::string& path);        // every register touched, with counts

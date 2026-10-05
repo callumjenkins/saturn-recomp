@@ -93,7 +93,13 @@ build/recomp-build/saturn --cue GAME.cue --record-input play.txt          # the 
 build/recomp-build/saturn --cue GAME.cue --headless --input @play.txt --vblanks 9000 --shot 7760   # that game again, headless
 build/recomp-build/saturn --cue GAME.cue --headless --watch 06058D6C:06058DCF --watch-vblanks 7300:7310   # every store, by function
 build/recomp-build/saturn --cue GAME.cue --headless --write 4250:060C179A=0201   # memory set at a VBlank, such as a stage select
+build/recomp-build/saturn --cue GAME.cue --headless --save -        # saves kept for this run alone, starting empty
 ```
+
+The game's saves go to one file per game in the user's data directory unless `--save` names
+another, as `saturn-recomp/PRODUCT_VERSION/backup.bin` under `$XDG_DATA_HOME` (or
+`~/.local/share`), `~/Library/Application Support` or `%APPDATA%`. A test run should pass
+`--save -` or a file of its own, so it starts from no saves and leaves the player's alone.
 
 ## Checking a change
 

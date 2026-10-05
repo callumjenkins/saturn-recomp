@@ -4,6 +4,8 @@
     python -m saturnrecomp.disc GAME.cue --list
     python -m saturnrecomp.disc GAME.cue --extract out/         # files + IP.BIN
     python -m saturnrecomp.disc GAME.cue --audio out/           # CD-DA tracks as WAV
+    python -m saturnrecomp.disc GAME.cue --manifest disc.json   # what identifies its contents
+    python -m saturnrecomp.disc GAME.cue --check disc.json      # whether it is that disc
 
 Layers, from the outside in:
 
@@ -47,6 +49,8 @@ ISO   Standard ISO 9660 from sector 16 (PVD). The BIOS loads the 1st read
       attribute 0x4000 marks a record that points at a CD-DA track.
 """
 import argparse
+import hashlib
+import json
 import os
 import re
 import struct
@@ -61,6 +65,10 @@ PERIPHERALS = {"J": "control pad", "A": "analog pad", "M": "mouse",
                "G": "light gun", "W": "RAM cartridge", "C": "link cable",
                "F": "floppy drive", "D": "modem", "X": "X-band modem",
                "E": "3D control pad", "P": "video CD card", "R": "Photo CD"}
+
+
+class DiscError(Exception):
+    """An image that cannot be read as a disc: a missing track file, an unreadable header."""
 
 
 # ---------------------------------------------------------------- CUE / tracks
@@ -117,7 +125,11 @@ def parse_cue(path):
     by_file = {}
     for t in tracks:
         by_file.setdefault(t.path, []).append(t)
+    if not tracks:
+        raise DiscError(f"{path}: no tracks")
     for f, ts in by_file.items():
+        if f is None or not os.path.isfile(f):
+            raise DiscError(f"{path}: track {ts[0].number:02d}'s file {f and os.path.basename(f)!r} is missing")
         size = os.path.getsize(f)
         for i, t in enumerate(ts):
             end = ts[i + 1].file_offset - ts[i + 1].pregap * ts[i + 1].sector_size \
@@ -148,6 +160,8 @@ class Disc:
         self.data = self.tracks[0]
         self._fh = {}
         self.ip = IP(self.read_sectors(0, 16))
+        if not self.ip.valid:
+            raise DiscError("not a Saturn disc (no SEGA SEGASATURN header)")
         self.iso = ISO9660(self)
 
     def track_at(self, lba):
@@ -172,6 +186,8 @@ class Disc:
         out = bytearray()
         for i in range(count):
             raw, t = self.raw_sector(lba + i)
+            if t.is_audio or len(raw) < t.sector_size:
+                raise DiscError(f"sector {lba + i} is past the end of the data track")
             out += raw[t.user_offset:t.user_offset + SECTOR] if t.sector_size == SECTOR_RAW else raw
         return bytes(out)
 
@@ -340,6 +356,66 @@ def write_wav(path, pcm, rate=44100, channels=2):
         f.write(b"data" + struct.pack("<I", len(pcm)) + pcm)
 
 
+# ---------------------------------------------------------------- manifests
+
+def _sha1(data):
+    return hashlib.sha1(data).hexdigest()
+
+
+def manifest(d):
+    """What identifies a disc's contents, whatever the image's layout: IP.BIN, every file on it,
+    and each audio track's sound from INDEX 01."""
+    files = {}
+    for r in d.iso.walk():
+        if not r.is_dir and not d.is_cdda(r):
+            try:
+                data = d.read_file(r)
+            except DiscError as e:
+                raise DiscError(f"{r.path}: {e}") from None
+            files[r.path] = {"size": len(data), "sha1": _sha1(data)}
+    return {
+        "product": d.ip.product, "version": d.ip.version, "areas": d.ip.areas,
+        "ip_sha1": _sha1(d.ip.raw[:d.ip.ip_size or len(d.ip.raw)]),
+        "files": files,
+        "audio": {"%02d" % t.number: {"frames": t.frames, "sha1": _sha1(audio_frames(t))}
+                  for t in d.tracks if t.is_audio},
+    }
+
+
+def check(image, expected):
+    """(errors, warnings) for the image against an expected manifest. An error means the image's
+    code or data differ from the disc the manifest describes; a warning, its music alone."""
+    want = f"{expected['product']} {expected['version']}"
+    try:
+        d = Disc(image)
+        if (d.ip.product, d.ip.version) != (expected["product"], expected["version"]):
+            return [f"{image}: this disc is {d.ip.product} {d.ip.version}, not {want}"], []
+        got = manifest(d)
+    except (DiscError, ValueError, KeyError, struct.error, OSError) as e:
+        return [f"{image}: cannot be read: {e}"], []
+    errors, warnings = [], []
+    if got["ip_sha1"] != expected["ip_sha1"]:
+        errors.append("IP.BIN differs")
+    for path, f in expected["files"].items():
+        g = got["files"].get(path)
+        if g is None:
+            errors.append(f"{path} is missing")
+        elif g["size"] != f["size"]:
+            errors.append(f"{path} is {g['size']} bytes, not {f['size']}")
+        elif g["sha1"] != f["sha1"]:
+            errors.append(f"{path} differs")
+    errors += [f"{path} is not on {want}" for path in sorted(got["files"].keys() - expected["files"].keys())]
+    for n, t in expected["audio"].items():
+        g = got["audio"].get(n)
+        if g is None:
+            warnings.append(f"audio track {n} is missing")
+        elif g["frames"] != t["frames"]:
+            warnings.append(f"audio track {n} is {g['frames']} frames, not {t['frames']}")
+        elif g["sha1"] != t["sha1"]:
+            warnings.append(f"audio track {n} differs")
+    return errors, warnings
+
+
 # ---------------------------------------------------------------- CLI
 
 def _time(frames):
@@ -354,8 +430,26 @@ def main(argv=None):
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--extract", metavar="DIR")
     ap.add_argument("--audio", metavar="DIR")
+    ap.add_argument("--manifest", metavar="FILE", help="write what identifies the disc's contents as JSON")
+    ap.add_argument("--check", metavar="FILE", help="compare the disc with a manifest; exit 1 if its code or data differ")
     a = ap.parse_args(argv)
+    if a.check:
+        errors, warnings = check(a.image, json.load(open(a.check)))
+        for w in warnings:
+            print("warning:", w)
+        for e in errors:
+            print("error:", e)
+        if errors:
+            raise SystemExit(1)
+        print("the disc matches", a.check)
+        return
     d = Disc(a.image)
+    if a.manifest:
+        with open(a.manifest, "w") as f:
+            json.dump(manifest(d), f, indent=1, sort_keys=True)
+            f.write("\n")
+        print("manifest written to", a.manifest)
+        return
     if a.info or not (a.list or a.extract or a.audio):
         print(d.ip.describe())
         iso = d.iso

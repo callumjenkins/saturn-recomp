@@ -32,7 +32,8 @@
 // ---- the machine (machine.cpp) -------------------------------------------------------
 struct SaturnConfig {
     std::string cue;                // the disc
-    std::string out = ".";          // logs and the backup memory go here
+    std::string out = ".";          // logs, pictures and dumps go here
+    std::string save;               // the backup memory's file; "-": none; empty: one per game in the user's data directory
     bool realtime = false;          // host clock; otherwise virtual time from safe points
     uint64_t stop_vblanks = 0;      // end the run after this many VBlanks (0: never)
     int stop_starts = 0;            // ... or after this many program starts (0: never)

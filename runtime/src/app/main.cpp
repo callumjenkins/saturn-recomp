@@ -6,7 +6,7 @@
 //            [--record-input FILE] [--shot N,...] [--dump N,...] [--peek ADDR[:WORDS],...] [--watch LO:HI]
 //            [--watch-vblanks FROM:TO] [--wav FILE] [--interp] [--hook ADDR:rN=VALUE ...]
 //            [--tasks SETJMP:LONGJMP] [--multitap N] [--clock YYYY-MM-DDTHH:MM:SS] [--agent FD]
-//            [--write VBLANK:ADDR=HEX,...] [--video FILE]
+//            [--write VBLANK:ADDR=HEX,...] [--video FILE] [--save FILE|-]
 //
 // --vblanks and --starts end the run after that many VBlanks or program
 // starts; the log of the hardware touched goes to DIR/hw-log.txt. --shot
@@ -31,6 +31,10 @@
 // error that ends it included (movie.cpp).
 // --write sets memory at a VBlank-IN, as the agent's write does: a stage
 // select, say, given as data.
+// --save names the file the game's saves (the backup memory) are kept in; "-"
+// keeps them for the run alone, starting empty. Without it they go to
+// saturn-recomp/PRODUCT_VERSION/backup.bin in the user's data directory
+// ($XDG_DATA_HOME or ~/.local/share, ~/Library/Application Support, %APPDATA%).
 #include "saturn.h"
 #include <cstdio>
 #include <cstdlib>
@@ -54,6 +58,7 @@ int main(int argc, char** argv) {
         bool more = i + 1 < argc;
         if (!std::strcmp(a, "--cue") && more) cfg.cue = argv[++i];
         else if (!std::strcmp(a, "--out") && more) cfg.out = argv[++i];
+        else if (!std::strcmp(a, "--save") && more) cfg.save = argv[++i];
         else if (!std::strcmp(a, "--vblanks") && more) cfg.stop_vblanks = std::strtoull(argv[++i], nullptr, 10);
         else if (!std::strcmp(a, "--starts") && more) cfg.stop_starts = std::atoi(argv[++i]);
         else if (!std::strcmp(a, "--trace")) cfg.trace = true;
@@ -107,7 +112,8 @@ int main(int argc, char** argv) {
                                  "             [--vblanks N] [--starts N] [--trace] [--realtime] [--input VBLANK:BUTTONS,...|@FILE]\n"
                                  "             [--record-input FILE] [--shot N,...] [--dump N,...] [--peek ADDR[:WORDS],...] [--watch LO:HI]\n"
                                  "             [--wav FILE] [--hook ADDR:rN=VALUE ...] [--tasks SETJMP:LONGJMP] [--multitap N]\n"
-                                 "             [--clock YYYY-MM-DDTHH:MM:SS] [--agent FD] [--write VBLANK:ADDR=HEX,...] [--video FILE]\n");
+                                 "             [--clock YYYY-MM-DDTHH:MM:SS] [--agent FD] [--write VBLANK:ADDR=HEX,...] [--video FILE]\n"
+                                 "             [--save FILE|-]\n");
             return 2;
         }
     }

@@ -16,10 +16,14 @@
 // SYS_SETUINT registered (the BIOS's default handler returns at once).
 //
 // The backup memory (BUP, through 0x06000354/0x06000358) is kept in a file,
-// out/backup.bin; see the BUP section for what is and is not implemented.
+// --save's or one per game in the user's data directory; see the BUP section
+// for what is and is not implemented.
 #include "saturn.h"
+#include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <map>
 #include <string>
 #include <vector>
@@ -34,6 +38,7 @@ static const uint32_t kRet = 0xFFFFFFE8u;            // the dispatcher's return 
 static uint32_t g_first_read = 0x06004000u;
 static bool g_pal;                                   // the disc is for Europe (PAL) alone
 static uint32_t g_uint[0x80];                        // SYS_SETUINT's handlers, vectors 0x00-0x7F
+static void bup_path(const uint8_t* ip);
 static uint32_t g_uipr[0x20];                        // SYS_CHGUIPR's table: the SCU mask while 0x40+i runs
 static uint8_t g_sem[0x100];
 
@@ -68,6 +73,7 @@ void bios_boot() {
     std::string areas(reinterpret_cast<const char*>(ip + 0x40), 10);   // area symbols: J T U B K A E L
     g_pal = areas.find('E') != std::string::npos && areas.find_first_of("JTUBKAL") == std::string::npos;
     smpc_set_area(areas[0]);
+    bup_path(ip);
     sh2_mem_write(0x06002000u, ip, ip_size && ip_size <= sizeof ip ? ip_size : sizeof ip);
 
     std::string first = cdrom_first_file();
@@ -242,10 +248,45 @@ bool bios_call(SH2Context& c, uint32_t addr) {
 // library's functions: +4 SelPart, +8 Format, +12 Stat, +16 Write, +20 Read,
 // +24 Delete, +28 Dir, +32 Verify, +36 GetDate, +40 SetDate. Only device 0
 // (the internal memory, 32 KiB in 64-byte blocks) exists. Saves are kept by
-// name in out/backup.bin.
+// name in one file, rewritten whole after each Write and Delete.
+static const uint32_t kBupSize = 32768, kBupBlock = 64;
 struct BupFile { std::string comment; uint8_t language; uint32_t date; std::vector<uint8_t> data; };
 static std::map<std::string, BupFile> g_bup;
 static bool g_bup_loaded;
+static std::string g_bup_path;                       // empty: the saves last for the run alone
+
+// The user's data directory, by the platform's convention; empty if the environment names none.
+static std::string data_dir() {
+    auto env = [](const char* name) { const char* v = std::getenv(name); return std::string(v ? v : ""); };
+#if defined(_WIN32)
+    return env("APPDATA");
+#elif defined(__APPLE__)
+    return env("HOME").empty() ? "" : env("HOME") + "/Library/Application Support";
+#else
+    if (!env("XDG_DATA_HOME").empty()) return env("XDG_DATA_HOME");
+    return env("HOME").empty() ? "" : env("HOME") + "/.local/share";
+#endif
+}
+
+// DATA/saturn-recomp/PRODUCT_VERSION/backup.bin, from IP.BIN's product number and version.
+static std::string default_save(const uint8_t* ip) {
+    std::string dir = data_dir();
+    if (dir.empty()) return "";
+    auto field = [&](int at, int len) {
+        std::string s(reinterpret_cast<const char*>(ip + at), len);
+        s.erase(s.find_last_not_of(' ') + 1);
+        for (char& ch : s)
+            if (!std::isalnum((unsigned char)ch) && ch != '-' && ch != '.') ch = '_';
+        return s;
+    };
+    return dir + "/saturn-recomp/" + field(0x20, 10) + "_" + field(0x2A, 6) + "/backup.bin";
+}
+
+static void bup_path(const uint8_t* ip) {
+    g_bup_path = g_cfg.save == "-" ? "" : !g_cfg.save.empty() ? g_cfg.save : default_save(ip);
+    if (g_bup_path.empty()) sat_note("backup memory: kept for this run alone");
+    else sat_note("backup memory: %s", g_bup_path.c_str());
+}
 
 static std::string gstr(uint32_t a, int max) {
     std::string s;
@@ -260,7 +301,8 @@ static std::string gstr(uint32_t a, int max) {
 static void bup_load() {
     if (g_bup_loaded) return;
     g_bup_loaded = true;
-    FILE* f = std::fopen((g_cfg.out + "/backup.bin").c_str(), "rb");
+    if (g_bup_path.empty()) return;
+    FILE* f = std::fopen(g_bup_path.c_str(), "rb");
     if (!f) return;
     char name[12], comment[11];
     uint8_t lang;
@@ -268,16 +310,24 @@ static void bup_load() {
     while (std::fread(name, 1, 12, f) == 12 && std::fread(comment, 1, 11, f) == 11 &&
            std::fread(&lang, 1, 1, f) == 1 && std::fread(&date, 4, 1, f) == 1 && std::fread(&size, 4, 1, f) == 1) {
         BupFile b{std::string(comment, strnlen(comment, 11)), lang, date, std::vector<uint8_t>(size)};
-        if (size && std::fread(b.data.data(), 1, size, f) != size) break;
+        if (size > kBupSize || (size && std::fread(b.data.data(), 1, size, f) != size)) {
+            sat_note("backup memory: %s is damaged after %zu saves; the rest are left out", g_bup_path.c_str(), g_bup.size());
+            break;
+        }
         g_bup[std::string(name, strnlen(name, 12))] = b;
     }
     std::fclose(f);
 }
 
+// Written beside the file and renamed over it, so a run that ends partway through leaves the last whole one.
 void bios_save() {
-    if (!g_bup_loaded || g_bup.empty()) return;
-    FILE* f = std::fopen((g_cfg.out + "/backup.bin").c_str(), "wb");
-    if (!f) return;
+    if (!g_bup_loaded || g_bup_path.empty()) return;
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    if (fs::path(g_bup_path).has_parent_path()) fs::create_directories(fs::path(g_bup_path).parent_path(), ec);
+    std::string tmp = g_bup_path + ".new";
+    FILE* f = std::fopen(tmp.c_str(), "wb");
+    if (!f) { sat_note("backup memory: cannot write %s", tmp.c_str()); return; }
     for (auto& [name, b] : g_bup) {
         char n[12] = {}, cm[11] = {};
         std::memcpy(n, name.data(), name.size() < 12 ? name.size() : 12);
@@ -287,7 +337,10 @@ void bios_save() {
         std::fwrite(&b.date, 4, 1, f); std::fwrite(&size, 4, 1, f);
         std::fwrite(b.data.data(), 1, size, f);
     }
-    std::fclose(f);
+    bool ok = !std::ferror(f);
+    ok = std::fclose(f) == 0 && ok;
+    if (ok) fs::rename(tmp, g_bup_path, ec);
+    if (!ok || ec) sat_note("backup memory: cannot write %s", g_bup_path.c_str());
 }
 
 static uint32_t days_in(uint32_t y, uint32_t m) {
@@ -295,7 +348,6 @@ static uint32_t days_in(uint32_t y, uint32_t m) {
     return m == 2 && y % 4 == 0 && (y % 100 || y % 400 == 0) ? 29 : md[(m - 1) % 12];
 }
 
-static const uint32_t kBupSize = 32768, kBupBlock = 64;
 static uint32_t blocks(uint32_t size) { return (size + 34 + kBupBlock - 1) / kBupBlock + 1; }
 
 // BupDir: filename[12], comment[11], language, date, datasize, blocksize (u16)

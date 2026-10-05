@@ -113,3 +113,13 @@ def test_the_command_line_exits_1_on_an_error(tmp_path, capsys):
         raise AssertionError("no exit")
     except SystemExit as e:
         assert e.code == 1
+
+
+def test_a_fingerprint_changes_with_any_of_the_images_files(tmp_path):
+    cue = image(tmp_path)
+    before = disc.fingerprint(cue)
+    assert sorted(os.path.basename(f) for f in before) == ["a.iso", "b.bin", "game.cue"]
+    assert disc.fingerprint(cue) == before
+    (tmp_path / "b.bin").write_bytes(b"\x05\x06" * 2352)
+    os.utime(tmp_path / "b.bin", ns=(1, 1))
+    assert disc.fingerprint(cue) != before

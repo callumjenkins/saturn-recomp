@@ -358,6 +358,18 @@ def write_wav(path, pcm, rate=44100, channels=2):
 
 # ---------------------------------------------------------------- manifests
 
+def image_files(image):
+    """The files an image is made of: a .cue and each file it lists, or the one image file."""
+    if not image.lower().endswith(".cue"):
+        return [os.path.abspath(image)]
+    return [os.path.abspath(image)] + sorted({t.path for t in parse_cue(image)})
+
+
+def fingerprint(image):
+    """{file: [size, mtime in ns]} for each of the image's files: cheap to compare, to notice an
+    image replaced or changed since it was last checked."""
+    return {f: [st.st_size, st.st_mtime_ns] for f in image_files(image) for st in [os.stat(f)]}
+
 def _sha1(data):
     return hashlib.sha1(data).hexdigest()
 

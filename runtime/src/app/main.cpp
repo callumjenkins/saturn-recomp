@@ -6,6 +6,7 @@
 //            [--record-input FILE] [--shot N,...] [--dump N,...] [--peek ADDR[:WORDS],...] [--watch LO:HI]
 //            [--watch-vblanks FROM:TO] [--wav FILE] [--interp] [--hook ADDR:rN=VALUE ...]
 //            [--tasks SETJMP:LONGJMP] [--multitap N] [--clock YYYY-MM-DDTHH:MM:SS] [--agent FD]
+//            [--write VBLANK:ADDR=HEX,...]
 //
 // --vblanks and --starts end the run after that many VBlanks or program
 // starts; the log of the hardware touched goes to DIR/hw-log.txt. --shot
@@ -26,6 +27,8 @@
 // which then runs with the run's time; without it the clock is the host's.
 // --agent hands the run to another program through the socket at FD
 // (agent.cpp): it steps VBlanks, presses the pads, reads memory and frames.
+// --write sets memory at a VBlank-IN, as the agent's write does: a stage
+// select, say, given as data.
 #include "saturn.h"
 #include <cstdio>
 #include <cstdlib>
@@ -77,6 +80,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--interp")) cfg.interp = true;
         else if (!std::strcmp(a, "--multitap") && more) cfg.multitap = std::atoi(argv[++i]);
         else if (!std::strcmp(a, "--agent") && more) cfg.agent_fd = std::atoi(argv[++i]);
+        else if (!std::strcmp(a, "--write") && more) cfg.writes += (cfg.writes.empty() ? "" : ",") + std::string(argv[++i]);
         else if (!std::strcmp(a, "--clock") && more) {
             cfg.clock = clock_seconds(argv[++i]);
             if (cfg.clock < 0) { std::fprintf(stderr, "--clock: YYYY-MM-DDTHH:MM:SS\n"); return 2; }
@@ -100,7 +104,7 @@ int main(int argc, char** argv) {
                                  "             [--vblanks N] [--starts N] [--trace] [--realtime] [--input VBLANK:BUTTONS,...|@FILE]\n"
                                  "             [--record-input FILE] [--shot N,...] [--dump N,...] [--peek ADDR[:WORDS],...] [--watch LO:HI]\n"
                                  "             [--wav FILE] [--hook ADDR:rN=VALUE ...] [--tasks SETJMP:LONGJMP] [--multitap N]\n"
-                                 "             [--clock YYYY-MM-DDTHH:MM:SS] [--agent FD]\n");
+                                 "             [--clock YYYY-MM-DDTHH:MM:SS] [--agent FD] [--write VBLANK:ADDR=HEX,...]\n");
             return 2;
         }
     }

@@ -54,6 +54,7 @@ struct SaturnConfig {
     int64_t clock = -1;             // the SMPC's clock at power-on, seconds since 1970 (no time zone); -1: the host's
     uint32_t task_setjmp = 0, task_longjmp = 0;   // the game's own task switch (tasks.cpp), 0: none
     int agent_fd = -1;              // a socket another program plays the run through (agent.cpp)
+    std::string writes;             // "VBLANK:ADDR=HEX,...": memory written at those VBlank-INs, as the agent's write
 };
 extern SaturnConfig g_cfg;
 extern SH2Context g_master, g_slave;

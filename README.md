@@ -92,6 +92,7 @@ build/recomp-build/saturn --cue GAME.cue --headless --input 1200:START,1210: --p
 build/recomp-build/saturn --cue GAME.cue --record-input play.txt          # the pad as played in the window, as a script
 build/recomp-build/saturn --cue GAME.cue --headless --input @play.txt --vblanks 9000 --shot 7760   # that game again, headless
 build/recomp-build/saturn --cue GAME.cue --headless --watch 06058D6C:06058DCF --watch-vblanks 7300:7310   # every store, by function
+build/recomp-build/saturn --cue GAME.cue --headless --write 4250:060C179A=0201   # memory set at a VBlank, such as a stage select
 ```
 
 ## Checking a change

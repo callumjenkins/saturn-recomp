@@ -146,6 +146,38 @@ static void hot_spots() {
     std::fprintf(stderr, "\n");
 }
 
+// --write VBLANK:ADDR=HEX,...: bytes written through the CPU's stores at that VBlank-IN, at the
+// point an agent's write would go in
+struct Write { uint64_t vblank; uint32_t addr; std::vector<uint8_t> bytes; };
+static std::vector<Write> g_writes;
+static size_t g_write_pos;
+
+static void parse_writes(const std::string& spec) {
+    size_t i = 0;
+    while (i < spec.size()) {
+        size_t j = spec.find(',', i);
+        std::string item = spec.substr(i, j == std::string::npos ? std::string::npos : j - i);
+        i = j == std::string::npos ? spec.size() : j + 1;
+        unsigned long long vblank;
+        unsigned addr;
+        char hex[1024];
+        if (std::sscanf(item.c_str(), "%llu:%x=%1023[0-9A-Fa-f]", &vblank, &addr, hex) != 3 || std::strlen(hex) % 2)
+            sat_fatal("--write: %s is not VBLANK:ADDR=HEX", item.c_str());
+        Write w{vblank, addr, {}};
+        for (size_t k = 0; hex[k]; k += 2) w.bytes.push_back((uint8_t)std::stoul(std::string(hex + k, 2), nullptr, 16));
+        g_writes.push_back(w);
+    }
+    std::stable_sort(g_writes.begin(), g_writes.end(), [](const Write& x, const Write& y) { return x.vblank < y.vblank; });
+}
+
+static void writes_due() {
+    while (g_write_pos < g_writes.size() && g_writes[g_write_pos].vblank <= sat_vblanks()) {
+        const Write& w = g_writes[g_write_pos++];
+        for (size_t k = 0; k < w.bytes.size(); ++k) st8(w.addr + (uint32_t)k, w.bytes[k]);
+        sat_note("write %08X: %zu bytes", w.addr, w.bytes.size());
+    }
+}
+
 // --peek ADDR[:WORDS],...: 32-bit words of memory, through the ordinary reads
 static void peek(const std::string& spec) {
     size_t i = 0;
@@ -288,6 +320,7 @@ void slave_kick() {
 void master_poll_devices() {
     uint64_t now = sat_now();
     video_tick(now);
+    writes_due();
     agent_poll();
     cd_tick();
     smpc_tick();
@@ -391,6 +424,7 @@ int saturn_main(const SaturnConfig& cfg) {
         g_sh2_watch_report = watch_report;
     }
     smpc_input_script(cfg.input);
+    parse_writes(cfg.writes);
     if (!cdrom_open(cfg.cue)) { std::fprintf(stderr, "cannot open the disc %s\n", cfg.cue.c_str()); return 2; }
     g_master = SH2Context{};
     g_master.budget = kBudget;

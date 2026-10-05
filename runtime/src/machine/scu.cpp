@@ -56,7 +56,18 @@ static void copy(uint32_t& src, uint32_t& dst, uint32_t bytes, uint32_t radd, ui
             if (bbus(dst)) { st16(dst, v >> 16); dst += wadd; st16(dst, v & 0xFFFF); dst += wadd; }
             else { st32(dst, v); dst += wadd; }
         } else {
-            for (uint32_t k = 0; k < n; ++k) st8(dst + k, ld8(src + k));
+            // the last 1-3 bytes, read as 16-bit words, since a port such as the CD block's reads no other way;
+            // a source that does not advance gives each word from the same address
+            for (uint32_t k = 0; k < n; k += 2) {
+                uint32_t from = src + (radd ? k : 0);
+                if (n - k >= 2) {
+                    uint32_t v = ld16(from);
+                    st8(dst + k, v >> 8);
+                    st8(dst + k + 1, v & 0xFF);
+                } else {
+                    st8(dst + k, ld8(from));
+                }
+            }
             dst += wadd;
         }
         src += radd;

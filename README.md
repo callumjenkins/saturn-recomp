@@ -101,6 +101,14 @@ another, as `saturn-recomp/PRODUCT_VERSION/backup.bin` under `$XDG_DATA_HOME` (o
 `~/.local/share`), `~/Library/Application Support` or `%APPDATA%`. A test run should pass
 `--save -` or a file of its own, so it starts from no saves and leaves the player's alone.
 
+## Licence
+
+saturn-recomp is MIT-licensed, apart from one optional file under the GPL
+(`THIRD_PARTY.md`). With `-DSATURN_VDP1_GPL=ON`, or `cmake = ["SATURN_VDP1_GPL=ON"]` under
+`[game]` in a game's `game.toml`, VDP1 draws its shapes by Mednafen's rules: a scaled sprite's
+edges then match Mednafen's to the pixel, and the build is a GPL work. Without it the rules are
+saturn-recomp's own, from Sega's manual, and the build stays MIT.
+
 ## Comparing with a reference emulator
 
 `python -m saturnrecomp.reference` plays a disc in a libretro core, headless, a frame at a time,

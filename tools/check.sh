@@ -19,3 +19,8 @@ echo "== runtime unit tests"
 cmake -S runtime/tests -B $B/runtime-tests "${CMAKE[@]}" > /dev/null
 ninja -C $B/runtime-tests > /dev/null
 $B/runtime-tests/runtime_tests
+
+echo "== runtime unit tests, VDP1 by Mednafen's rules (SATURN_VDP1_GPL)"
+cmake -S runtime/tests -B $B/runtime-tests-gpl "${CMAKE[@]}" -DSATURN_VDP1_GPL=ON > /dev/null
+ninja -C $B/runtime-tests-gpl > /dev/null
+$B/runtime-tests-gpl/runtime_tests

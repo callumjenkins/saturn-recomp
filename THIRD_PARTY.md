@@ -1,7 +1,9 @@
 # Third-party code in saturn-recomp
 
-saturn-recomp is MIT-licensed (`LICENSE`). Two parts of it come from, or
-follow, other people's work under their own permissive licences.
+saturn-recomp is MIT-licensed (`LICENSE`). Some parts of it come from, or
+follow, other people's work under their own permissive licences. One optional
+file follows Mednafen and is under the GPL; a build leaves it out unless asked
+(the last section).
 
 ## Musashi (the 68000) — MIT
 
@@ -83,3 +85,19 @@ Mednafen (GPL-2.0) and Beetle Saturn were read for facts about the
 hardware (the SCSP timers' behaviour, the pan and level scales) and are
 used as the oracle the ports are compared with; no code of theirs is in
 saturn-recomp.
+
+## Mednafen's VDP1 rasterising (optional) — GPL v2 or later
+
+`runtime/src/video/vdp1_raster_gpl.inc` draws VDP1's sprites, polygons and
+lines by the rules of Mednafen 1.32.1's VDP1 (`src/ss/vdp1.cpp`,
+`vdp1_common.h`, `vdp1_sprite.cpp`, `vdp1_poly.cpp`, `vdp1_line.cpp`;
+Copyright (C) 2015-2020 Mednafen Team), and is under the same licence: the
+GNU General Public License, version 2 or (at your option) any later version.
+
+It is compiled only when the runtime is built with `-DSATURN_VDP1_GPL=ON`
+(a game asks for it with `cmake = ["SATURN_VDP1_GPL=ON"]` in its
+`game.toml`). Such a build is a GPL work as a whole: whoever distributes it
+must offer its complete source under the GPL. Without the option the file is
+not compiled, `vdp1_raster.inc` draws the shapes instead, and the build is
+under the MIT licence and the permissive terms above.
+

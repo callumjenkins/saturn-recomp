@@ -75,3 +75,10 @@ def test_the_recompilers_source_is_an_input(tmp_path, monkeypatch):
     (fake / "emit.py").write_text("# another recompiler\n")
     monkeypatch.setattr(build, "PACKAGE", str(fake))
     assert build.stale(g) == ["saturnrecomp"]
+
+
+def test_a_build_option_is_a_change(tmp_path):
+    built(tmp_path)
+    g = game(tmp_path, TOML.replace('name = "Test"', 'name = "Test"\ncmake = ["SATURN_VDP1_GPL=ON"]'))
+    assert g.cmake == ["SATURN_VDP1_GPL=ON"]
+    assert build.stale(g) == ["game.toml"]

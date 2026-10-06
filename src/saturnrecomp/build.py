@@ -27,10 +27,10 @@ def _sha1(path):
 
 def inputs(game):
     """{input: hash} for what the generated code is made from: each module's file, the config's
-    modules, task switch and hooks, the learned seeds, and this package's source, all of it, since
+    modules, task switch, hooks and build options, the learned seeds, and this package's source, all of it, since
     an unneeded recompile costs less than a stale one."""
     out = {f"module {m.name}": _sha1(m.file) if os.path.exists(m.file) else None for m in game.modules}
-    config_part = repr((game.modules, game.tasks, sorted(game.hooks.items())))
+    config_part = repr((game.modules, game.tasks, sorted(game.hooks.items()), game.cmake))
     out["game.toml"] = hashlib.sha1(config_part.encode()).hexdigest()
     out["seeds"] = hashlib.sha1(json.dumps(game.learned_seeds(), sort_keys=True).encode()).hexdigest()
     source = hashlib.sha1()
@@ -73,8 +73,12 @@ def recompile(game, log=print):
     tasks = (game.tasks.setjmp, game.tasks.longjmp) if game.tasks else None
     out = os.path.join(game.build, "recomp")
     generate(specs, out, log=log, hooks=game.hooks, tasks=tasks)
-    subprocess.run(["cmake", "-S", out, "-B", os.path.join(game.build, "recomp-build"), "-G", "Ninja",
-                    "-DCMAKE_CXX_COMPILER=clang++"], check=True, capture_output=True)
+    build_dir = os.path.join(game.build, "recomp-build")
+    # options left out of game.toml must not survive in CMake's cache
+    if os.path.exists(os.path.join(build_dir, "CMakeCache.txt")):
+        os.remove(os.path.join(build_dir, "CMakeCache.txt"))
+    subprocess.run(["cmake", "-S", out, "-B", build_dir, "-G", "Ninja",
+                    "-DCMAKE_CXX_COMPILER=clang++", *(f"-D{o}" for o in game.cmake)], check=True, capture_output=True)
     build(game)
     with open(_stamp(game), "w") as f:
         json.dump(made_from, f, indent=1, sort_keys=True)

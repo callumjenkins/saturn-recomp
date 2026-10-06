@@ -19,6 +19,11 @@ add_library(saturn_machine OBJECT
     ${_src}/video/video.cpp ${_src}/video/vdp1.cpp ${_src}/video/vdp2.cpp ${_src}/video/png.cpp ${_src}/video/movie.cpp
     ${_src}/sound/sound.cpp ${_src}/sound/scsp.cpp)
 option(SATURN_NO_SDL "build the headless host even if SDL3 is installed" OFF)
+# VDP1's shapes drawn by Mednafen's rules (vdp1_raster_gpl.inc): the build is then under the GPL
+option(SATURN_VDP1_GPL "draw VDP1's shapes by Mednafen's rules, making the build a GPL work" OFF)
+if(SATURN_VDP1_GPL)
+  target_compile_definitions(saturn_machine PRIVATE SATURN_VDP1_GPL=1)
+endif()
 if(NOT SATURN_NO_SDL)
   find_package(SDL3 CONFIG)
 endif()

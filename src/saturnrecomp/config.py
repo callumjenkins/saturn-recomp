@@ -4,6 +4,7 @@
     name = "Saturn Bomberman (USA)"
     seeds = "tools/seeds.json"      # seeds the learning loop found, by module
     build = "build"
+    cmake = ["SATURN_VDP1_GPL=ON"]  # optional: the runtime's build options (runtime/runtime.cmake)
 
     [symbols]
     krnl_setjmp = 0x060061C4
@@ -60,6 +61,7 @@ class Game:
     symbols: dict[str, int]
     tasks: Tasks | None
     hooks: dict[str, list[int]]
+    cmake: list[str] = field(default_factory=list)
 
     @property
     def saturn(self):
@@ -107,7 +109,8 @@ def load(path):
         hooks.setdefault(known(h["module"], "a [[hook]]"), []).append(_addr(h["at"], symbols))
     game = t.get("game", {})
     return Game(game.get("name", os.path.basename(root)), root, os.path.join(root, game.get("build", "build")),
-                os.path.join(root, game.get("seeds", "seeds.json")), modules, symbols, tasks, hooks)
+                os.path.join(root, game.get("seeds", "seeds.json")), modules, symbols, tasks, hooks,
+                list(game.get("cmake", [])))
 
 
 def _addr(value, symbols):

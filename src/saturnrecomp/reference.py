@@ -1,7 +1,7 @@
 """A libretro core played headless, frame by frame: the reference a recompiled run is compared with.
 
     python -m saturnrecomp.reference CORE.so --bios DIR --cue GAME.cue --frames N --shot F,... --out DIR
-        [--input FRAME:BUTTONS,...]
+        [--input FRAME:BUTTONS,...] [--pads N]
 
 Built for Beetle Saturn (Mednafen's Saturn), which runs the real BIOS: `--bios` is the folder holding
 it (mpr-17933.bin for a US or European disc). Presses use the runtime's --input syntax, with frames
@@ -23,7 +23,7 @@ ENV_GET_VARIABLE_UPDATE = 17
 ENV_GET_SAVE_DIRECTORY = 31
 ENV_GET_CORE_OPTIONS_VERSION = 52
 PIXEL_0RGB1555, PIXEL_XRGB8888, PIXEL_RGB565 = 0, 1, 2
-DEVICE_JOYPAD = 1
+DEVICE_NONE, DEVICE_JOYPAD = 0, 1
 MEMORY_SYSTEM_RAM = 2
 
 # Beetle Saturn's control pad as a RetroPad (its input.c): the RetroPad button each Saturn button is read from.
@@ -69,10 +69,15 @@ INPUT_POLL = C.CFUNCTYPE(None)
 INPUT_STATE = C.CFUNCTYPE(C.c_int16, C.c_uint, C.c_uint, C.c_uint, C.c_uint)
 
 
-class Core:
-    """One libretro core with one game loaded. `pads[port]` is the set of Saturn buttons held."""
+WORK_RAM = ((0x06000000, 0x100000), (0x00200000, 0))     # each bank's Saturn address and its offset in the core's
 
-    def __init__(self, so, system_dir, game, options=OPTIONS, save_dir=None):
+
+class Core:
+    """One libretro core with one game loaded. `pads[port]` is the set of Saturn buttons held.
+    Pads are plugged into the first `ports` ports only, as in the runtime: games ask different
+    questions with a second pad connected."""
+
+    def __init__(self, so, system_dir, game, options=OPTIONS, save_dir=None, ports=1):
         self.lib = C.CDLL(os.path.abspath(so))
         self.options = {k.encode(): v.encode() for k, v in options.items()}
         self._system = C.c_char_p(os.path.abspath(system_dir).encode())
@@ -98,7 +103,7 @@ class Core:
         if not L.retro_load_game(C.byref(self._game)):
             raise RuntimeError(f"the core would not load {game}")
         for port in range(2):
-            L.retro_set_controller_port_device(port, DEVICE_JOYPAD)
+            L.retro_set_controller_port_device(port, DEVICE_JOYPAD if port < ports else DEVICE_NONE)
         self.av = AvInfo()
         L.retro_get_system_av_info(C.byref(self.av))
         L.retro_get_memory_data.restype = C.c_void_p
@@ -176,9 +181,91 @@ class Core:
         at = self.lib.retro_get_memory_data(MEMORY_SYSTEM_RAM)
         return C.string_at(at, size) if at and size else b""
 
+    def read(self, addr, n):
+        """n bytes of work RAM at a Saturn address, as the Saturn sees them. Beetle Saturn exposes the
+        low bank then the high one, as 16-bit words in the host's (little-endian) byte order."""
+        base, at = next(((b, o) for b, o in WORK_RAM if b <= addr and addr + n <= b + 0x100000), (None, None))
+        if base is None:
+            raise ValueError(f"{addr:08X}+{n} is not in a work RAM")
+        start = at + addr - base
+        lo, hi = start & ~1, (start + n + 1) & ~1
+        raw = C.string_at(self.lib.retro_get_memory_data(MEMORY_SYSTEM_RAM) + lo, hi - lo)
+        return swap16(raw)[start - lo:start - lo + n]
+
+    def read32(self, addr):
+        return int.from_bytes(self.read(addr, 4), "big")
+
     def close(self):
         self.lib.retro_unload_game()
         self.lib.retro_deinit()
+
+
+def swap16(raw):
+    out = bytearray(raw)
+    out[0::2], out[1::2] = raw[1::2], raw[0::2]
+    return bytes(out)
+
+
+def placed(ticks):
+    """{VBlank: (tick, VBlanks since the tick reached that value)} for our run, from its VBlank: tick.
+    A game's tick stops while it loads, and a core's loads take longer than ours, so an event placed
+    this way happens at the same point of the game on both."""
+    out, since, last = {}, 0, None
+    for v in sorted(ticks):
+        since = since + 1 if ticks[v] == last else 0
+        last = ticks[v]
+        out[v] = (last, since)
+    return out
+
+
+def play_synced(core, tick_addr, ticks, presses_by_vblank, shots, limit, on_shot):
+    """Plays our run's presses on the core, each at its place by the game's tick (`placed`), and calls
+    on_shot(our VBlank, core frame number) where each of `shots` falls. A place the core passes
+    without stopping at, a tick it skips or a stall it ends sooner, comes on its next frame. Returns
+    the frames run, or None if `limit` ran out first."""
+    at = placed(ticks)
+    events = sorted([(at[v], v, 0, what) for v, what in presses_by_vblank.items() if v in at]
+                    + [(at[v], v, 1, None) for v in shots if v in at])
+    j, last, since = 0, None, 0
+    while j < len(events):
+        if core.frames >= limit:
+            return None
+        core.run()
+        t = core.read32(tick_addr)
+        since = since + 1 if t == last else 0
+        last = t
+        while j < len(events) and (events[j][0][0] < t or (events[j][0][0] == t and since >= events[j][0][1])):
+            _, v, kind, what = events[j]
+            if kind == 0:
+                for port, buttons in what:
+                    core.pads[port] = buttons
+            else:
+                on_shot(v, core.frames)
+            j += 1
+    return core.frames
+
+
+def difference(ours, theirs):
+    """(dots that differ, the largest channel error, a picture of ours, theirs and the dots) for our frame
+    against the core's, ours centred in it as Beetle Saturn frames a 320x224 screen in 330x240."""
+    dx, dy = (theirs.width - ours.width) // 2, (theirs.height - ours.height) // 2
+    w, h = ours.width, ours.height
+    side = bytearray(w * 3 * h * 3)
+    n = worst = 0
+    for y in range(h):
+        a = ours.rgb[y * w * 3:(y + 1) * w * 3]
+        o = ((y + dy) * theirs.width + dx) * 3
+        b = theirs.rgb[o:o + w * 3]
+        row = bytearray(a) + bytearray(b) + bytearray(c // 3 for c in a)
+        if a != b:
+            for x in range(0, w * 3, 3):
+                e = max(abs(a[x] - b[x]), abs(a[x + 1] - b[x + 1]), abs(a[x + 2] - b[x + 2]))
+                if e:
+                    n += 1
+                    worst = max(worst, e)
+                    row[2 * w * 3 + x:2 * w * 3 + x + 3] = b"\xff\x00\xff"
+        side[y * w * 9:(y + 1) * w * 9] = row
+    return n, worst, agent.Frame(w * 3, h, bytes(side))
 
 
 def presses(spec):
@@ -199,10 +286,11 @@ def main(argv=None):
     ap.add_argument("--frames", type=int, required=True)
     ap.add_argument("--shot", default="", help="frames to save as shot-N.png")
     ap.add_argument("--input", default="")
+    ap.add_argument("--pads", type=int, default=1, help="pads plugged in, 1 or 2")
     ap.add_argument("--out", required=True)
     a = ap.parse_args(argv)
     os.makedirs(a.out, exist_ok=True)
-    core = Core(a.core, a.bios, a.cue, save_dir=a.out)
+    core = Core(a.core, a.bios, a.cue, save_dir=a.out, ports=a.pads)
     print(f"{core.av.timing.fps:.4f} frames a second, sound at {core.av.timing.sample_rate:.0f} Hz")
     shots = {int(s) for s in a.shot.split(",") if s}
     due = presses(a.input)

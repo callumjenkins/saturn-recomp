@@ -140,10 +140,12 @@ class Module:
             self.files.append(name)
             buf, count, idx = [], 0, idx + 1
 
-        for e in self.entries:
+        for i, e in enumerate(self.entries):
             fn = prog.funcs[e]
             body = E.Body(prog, fn, entries, volatile, comments, self.hooks & set(fn.code))
-            buf.append("\n".join(body.emit()))
+            lines = body.emit()
+            lines.insert(1, "    ran[%d] = 1;" % i)              # for --coverage: this function has run
+            buf.append("\n".join(lines))
             for k, v in body.sites.items():
                 self.sites[k] = self.sites.get(k, 0) + v
             self.unknown += [(t, e) for t in body.unknown]
@@ -158,14 +160,17 @@ class Module:
             f.write('#pragma once\n#include "saturn/sh2.h"\n\nnamespace %s {\n' % self.ns)
             for e in self.entries:
                 f.write("void %s(SH2Context& c);\n" % E.fname(e))
-            f.write("extern const SH2Module module;\n}  // namespace %s\n" % self.ns)
+            f.write("extern uint8_t ran[];\nextern const SH2Module module;\n}  // namespace %s\n" % self.ns)
         with Out(os.path.join(out, self.ns + "_table.cpp")) as f:
             f.write('#include "%s_funcs.h"\n\nnamespace %s {\n\n' % (self.ns, self.ns))
             f.write("static const SH2FuncEntry funcs[] = {\n")
             for e in self.entries:
                 f.write("    {0x%08Xu, %s},\n" % (e, E.fname(e)))
             f.write("};\n\n")
-            f.write('extern const SH2Module module = {"%s", 0x%08Xu, %du, 0x%08Xu, funcs, %d};\n'
+            f.write("uint8_t ran[%d];\n" % len(self.entries))
+            f.write("static const uint16_t sizes[] = {%s};\n\n"
+                    % ", ".join(str(len(prog.funcs[e].code)) for e in self.entries))
+            f.write('extern const SH2Module module = {"%s", 0x%08Xu, %du, 0x%08Xu, funcs, %d, ran, sizes};\n'
                     % (self.name, self.base, len(self.data), self.crc, len(self.entries)))
             f.write("\n}  // namespace %s\n" % self.ns)
         self.files.append(self.ns + "_table.cpp")

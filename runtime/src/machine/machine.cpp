@@ -323,6 +323,19 @@ void slave_kick() {
     to_slave();
 }
 
+// --coverage FILE: "MODULE ADDRESS INSTRUCTIONS RAN" for every recompiled function, RAN 1 or 0.
+static void write_coverage(const std::string& path) {
+    if (path.empty()) return;
+    FILE* f = std::fopen(path.c_str(), "w");
+    if (!f) { sat_note("coverage: cannot write %s", path.c_str()); return; }
+    for (int i = 0; i < g_sh2_nmodules; ++i) {
+        const SH2Module* m = g_sh2_modules[i];
+        for (uint32_t k = 0; k < m->nfuncs; ++k)
+            std::fprintf(f, "%s %08X %u %d\n", m->name, m->funcs[k].addr, m->sizes[k], m->ran[k] ? 1 : 0);
+    }
+    std::fclose(f);
+}
+
 // ---- time, devices, interrupts ----------------------------------------------------------
 void master_poll_devices() {
     uint64_t now = sat_now();
@@ -472,6 +485,7 @@ int saturn_main(const SaturnConfig& cfg) {
     backtrace(g_master);
     hot_spots();
     peek(cfg.peek);
+    write_coverage(cfg.coverage);
     sound_close();
     movie_finish();
     mmio_log_write(cfg.out + "/hw-log.txt");

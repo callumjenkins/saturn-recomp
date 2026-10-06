@@ -36,6 +36,8 @@ struct SH2Module {
     uint32_t base, size, crc;           // crc32 of the image as loaded at base
     const SH2FuncEntry* funcs;
     uint32_t nfuncs;
+    uint8_t* ran;                       // a byte a function, set when it first runs (--coverage)
+    const uint16_t* sizes;              // its instructions
 };
 
 // ---- services provided by the runtime ---------------------------------------------

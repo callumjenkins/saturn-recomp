@@ -6,7 +6,7 @@
 //            [--record-input FILE] [--shot N,...] [--dump N,...] [--peek ADDR[:WORDS],...] [--watch LO:HI]
 //            [--watch-vblanks FROM:TO] [--wav FILE] [--interp] [--hook ADDR:rN=VALUE ...]
 //            [--tasks SETJMP:LONGJMP] [--multitap N] [--clock YYYY-MM-DDTHH:MM:SS] [--agent FD]
-//            [--write VBLANK:ADDR=HEX,...] [--video FILE] [--save FILE|-]
+//            [--write VBLANK:ADDR=HEX,...] [--video FILE] [--save FILE|-] [--coverage FILE]
 //
 // --vblanks and --starts end the run after that many VBlanks or program
 // starts; the log of the hardware touched goes to DIR/hw-log.txt. --shot
@@ -27,7 +27,8 @@
 // which then runs with the run's time; without it the clock is the host's.
 // --agent hands the run to another program through the socket at FD
 // (agent.cpp): it steps VBlanks, presses the pads, reads memory and frames.
-// --video writes the run's pictures and sound as an MP4 through ffmpeg, an
+// --coverage writes every recompiled function, with its module, address, instruction count and
+// whether it ran, when the run ends. --video writes the run's pictures and sound as an MP4 through ffmpeg, an
 // error that ends it included (movie.cpp).
 // --write sets memory at a VBlank-IN, as the agent's write does: a stage
 // select, say, given as data.
@@ -63,6 +64,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--starts") && more) cfg.stop_starts = std::atoi(argv[++i]);
         else if (!std::strcmp(a, "--trace")) cfg.trace = true;
         else if (!std::strcmp(a, "--peek") && more) cfg.peek = argv[++i];
+        else if (!std::strcmp(a, "--coverage") && more) cfg.coverage = argv[++i];
         else if (!std::strcmp(a, "--watch") && more) {
             const char* w = argv[++i];
             cfg.watch_lo = (uint32_t)std::strtoul(w, nullptr, 16);

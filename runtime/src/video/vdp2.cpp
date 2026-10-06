@@ -473,7 +473,8 @@ void vdp2_compose(Frame& f) {
                 int ratio = second_ratio ? u.ratio : t.ratio;
                 for (int sh = 16; sh >= 0; sh -= 8) {
                     int a = (int)(t.rgb >> sh & 0xFF), b = (int)(u.rgb >> sh & 0xFF);
-                    int c = add ? std::min(a + b, 255) : (a * (32 - ratio) + b * ratio) >> 5;
+                    // ratio 0 is 31:1, not 32:0: the second image always shows through a little
+                    int c = add ? std::min(a + b, 255) : (a * (31 - ratio) + b * (ratio + 1)) >> 5;
                     out |= (uint32_t)c << sh;
                 }
                 rgb = out;

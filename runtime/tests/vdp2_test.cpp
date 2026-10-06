@@ -104,10 +104,19 @@ TEST(colour_calculation_mixes_by_ratio) {
     red_screen();
     green_bitmap_nbg0();
     reg(0xEC, 0x0001);                           // CCCTL: NBG0
-    reg(0x108, 16);                              // CCRNA: NBG0 ratio 16 of 32
+    reg(0x108, 16);                              // CCRNA: NBG0 ratio 16, 15:17
     Frame f;
     vdp2_compose(f);
-    CHECK_EQ(at(f, 0, 0), 0x7C7C00);
+    CHECK_EQ(at(f, 0, 0), 0x837400);
+}
+
+TEST(colour_calculation_at_ratio_0_still_shows_the_second_image) {
+    red_screen();
+    green_bitmap_nbg0();
+    reg(0xEC, 0x0001);                           // CCCTL: NBG0, ratio 0
+    Frame f;
+    vdp2_compose(f);
+    CHECK_EQ(at(f, 0, 0), 0x07F000);
 }
 
 TEST(higher_priority_wins_and_nbg0_wins_ties) {
@@ -206,10 +215,10 @@ TEST(line_colour_is_the_second_image_where_lnclen_names_the_top) {
     line_colour_over_green();
     Frame f;
     vdp2_compose(f);
-    CHECK_EQ(at(f, 0, 0), 0x7C7C00);             // LNCLEN off: green with the red back screen
+    CHECK_EQ(at(f, 0, 0), 0x837400);             // LNCLEN off: green with the red back screen
     reg(0xE8, 0x0001);                           // LNCLEN: NBG0
     vdp2_compose(f);
-    CHECK_EQ(at(f, 0, 0), 0x007C7C);             // green with the blue line colour
+    CHECK_EQ(at(f, 0, 0), 0x007483);             // green with the blue line colour
 }
 
 TEST(line_colour_a_line) {
@@ -220,8 +229,8 @@ TEST(line_colour_a_line) {
     cram16(4, 0x001F);
     Frame f;
     vdp2_compose(f);
-    CHECK_EQ(at(f, 0, 0), 0x007C7C);
-    CHECK_EQ(at(f, 0, 1), 0x7C7C00);             // line 1: red
+    CHECK_EQ(at(f, 0, 0), 0x007483);
+    CHECK_EQ(at(f, 0, 1), 0x837400);             // line 1: red
 }
 
 // Green NBG1 mixed half and half over NBG0, whose bitmap is blue for x 0-9 and black from x 10.
@@ -233,7 +242,7 @@ void green_over_blue_then_black() {
     reg(0x78, 0x0001); reg(0x7C, 0x0001);        // ZMXIN0, ZMYIN0
     reg(0x88, 0x0001); reg(0x8C, 0x0001);        // ZMXIN1, ZMYIN1
     reg(0xF8, 0x0201);                           // PRINA: NBG1 2 over NBG0 1
-    reg(0x108, 0x1000);                          // CCRNA: NBG1 ratio 16 of 32
+    reg(0x108, 0x1000);                          // CCRNA: NBG1 ratio 16, 15:17
     for (int y = 0; y < 256; ++y)
         for (int x = 0; x < 512; ++x) g_vdp2_vram[y * 512 + x] = x < 10 ? 2 : 5;
     std::memset(g_vdp2_vram + 0x20000, 1, 512 * 256);
@@ -247,11 +256,11 @@ TEST(gradation_blurs_the_second_image_along_the_line) {
     reg(0xEC, 0x0002);                           // CCCTL: NBG1
     Frame f;
     vdp2_compose(f);
-    CHECK_EQ(at(f, 10, 0), 0x007C00);            // no gradation: half green, half black
+    CHECK_EQ(at(f, 10, 0), 0x007400);            // no gradation: half green, half black
     reg(0xEC, 0xA002);                           // CCCTL: BOKEN, BOKN NBG0, and NBG1
     vdp2_compose(f);
-    CHECK_EQ(at(f, 5, 0), 0x007C7C);             // all blue around it
-    CHECK_EQ(at(f, 10, 0), 0x007C3E);            // blue, blue, black: half blue
-    CHECK_EQ(at(f, 11, 0), 0x007C1F);            // blue, black, black: a quarter
-    CHECK_EQ(at(f, 12, 0), 0x007C00);
+    CHECK_EQ(at(f, 5, 0), 0x007483);             // all blue around it
+    CHECK_EQ(at(f, 10, 0), 0x007441);            // blue, blue, black: half blue
+    CHECK_EQ(at(f, 11, 0), 0x007420);            // blue, black, black: a quarter
+    CHECK_EQ(at(f, 12, 0), 0x007400);
 }

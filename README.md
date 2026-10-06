@@ -101,6 +101,24 @@ another, as `saturn-recomp/PRODUCT_VERSION/backup.bin` under `$XDG_DATA_HOME` (o
 `~/.local/share`), `~/Library/Application Support` or `%APPDATA%`. A test run should pass
 `--save -` or a file of its own, so it starts from no saves and leaves the player's alone.
 
+## Comparing with a reference emulator
+
+`python -m saturnrecomp.reference` plays a disc in a libretro core, headless, a frame at a time,
+with presses in `--input`'s syntax, and saves its pictures as `shot-N.png`. It is written for
+Beetle Saturn (Mednafen's Saturn), which needs the real BIOS: `--bios` names the folder holding
+`mpr-17933.bin` for a US or European disc. Build the core from
+github.com/libretro/beetle-saturn-libretro with `-D_LOW_ACCURACY_` taken out of its Makefile's
+`FLAGS`, which otherwise turns on a faster branch path upstream Mednafen does not have.
+
+```sh
+python -m saturnrecomp.reference mednafen_saturn_libretro.so --bios BIOS_DIR --cue GAME.cue \
+    --frames 3600 --input 3000:START,3010: --shot 3300,3400 --out ref/
+```
+
+The core's pictures are 330x240 for a 320x224 screen, with ours at x+5, y+8 inside them. Its frames
+do not line up with our VBlanks: the real BIOS boots first, and its CD reads take a drive's time, so
+the gap grows as a game reads the disc. Line the two up at a picture both reach, frame by frame.
+
 ## Checking a change
 
 `tools/check.sh` runs every check that needs no game data. It's the same thing CI runs on every

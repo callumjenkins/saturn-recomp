@@ -123,9 +123,19 @@ python -m saturnrecomp.reference mednafen_saturn_libretro.so --bios BIOS_DIR --c
     --frames 3600 --input 3000:START,3010: --shot 3300,3400 --out ref/
 ```
 
-The core's pictures are 330x240 for a 320x224 screen, with ours at x+5, y+8 inside them. Its frames
-do not line up with our VBlanks: the real BIOS boots first, and its CD reads take a drive's time, so
-the gap grows as a game reads the disc. Line the two up at a picture both reach, frame by frame.
+The core's pictures are 330x240 for a 320x224 screen, with ours at x+5, y+8 inside them. Only pad 1
+is plugged in unless `--pads 2` says otherwise, as in our runtime: a game can ask different
+questions with a second pad connected.
+
+The core's frames do not line up with our VBlanks. The real BIOS boots first, and its CD reads take
+a drive's time, so the gap grows each time a game reads the disc. A game's own count of its frames
+does line up, because it stops while the game loads. `reference.play_synced` places each press and
+shot of our run at the same value of that count, and as many frames into it as in ours, and
+`reference.difference` compares a frame with ours. A game repository traces its count through our
+run with the agent and gives the address; pc-saturnbomberman's `bomberman compare` does this.
+
+What is left after that is the game itself running differently. Some games run tasks on every
+VBlank while they load, so a longer load leaves their state a few frames further on.
 
 ## Checking a change
 

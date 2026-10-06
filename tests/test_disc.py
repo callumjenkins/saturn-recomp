@@ -123,3 +123,13 @@ def test_a_fingerprint_changes_with_any_of_the_images_files(tmp_path):
     (tmp_path / "b.bin").write_bytes(b"\x05\x06" * 2352)
     os.utime(tmp_path / "b.bin", ns=(1, 1))
     assert disc.fingerprint(cue) != before
+
+
+def test_the_same_disc_through_links_elsewhere_has_the_same_fingerprint(tmp_path):
+    (tmp_path / "discs").mkdir()
+    cue = image(tmp_path / "discs")
+    links = tmp_path / "checkout" / "iso"
+    links.mkdir(parents=True)
+    for f in os.listdir(tmp_path / "discs"):
+        (links / f).symlink_to(tmp_path / "discs" / f)
+    assert disc.fingerprint(str(links / "game.cue")) == disc.fingerprint(cue)

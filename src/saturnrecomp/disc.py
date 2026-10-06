@@ -367,8 +367,9 @@ def image_files(image):
 
 def fingerprint(image):
     """{file: [size, mtime in ns]} for each of the image's files: cheap to compare, to notice an
-    image replaced or changed since it was last checked."""
-    return {f: [st.st_size, st.st_mtime_ns] for f in image_files(image) for st in [os.stat(f)]}
+    image replaced or changed since it was last checked. Files are named by their real paths, so the
+    same disc reached through another folder of links has the same fingerprint."""
+    return {os.path.realpath(f): [st.st_size, st.st_mtime_ns] for f in image_files(image) for st in [os.stat(f)]}
 
 def _sha1(data):
     return hashlib.sha1(data).hexdigest()

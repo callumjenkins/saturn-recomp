@@ -80,7 +80,9 @@ bool host_open() {
     HOST_GL_FUNCS(HOST_GL_LOAD)
 #undef HOST_GL_LOAD
     if (!ok) return false;
-    SDL_GL_SetSwapInterval(1);
+    // host_pace keeps real time; a swap that waited for the display would stall the whole machine
+    // whenever the compositor stops sending frames, as KWin does for a window that is out of sight
+    SDL_GL_SetSwapInterval(0);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
     glCreateFramebuffers(1, &g_fbo);
     g_base = Clock::now();
@@ -204,6 +206,10 @@ static void events() {
 void host_present(const Frame& f) {
     if (!g_win) return;
     g_last = &f;
+    if (SDL_GetWindowFlags(g_win) & (SDL_WINDOW_MINIMIZED | SDL_WINDOW_OCCLUDED | SDL_WINDOW_HIDDEN)) {
+        events();
+        return;
+    }
     if (f.w != g_tex_w || f.h != g_tex_h) {
         if (g_tex) glDeleteTextures(1, &g_tex);
         glCreateTextures(GL_TEXTURE_2D, 1, &g_tex);

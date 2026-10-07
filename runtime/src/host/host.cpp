@@ -1,4 +1,4 @@
-// saturn-recomp runtime — the host: a window (SDL3, OpenGL 3.2) that shows each
+// saturn-recomp runtime — the host: a window (SDL3's renderer) that shows each
 // field VDP2 composes, the pad from the keyboard and a gamepad, the pace
 // and the audio stream.
 //
@@ -17,7 +17,7 @@
 //             east B, right shoulder C, west X, north Y, left shoulder Z, triggers L and R
 // unless the settings (settings.h) bind them otherwise.
 // F12 saves the picture (out/shot-VBLANK.png); F11 or Alt+Enter switches
-// fullscreen. Closing the window ends the run.
+// fullscreen. Closing the window, or Android's Back, ends the run.
 //
 // Sound (sound.cpp) comes as it is made, in virtual time, into an SDL audio
 // stream at 44 100 Hz: the window's pace keeps it level with the device.
@@ -31,32 +31,14 @@
 #include "pad_slots.h"
 #include "settings.h"
 #include <SDL3/SDL.h>
-#include <SDL3/SDL_opengl.h>               // GL's types and constants; its functions come from SDL_GL_GetProcAddress
 #include <algorithm>
 #include <chrono>
 #include <cstring>
 
-// OpenGL 3.2 core, the newest macOS gives; GL 1.1's names are declared by the header, hence the prefix
-#define HOST_GL_FUNCS(X)                                                                              \
-    X(void, Clear, (GLbitfield))                                                                       \
-    X(void, ClearColor, (GLfloat, GLfloat, GLfloat, GLfloat))                                          \
-    X(void, PixelStorei, (GLenum, GLint))                                                              \
-    X(void, GenTextures, (GLsizei, GLuint*))                                                           \
-    X(void, DeleteTextures, (GLsizei, const GLuint*))                                                  \
-    X(void, BindTexture, (GLenum, GLuint))                                                             \
-    X(void, TexImage2D, (GLenum, GLint, GLint, GLsizei, GLsizei, GLint, GLenum, GLenum, const void*))  \
-    X(void, TexSubImage2D, (GLenum, GLint, GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, const void*)) \
-    X(void, GenFramebuffers, (GLsizei, GLuint*))                                                       \
-    X(void, BindFramebuffer, (GLenum, GLuint))                                                         \
-    X(void, FramebufferTexture2D, (GLenum, GLenum, GLenum, GLuint, GLint))                             \
-    X(void, BlitFramebuffer, (GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield, GLenum))
-#define HOST_GL_DEFINE(R, n, args) static R(*host_gl##n) args;
-HOST_GL_FUNCS(HOST_GL_DEFINE)
-#undef HOST_GL_DEFINE
-
 static SDL_Window* g_win;
 static PadSlots g_slots(kHostSlots);
-static GLuint g_tex, g_fbo;
+static SDL_Renderer* g_ren;
+static SDL_Texture* g_tex;
 static int g_tex_w, g_tex_h;
 static uint16_t g_buttons[kHostSlots];
 static const Frame* g_last;
@@ -97,31 +79,24 @@ static void load_settings() {
 bool host_open() {
     if (g_cfg.headless) return true;
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD | SDL_INIT_AUDIO)) { sat_note("SDL: %s", SDL_GetError()); return false; }
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG);   // macOS needs it for a core context
-    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
     load_settings();
     int s = g_cfg.scale > 0 ? g_cfg.scale : g_settings.number("display", "scale");
     bool full = g_cfg.fullscreen || g_settings.flag("display", "fullscreen");
-    g_win = SDL_CreateWindow("saturn-recomp", 320 * s, 240 * s, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE |
-                             SDL_WINDOW_HIGH_PIXEL_DENSITY | (full ? SDL_WINDOW_FULLSCREEN : 0));
-    if (!g_win) { sat_note("SDL: %s", SDL_GetError()); return false; }
-    if (!SDL_GL_CreateContext(g_win)) { sat_note("SDL: no OpenGL 3.2 context: %s", SDL_GetError()); return false; }
-    bool ok = true;
-#define HOST_GL_LOAD(R, n, args)                                                    \
-    host_gl##n = reinterpret_cast<R(*) args>(SDL_GL_GetProcAddress("gl" #n));       \
-    if (!host_gl##n) { sat_note("OpenGL: no gl%s", #n); ok = false; }
-    HOST_GL_FUNCS(HOST_GL_LOAD)
-#undef HOST_GL_LOAD
-    if (!ok) return false;
-    // host_pace keeps real time; a swap that waited for the display would stall the whole machine
+#if defined(__ANDROID__)
+    // SDL picks the phone's orientation itself, from the window, over the manifest's
+    SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
+    full = true;
+#endif
+    if (!SDL_CreateWindowAndRenderer("saturn-recomp", 320 * s, 240 * s, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY |
+                                     (full ? SDL_WINDOW_FULLSCREEN : 0), &g_win, &g_ren)) {
+        sat_note("SDL: %s", SDL_GetError());
+        return false;
+    }
+    sat_note("SDL: drawing with %s", SDL_GetRendererName(g_ren));
+    // host_pace keeps real time; a present that waited for the display would stall the whole machine
     // whenever the compositor stops sending frames, as KWin does for a window that is out of sight
-    SDL_GL_SetSwapInterval(0);
+    SDL_SetRenderVSync(g_ren, 0);
     if (!g_cfg.virtual_input.empty()) virtual_open();
-    host_glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-    host_glGenFramebuffers(1, &g_fbo);
     g_base = Clock::now();
     g_paced = !g_cfg.realtime;
     return true;
@@ -357,6 +332,7 @@ static void events() {
             break;
         case SDL_EVENT_KEY_DOWN:
             if (e.key.repeat) break;
+            if (e.key.scancode == SDL_SCANCODE_AC_BACK) sat_stop("Back was pressed");     // Android's Back
             if (e.key.scancode == SDL_SCANCODE_F12) save_shot();
             if (e.key.scancode == SDL_SCANCODE_F11 || (e.key.scancode == SDL_SCANCODE_RETURN && (e.key.mod & SDL_KMOD_ALT)))
                 SDL_SetWindowFullscreen(g_win, !(SDL_GetWindowFlags(g_win) & SDL_WINDOW_FULLSCREEN));
@@ -374,34 +350,29 @@ void host_present(const Frame& f) {
         return;
     }
     if (f.w != g_tex_w || f.h != g_tex_h) {
-        if (g_tex) host_glDeleteTextures(1, &g_tex);
-        host_glGenTextures(1, &g_tex);
-        host_glBindTexture(GL_TEXTURE_2D, g_tex);
-        host_glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, f.w, f.h, 0, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, nullptr);
-        host_glBindFramebuffer(GL_READ_FRAMEBUFFER, g_fbo);
-        host_glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, g_tex, 0);
+        if (g_tex) SDL_DestroyTexture(g_tex);
+        g_tex = SDL_CreateTexture(g_ren, SDL_PIXELFORMAT_XRGB8888, SDL_TEXTUREACCESS_STREAMING, f.w, f.h);
+        if (!g_tex) sat_fatal("SDL: no %dx%d texture: %s", f.w, f.h, SDL_GetError());
+        SDL_SetTextureScaleMode(g_tex, SDL_SCALEMODE_LINEAR);
         g_tex_w = f.w;
         g_tex_h = f.h;
     }
-    host_glBindTexture(GL_TEXTURE_2D, g_tex);
-    host_glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, f.w, f.h, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, f.px.data());
+    SDL_UpdateTexture(g_tex, nullptr, f.px.data(), f.w * 4);
     int ww = 0, wh = 0;
-    SDL_GetWindowSizeInPixels(g_win, &ww, &wh);
-    host_glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-    host_glClearColor(0, 0, 0, 1);
-    host_glClear(GL_COLOR_BUFFER_BIT);
+    SDL_GetCurrentRenderOutputSize(g_ren, &ww, &wh);
+    SDL_SetRenderDrawColor(g_ren, 0, 0, 0, 255);
+    SDL_RenderClear(g_ren);
     // the TV's 4:3 screen, as large as the window allows, centred; a PAL TV
     // shows 256 lines, and a 224-line picture has a border above and below
     int sw = ww, sh = ww * 3 / 4;
     if (sh > wh) { sh = wh; sw = wh * 4 / 3; }
     int tv_lines = bios_pal() ? std::max(256, f.h) : f.h;
     int ph = sh * f.h / tv_lines;
-    int dx = (ww - sw) / 2, dy = (wh - ph) / 2;
-    host_glBindFramebuffer(GL_READ_FRAMEBUFFER, g_fbo);
-    host_glBlitFramebuffer(0, 0, f.w, f.h, dx, dy + ph, dx + sw, dy, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+    SDL_FRect dst = {(float)((ww - sw) / 2), (float)((wh - ph) / 2), (float)sw, (float)ph};
+    SDL_RenderTexture(g_ren, g_tex, nullptr, &dst);
     {
-        HostCall in("SDL_GL_SwapWindow");
-        SDL_GL_SwapWindow(g_win);
+        HostCall in("SDL_RenderPresent");
+        SDL_RenderPresent(g_ren);
     }
     events();
 }

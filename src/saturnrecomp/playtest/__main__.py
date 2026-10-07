@@ -57,7 +57,7 @@ def bundle(game, ident, out):
     """What the launcher reads beside it: the game, the build, where to send sessions, and the disc it plays."""
     os.makedirs(out, exist_ok=True)
     info = {"name": game.name, "product": game.playtest.product, "build": ident, "endpoint": game.playtest.endpoint,
-            "repo": game.playtest.repo, "args": game.playtest.args}
+            "repo": game.playtest.repo, "args": game.playtest.args, "boxart": game.playtest.boxart}
     json.dump(info, open(os.path.join(out, "playtest.json"), "w"), indent=1)
     shutil.copy(game.playtest.disc, os.path.join(out, "disc.json"))
 

@@ -4,12 +4,18 @@
 #     release:
 #       uses: callumjenkins/saturn-recomp/.github/workflows/playtest-release.yml@main
 #       with: { build: "${{ inputs.build }}" }
-#       secrets: { ci_token: "${{ secrets.PLAYTEST_CI_TOKEN }}" }
+#       secrets:
+#         ci_token: "${{ secrets.PLAYTEST_CI_TOKEN }}"
+#         android_keystore: "${{ secrets.PLAYTEST_ANDROID_KEYSTORE }}"
+#         android_keystore_password: "${{ secrets.PLAYTEST_ANDROID_KEYSTORE_PASSWORD }}"
 #       permissions: { contents: write }
 #
 # CI never sees the disc. `python -m saturnrecomp.playtest GAME.toml publish` sends the generated C++
 # to the playtest Worker and starts this; each platform compiles it against the runtime with SDL3
-# linked in, and VDP1 by saturn-recomp's own rules, so the release is MIT rather than GPL.
+# linked in, and VDP1 by saturn-recomp's own rules, so the release is MIT rather than GPL. Android gets an
+# APK (playtest/android), signed with the game's keystore: the base64 of a keystore whose key is "playtest".
+# Android installs a build over the last only when the same key signed both; without the keystore each
+# APK is signed with a key of its own, and a tester has to uninstall, losing their saves, to update.
 name: playtest-release
 
 on:
@@ -26,9 +32,15 @@ on:
     secrets:
       ci_token:
         required: true
+      android_keystore:
+        required: false
+      android_keystore_password:
+        required: false
 
 env:
   SDL_TAG: release-3.4.18
+  NDK_VERSION: 30.0.16248370
+  GRADLE_VERSION: 9.7.1
   BUILD: ${{ inputs.build }}
   CONFIG: ${{ inputs.config }}
 
@@ -109,8 +121,93 @@ jobs:
           name: ${{ matrix.platform }}
           path: ${{ runner.temp }}/release/*.zip
 
+  android:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
+      - name: Install the Python tools
+        run: pip install ./saturn-recomp ninja
+      - name: Install the NDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;$NDK_VERSION" "platforms;android-36" "build-tools;36.0.0" > /dev/null
+          echo "NDK=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+      - name: Read the game's product
+        id: game
+        run: echo "product=$(python -m saturnrecomp.playtest "$CONFIG" product)" >> "$GITHUB_OUTPUT"
+      - name: Build SDL3, shared, as SDL's Java side loads it
+        run: |
+          git clone --depth 1 --branch "$SDL_TAG" https://github.com/libsdl-org/SDL.git "$RUNNER_TEMP/sdl-src"
+          cmake -S "$RUNNER_TEMP/sdl-src" -B "$RUNNER_TEMP/sdl-build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-26 \
+            -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TEST_LIBRARY=OFF -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/sdl"
+          cmake --build "$RUNNER_TEMP/sdl-build"
+          cmake --install "$RUNNER_TEMP/sdl-build"
+      - name: Fetch the generated C++
+        env:
+          CI_TOKEN: ${{ secrets.ci_token }}
+        run: |
+          endpoint=$(python -c "import sys; from saturnrecomp import config; print(config.load(sys.argv[1]).playtest.endpoint)" "$CONFIG")
+          curl --fail --silent --show-error -H "Authorization: Bearer $CI_TOKEN" \
+            "$endpoint/api/sources/${{ steps.game.outputs.product }}/$BUILD" -o "$RUNNER_TEMP/sources.tar.gz"
+          python -c "import sys, tarfile; tarfile.open(sys.argv[1]).extractall(sys.argv[2], filter='data')" \
+            "$RUNNER_TEMP/sources.tar.gz" "$RUNNER_TEMP/gen"
+      - name: Compile the game
+        run: |
+          cmake -S "$RUNNER_TEMP/gen/recomp" -B "$RUNNER_TEMP/game" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-26 \
+            -DSATURN_RUNTIME="$PWD/saturn-recomp/runtime" -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/sdl" -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH
+          ninja -C "$RUNNER_TEMP/game" saturn
+          strip="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+          mkdir -p "$RUNNER_TEMP/native/arm64-v8a"
+          "$strip" -o "$RUNNER_TEMP/native/arm64-v8a/libmain.so" "$RUNNER_TEMP/game/libmain.so"
+          "$strip" -o "$RUNNER_TEMP/native/arm64-v8a/libSDL3.so" "$RUNNER_TEMP/sdl/lib/libSDL3.so"
+      - name: Package the app
+        env:
+          KEYSTORE: ${{ secrets.android_keystore }}
+          KEYSTORE_PASSWORD: ${{ secrets.android_keystore_password }}
+        run: |
+          python -m saturnrecomp.playtest "$CONFIG" bundle "$BUILD" "$RUNNER_TEMP/bundle"
+          name=$(python -c "import json, sys; print(json.load(open(sys.argv[1]))['name'])" "$RUNNER_TEMP/bundle/playtest.json")
+          # one application id a game, so two games install side by side
+          id=$(python -c "import re, sys; print('org.saturnrecomp.playtest.g' + re.sub('[^a-z0-9]', '_', sys.argv[1].lower()))" "${{ steps.game.outputs.product }}")
+          gradle -p saturn-recomp/playtest/android --no-daemon assembleRelease \
+            -Pplaytest.bundle="$RUNNER_TEMP/bundle" -Pplaytest.native="$RUNNER_TEMP/native" \
+            -Psdl.java="$RUNNER_TEMP/sdl-src/android-project/app/src/main/java" \
+            -Pplaytest.id="$id" -Pplaytest.name="$name" -Pplaytest.build="$BUILD"
+          tools="$ANDROID_HOME/build-tools/36.0.0"
+          "$tools/zipalign" -P 16 -f 4 saturn-recomp/playtest/android/app/build/outputs/apk/release/app-release-unsigned.apk \
+            "$RUNNER_TEMP/aligned.apk"
+          if [ -n "$KEYSTORE" ]; then
+            echo "$KEYSTORE" | base64 -d > "$RUNNER_TEMP/playtest.jks"
+          else
+            echo "::warning::no android_keystore secret: the APK is signed with a key of its own, and testers must uninstall to update"
+            KEYSTORE_PASSWORD=$(python -c "import secrets; print(secrets.token_urlsafe(24))")
+            keytool -genkeypair -keystore "$RUNNER_TEMP/playtest.jks" -storetype PKCS12 -alias playtest -keyalg RSA -keysize 2048 \
+              -validity 10000 -storepass "$KEYSTORE_PASSWORD" -keypass "$KEYSTORE_PASSWORD" -dname "CN=saturn-recomp playtest"
+          fi
+          export KEYSTORE_PASSWORD
+          mkdir -p "$RUNNER_TEMP/release"
+          "$tools/apksigner" sign --ks "$RUNNER_TEMP/playtest.jks" --ks-key-alias playtest --ks-pass env:KEYSTORE_PASSWORD \
+            --out "$RUNNER_TEMP/release/playtest-$BUILD-android-arm64.apk" "$RUNNER_TEMP/aligned.apk"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: android-arm64
+          path: ${{ runner.temp }}/release/*.apk
+
   release:
-    needs: build
+    needs: [build, android]
     # A platform that failed to build is left out rather than holding back the others.
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
@@ -133,10 +230,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           CI_TOKEN: ${{ secrets.ci_token }}
         run: |
-          ls zips/*.zip
+          ls zips
           read -r endpoint product < <(python -c "import sys; from saturnrecomp import config; g = config.load(sys.argv[1]); print(g.playtest.endpoint, g.playtest.product)" "$CONFIG")
           tag="playtest-$BUILD"
-          gh release create "$tag" zips/*.zip --prerelease --title "Playtest build $BUILD" \
+          gh release create "$tag" zips/* --prerelease --title "Playtest build $BUILD" \
             --notes-file saturn-recomp/playtest/README.txt
           url="https://github.com/${{ github.repository }}/releases/tag/$tag"
           curl --fail --silent --show-error -X PUT -H "Authorization: Bearer $CI_TOKEN" -H "content-type: application/json" \

@@ -17,11 +17,21 @@ Getting started
    your computer.
 4. Press Play. "My sessions" opens your page.
 
+On Android
+
+Install the .apk from the release. Android asks you to allow installs from your browser or file
+manager the first time. You need a phone with a 64-bit ARM chip, which nearly every phone from the
+last few years has, and a controller: Bluetooth or USB, as there are no on-screen buttons yet.
+
+"Choose files" copies your disc into the app, so pick every file it is made of at once (the .cue
+and all its .bin files), or a single .iso, .bin or .zip. "From a URL" downloads it. Either way it
+takes about 600 MB on the phone. Back quits the game and sends the session.
+
 What is recorded
 
 The buttons you press and when, the clock the game started with, your saves as they were when the
 session began, the game's log, and which parts of the game's code ran. That is enough to play your
-session again exactly, which is how a crash gets looked into. Nothing else on your computer is read.
+session again exactly, which is how a crash gets looked into. Nothing else on your computer or phone is read.
 
 If the game stops
 

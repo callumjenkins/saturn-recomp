@@ -32,6 +32,7 @@
     disc = "disc.json"              # the supported disc's manifest (saturnrecomp.disc --manifest)
     coverage = ["build/test/*/coverage.txt"]   # the runs a session's new code is measured against
     args = []                       # saturn arguments every session plays with
+    boxart = "https://..."          # the box art the Android app shows, fetched by the app, never bundled
 
 An address is a number or a name from [symbols]. Paths are relative to the file.
 """
@@ -65,6 +66,7 @@ class Playtest:
     disc: str
     coverage: list[str] = field(default_factory=list)
     args: list[str] = field(default_factory=list)
+    boxart: str = ""
 
     @property
     def manifest(self):
@@ -139,7 +141,8 @@ def load(path):
     if "playtest" in t:
         p = t["playtest"]
         playtest = Playtest(p["endpoint"].rstrip("/"), p["repo"], os.path.join(root, p.get("disc", "disc.json")),
-                            [os.path.join(root, g) for g in p.get("coverage", [])], list(p.get("args", [])))
+                            [os.path.join(root, g) for g in p.get("coverage", [])], list(p.get("args", [])),
+                            p.get("boxart", ""))
     return Game(game.get("name", os.path.basename(root)), root, os.path.join(root, game.get("build", "build")),
                 os.path.join(root, game.get("seeds", "seeds.json")), modules, symbols, tasks, hooks,
                 list(game.get("cmake", [])), playtest)

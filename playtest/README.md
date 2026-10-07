@@ -3,9 +3,10 @@
 Builds of a game for other people to play, with every session sent back for review. It works for
 any game on saturn-recomp that adds a `[playtest]` table to its `game.toml`.
 
-- **The tester** downloads a release from the game's GitHub releases and runs the launcher. The
-  launcher checks their disc, plays the game and sends the session to the playtest Worker every 10
-  minutes and when it ends. Their sessions page shows each review once it's done.
+- **The tester** downloads a release from the game's GitHub releases and runs the launcher, or
+  installs the Android app (`android/`). Either one checks their disc, plays the game and sends
+  the session to the playtest Worker every 10 minutes and when it ends. Their sessions page shows
+  each review once it's done.
 - **The Worker** (`worker/`) is one Cloudflare Worker for every game, with sessions in D1 and their
   files in R2, keyed by the disc's product (`MK-81070_V1.003`).
 - **The maintainer** runs `python -m saturnrecomp.playtest GAME.toml ...` to invite testers,
@@ -46,7 +47,18 @@ In the game's repository:
 1. Add `[playtest]` to `game.toml` with the Worker's URL (`saturnrecomp.config` documents it).
 2. Add `.github/workflows/playtest.yml`, which calls `playtest-release.yml` here. pc-saturnbomberman has one to copy.
 3. Set the repository secret `PLAYTEST_CI_TOKEN` to the Worker's `CI_TOKEN`.
-4. Run `python -m saturnrecomp.playtest game.toml register`.
+4. Make a keystore for the Android app and set `PLAYTEST_ANDROID_KEYSTORE` to its base64 and
+   `PLAYTEST_ANDROID_KEYSTORE_PASSWORD` to its password. Android installs a build over the last only
+   when the same key signed both, so keep the keystore: without it, testers have to uninstall, and
+   lose their saves, to update.
+
+   ```sh
+   keytool -genkeypair -keystore playtest.jks -storetype PKCS12 -alias playtest -keyalg RSA \
+     -keysize 4096 -validity 10000 -dname "CN=saturn-recomp playtest"
+   base64 -w0 playtest.jks | gh secret set PLAYTEST_ANDROID_KEYSTORE
+   gh secret set PLAYTEST_ANDROID_KEYSTORE_PASSWORD
+   ```
+5. Run `python -m saturnrecomp.playtest game.toml register`.
 
 ## The loop
 
@@ -62,8 +74,21 @@ python -m saturnrecomp.playtest game.toml reviewed ID @summary.txt
 
 `publish` sends the generated C++ to R2 and starts the release workflow through `gh`. The workflow
 compiles that C++ against this runtime on Linux, Windows and macOS, packages the launcher with
-PyInstaller and makes a GitHub prerelease tagged `playtest-BUILD`. Then it tells the Worker, and the
+PyInstaller, builds the Android app for arm64 and makes a GitHub prerelease tagged `playtest-BUILD`. Then it tells the Worker, and the
 launchers of older builds point their testers at the new one. CI never sees the disc.
+
+## The Android app
+
+`android/` is a Gradle project that builds one app per game, with its own application id, from the
+same `playtest.json` and `disc.json` as the desktop launcher. The launcher activity is Kotlin and
+mirrors the desktop launcher, the disc check included. The game runs in SDL's activity in a process
+of its own, as `libmain.so`. That activity sends the session while it plays, and the launcher
+finishes and sends it once the game's process has gone. Back quits the game. The phone needs a
+controller for now. `app/build.gradle.kts` lists the properties the workflow builds it with.
+
+`DiscTest` checks the Kotlin disc check against a real disc. It runs only when `SATURN_CUE` and
+`SATURN_DISC_JSON` name the disc and the game's `disc.json`, with `gradle testDebugUnitTest` and the
+same `-P` properties as a build.
 
 A session counts as ready for review once it has ended, or once it has sent nothing for 30 minutes,
 which is what happens when the launcher is killed along with the game.

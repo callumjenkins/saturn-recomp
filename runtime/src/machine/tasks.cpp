@@ -3,9 +3,10 @@
 // Some kernels run cooperative tasks, each on its own stack: a task saves its
 // registers with setjmp and longjmps into another's saved ones. Recompiled code
 // keeps the SH-2 call chain on the host stack, so each task runs here on its
-// own host fiber (ucontext, or a Windows fiber) on the master's thread. The build hooks the first
-// instruction of both functions (recomp --hook); `--tasks SETJMP:LONGJMP`
-// tells the runtime which they are.
+// own host fiber (a minicoro coroutine) on the master's thread, the program's
+// first task included (tasks_run); the master's own stack only switches
+// between them. The build hooks the first instruction of both functions
+// (recomp --hook); `--tasks SETJMP:LONGJMP` tells the runtime which they are.
 //
 // setjmp records the buffer as the running fiber's, with the r15 and PR it
 // saves. longjmp marks a switch to the buffer's fiber. The switch happens where
@@ -14,43 +15,38 @@
 // there and the buffer's fiber resumes, or a new fiber starts at the restored
 // PC when no fiber saved that buffer with those registers (a task the kernel
 // built by hand). A fiber resumed where it parked returns from that call as if
-// nothing happened; resumed anywhere else, its host stack unwinds to its base
-// loop (TaskUnwind), which goes on at the new PC. The master's base loop is
-// saturn_main's.
+// nothing happened. A fiber to be resumed anywhere else starts over at the new
+// PC on the same stack, which is dropped rather than unwound: it holds only
+// recompiled code's frames and the runtime's calls into it, with nothing to
+// destroy, and an unwind costs far more than a switch where the unwinder
+// parses DWARF on every throw (Android's).
 //
 // Only the master's tasks are handled, and never from inside an interrupt.
-#if defined(__APPLE__)
-#define _XOPEN_SOURCE 600                   // macOS declares the ucontext calls only under it
-#endif
 #include "saturn.h"
 #include <exception>
 #include <map>
 #include <memory>
 #include <vector>
-#if defined(_WIN32)
-#define NOMINMAX
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>                        // fibers stand in for ucontext
-#else
-#include <ucontext.h>
-#endif
+#define MINICORO_IMPL
+#include "minicoro.h"
 
 namespace {
 
+void fiber_main(mco_coro*);
+
+// The master's own stack has no coroutine: switches between fibers go through it (switch_to).
 struct Fiber {
-#if defined(_WIN32)
-    void* handle = nullptr;
-#else
-    ucontext_t ctx;
-    std::vector<char> stack;
-#endif
+    mco_coro* co = nullptr;
     uint32_t start = 0;
+    uint32_t expected = ~0u;                 // where it goes on if resumed where it parked; ~0u: nowhere
+    ~Fiber() { if (co) mco_destroy(co); }
 };
 
 struct Saved { Fiber* fiber; uint32_t r15, pr; };
 
 Fiber g_main;
 Fiber* g_cur = &g_main;
+Fiber* g_next;                               // where a fiber that yields asked to go
 std::vector<std::unique_ptr<Fiber>> g_fibers;
 std::map<uint32_t, Saved> g_saved;          // jmp_buf address -> who saved it, with what
 bool g_pending;
@@ -58,24 +54,29 @@ uint32_t g_buf;
 std::exception_ptr g_exc;                    // raised in a fiber, for the master's loop
 const size_t kStack = 4u << 20;
 
+// minicoro's coroutines only resume and yield, so a fiber yields to the master's stack, which resumes the next.
 void switch_to(Fiber* t) {
-    Fiber* me = g_cur;
-    g_cur = t;
-#if defined(_WIN32)
-    (void)me;
-    SwitchToFiber(t->handle);
-#else
-    swapcontext(&me->ctx, &t->ctx);
-#endif
-    if (me == &g_main && g_exc) {
+    if (g_cur != &g_main) {
+        g_next = t;
+        mco_yield(g_cur->co);
+        return;
+    }
+    while (t != &g_main) {
+        g_cur = t;
+        if (mco_resume(t->co) != MCO_SUCCESS) sat_fatal("tasks: the fiber from %08X cannot resume", t->start);
+        t = g_next;
+    }
+    g_cur = &g_main;
+    if (g_exc) {
         std::exception_ptr e = g_exc;
         g_exc = nullptr;
         std::rethrow_exception(e);
     }
 }
 
-void fiber_main() {
+void fiber_main(mco_coro*) {
     Fiber* me = g_cur;
+    me->expected = ~0u;
     uint32_t pc = me->start;
     try {
         for (;;) {
@@ -95,22 +96,20 @@ void fiber_main() {
     }
 }
 
+// Starts `t` over at `pc`, dropping whatever its stack held.
+void restart(Fiber* t, uint32_t pc) {
+    t->start = pc;
+    mco_desc desc = mco_desc_init(fiber_main, kStack);
+    if (mco_uninit(t->co) != MCO_SUCCESS || mco_init(t->co, &desc) != MCO_SUCCESS)
+        sat_fatal("tasks: the fiber cannot start over at %08X", pc);
+}
+
 Fiber* new_fiber(uint32_t pc) {
     auto f = std::make_unique<Fiber>();
     f->start = pc;
-#if defined(_WIN32)
-    if (!g_main.handle && !(g_main.handle = ConvertThreadToFiber(nullptr)))
-        sat_fatal("tasks: the master's thread cannot become a fiber (%lu)", GetLastError());
-    f->handle = CreateFiber(kStack, [](void*) { fiber_main(); }, nullptr);
-    if (!f->handle) sat_fatal("tasks: no fiber for %08X (%lu)", pc, GetLastError());
-#else
-    f->stack.resize(kStack);
-    getcontext(&f->ctx);
-    f->ctx.uc_stack.ss_sp = f->stack.data();
-    f->ctx.uc_stack.ss_size = f->stack.size();
-    f->ctx.uc_link = nullptr;
-    makecontext(&f->ctx, fiber_main, 0);
-#endif
+    mco_desc desc = mco_desc_init(fiber_main, kStack);
+    if (mco_result r = mco_create(&f->co, &desc); r != MCO_SUCCESS)
+        sat_fatal("tasks: no fiber for %08X: %s", pc, mco_result_description(r));
     g_fibers.push_back(std::move(f));
     sat_trace("task: a fiber starts at %08X (r15 %08X)", pc, g_master.r[15]);
     return g_fibers.back().get();
@@ -143,9 +142,13 @@ void tasks_route(SH2Context& c, uint32_t expected) {
     if (it != g_saved.end() && it->second.r15 == c.r[15] && it->second.pr == c.pc) t = it->second.fiber;
     if (!t) t = new_fiber(c.pc);
     if (t == g_cur) throw TaskUnwind{c.pc};
+    if (t->expected != c.pc) restart(t, c.pc);
+    g_cur->expected = expected;
     switch_to(t);
-    if (c.pc == expected) return;
-    throw TaskUnwind{c.pc};
+}
+
+void tasks_run(uint32_t entry) {
+    switch_to(new_fiber(entry));
 }
 
 void tasks_reset() {

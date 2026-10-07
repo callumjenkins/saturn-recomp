@@ -521,9 +521,11 @@ int saturn_main(const SaturnConfig& cfg) {
     sat_note("boot: %s at %08X", m->name, entry);
     if (cfg.task_setjmp) tasks_configure(cfg.task_setjmp, cfg.task_longjmp);
     else if (g_sh2_tasks[0]) tasks_configure(g_sh2_tasks[0], g_sh2_tasks[1]);
+    bool tasks = cfg.task_setjmp || g_sh2_tasks[0];
     if (cfg.agent_fd < 0) std::thread(watch_for_stalls).detach();
     for (;;) {
         try {
+            if (tasks) tasks_run(entry);
             SH2Func f = sh2_lookup(entry);
             if (!f) sat_fatal("no function at %08X", entry);
             f(g_master);

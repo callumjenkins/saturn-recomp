@@ -3,7 +3,7 @@
 #   saturn_stub     no hardware: tests that only call the game's own code
 #   saturn_machine  the Saturn: machine, BIOS, SCU, SMPC, CD block, on-chip, VDP1, VDP2, the
 #                   SCSP and its 68000; no SDL
-#   saturn_host     the window, the pad, the pace and the audio stream (SDL3, OpenGL 4.5); without
+#   saturn_host     the window, the pad, the pace and the audio stream (SDL3); without
 #                   SDL3, or with -DSATURN_NO_SDL=ON, a host for headless runs only
 #   saturn_m68k     Musashi, the 68000 (third_party/musashi, C)
 # A target links saturn_core, then saturn_stub or saturn_machine with saturn_host, then recomp.
@@ -38,6 +38,7 @@ set(_m68k ${_rt}/third_party/musashi)
 add_library(saturn_m68k STATIC
     ${_m68k}/m68kcpu.c ${_m68k}/m68kops.c ${_m68k}/m68kdasm.c ${_m68k}/softfloat/softfloat.c)
 target_include_directories(saturn_m68k PUBLIC ${_m68k})
+target_include_directories(saturn_machine PRIVATE ${_rt}/third_party/minicoro)
 target_compile_options(saturn_m68k PRIVATE -w)
 target_link_libraries(saturn_machine PUBLIC saturn_m68k)
 foreach(t saturn_core saturn_stub saturn_machine saturn_host)

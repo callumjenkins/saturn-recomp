@@ -7,6 +7,7 @@
 //            [--watch-vblanks FROM:TO] [--wav FILE] [--interp] [--hook ADDR:rN=VALUE ...]
 //            [--tasks SETJMP:LONGJMP] [--multitap N] [--clock YYYY-MM-DDTHH:MM:SS] [--agent FD]
 //            [--write VBLANK:ADDR=HEX,...] [--video FILE] [--save FILE|-] [--coverage FILE] [--checkpoint SECONDS]
+//            [--log FILE]
 //
 // --vblanks and --starts end the run after that many VBlanks or program
 // starts; the log of the hardware touched goes to DIR/hw-log.txt. --shot
@@ -37,10 +38,14 @@
 // keeps them for the run alone, starting empty. Without it they go to
 // saturn-recomp/PRODUCT_VERSION/backup.bin in the user's data directory
 // ($XDG_DATA_HOME or ~/.local/share, ~/Library/Application Support, %APPDATA%).
+// --log writes what would go to stdout and stderr to FILE instead, for a host that shows neither (Android).
 #include "saturn.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#if defined(__ANDROID__)
+#include <SDL3/SDL_main.h>                   // SDL's Java side starts the run through SDL_main
+#endif
 
 // YYYY-MM-DDTHH:MM:SS as seconds since 1970, no time zone; -1 if it does not parse.
 static int64_t clock_seconds(const char* s) {
@@ -67,6 +72,12 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--peek") && more) cfg.peek = argv[++i];
         else if (!std::strcmp(a, "--coverage") && more) cfg.coverage = argv[++i];
         else if (!std::strcmp(a, "--checkpoint") && more) cfg.checkpoint = std::atoi(argv[++i]);
+        else if (!std::strcmp(a, "--log") && more) {
+            const char* log = argv[++i];
+            if (!std::freopen(log, "a", stdout) || !std::freopen(log, "a", stderr)) return 2;
+            std::setvbuf(stdout, nullptr, _IONBF, 0);
+            std::setvbuf(stderr, nullptr, _IONBF, 0);       // a stream reopened on a file may come back buffered (bionic's does)
+        }
         else if (!std::strcmp(a, "--watch") && more) {
             const char* w = argv[++i];
             cfg.watch_lo = (uint32_t)std::strtoul(w, nullptr, 16);
@@ -117,7 +128,7 @@ int main(int argc, char** argv) {
                                  "             [--record-input FILE] [--shot N,...] [--dump N,...] [--peek ADDR[:WORDS],...] [--watch LO:HI]\n"
                                  "             [--wav FILE] [--hook ADDR:rN=VALUE ...] [--tasks SETJMP:LONGJMP] [--multitap N]\n"
                                  "             [--clock YYYY-MM-DDTHH:MM:SS] [--agent FD] [--write VBLANK:ADDR=HEX,...] [--video FILE]\n"
-                                 "             [--save FILE|-] [--coverage FILE] [--checkpoint SECONDS]\n");
+                                 "             [--save FILE|-] [--coverage FILE] [--checkpoint SECONDS] [--log FILE]\n");
             return 2;
         }
     }

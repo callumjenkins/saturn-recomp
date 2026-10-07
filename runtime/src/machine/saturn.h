@@ -145,7 +145,8 @@ void cd_audio_sample(int16_t lr[2]);                 // CD-DA at 44 100 Hz, to t
 struct TaskUnwind { uint32_t pc; };   // a fiber's host stack unwinds to its base loop, to go on at pc
 void tasks_configure(uint32_t setjmp_addr, uint32_t longjmp_addr);
 bool tasks_pending();               // a longjmp ran and its switch has not happened yet
-void tasks_route(SH2Context& c, uint32_t expected);   // switch; returns only if resumed at expected
+void tasks_route(SH2Context& c, uint32_t expected);   // switch; returns once resumed, at expected
+void tasks_run(uint32_t entry);      // the program from entry as the first task; ends only by an exception
 void tasks_reset();                 // a program start: no tasks
 
 // ---- SH7604 on-chip (onchip.cpp) ------------------------------------------------------

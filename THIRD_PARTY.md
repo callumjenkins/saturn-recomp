@@ -41,6 +41,14 @@ and `softfloat.h`, kept there unchanged: derivative works are acceptable,
 even commercial ones, so long as the source says it is derivative and keeps
 those paragraphs.
 
+## minicoro (the game's tasks) — MIT No Attribution, with MIT parts
+
+`runtime/third_party/minicoro/minicoro.h`: minicoro 0.2.0 by Eduardo
+Bart, as of commit 02dad0f8 on GitHub, unchanged. The file is under the
+choice of public domain or MIT No Attribution, both at its end. Its assembly
+context switches are taken from Mike Pall's LuaCoco, under the MIT licence
+quoted beside them in the file.
+
 ## MAME's SCSP (the envelope, the LFOs, FM, the DSP) — BSD-3-Clause
 
 `runtime/scsp.cpp` is saturn-recomp's own code, but its envelope times and key

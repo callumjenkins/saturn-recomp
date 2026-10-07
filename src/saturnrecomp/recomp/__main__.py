@@ -218,8 +218,13 @@ target_compile_options(recomp PRIVATE -Wno-unused-label -Wno-tautological-compar
 include(${{SATURN_RUNTIME}}/runtime.cmake)
 add_executable(selftest ${{SATURN_RUNTIME}}/src/app/selftest.cpp)
 target_link_libraries(selftest saturn_core saturn_stub recomp)
-# the Saturn: boots a disc into these modules
-add_executable(saturn ${{SATURN_RUNTIME}}/src/app/main.cpp)
+# the Saturn: boots a disc into these modules; on Android, the libmain.so SDL's Java side loads
+if(ANDROID)
+  add_library(saturn SHARED ${{SATURN_RUNTIME}}/src/app/main.cpp)
+  set_target_properties(saturn PROPERTIES OUTPUT_NAME main)
+else()
+  add_executable(saturn ${{SATURN_RUNTIME}}/src/app/main.cpp)
+endif()
 target_link_libraries(saturn saturn_core saturn_machine saturn_host recomp Threads::Threads)
 # a project can add its own targets (the game) with -DSATURN_EXTRA=file.cmake
 if(DEFINED SATURN_EXTRA)

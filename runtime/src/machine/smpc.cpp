@@ -6,11 +6,14 @@
 // INTBACK answers with the status (time, area, system state) and/or the
 // peripheral data, and raises the SMPC interrupt at the next poll; the
 // peripheral data comes when the program asks to continue (inverts IREG0 bit 7), 32
-// bytes at a time, SR.PDE set while more is left. Port 1 has a standard
-// digital pad, pressed by a script (--input) and by the host's keyboard and
-// gamepad (host.cpp), port 2 nothing; with --multitap 1 port 1 has a 6-player
-// multitap instead, with --multitap 2 both ports do, every connector holding a
-// pad (the host's is the first). A port IREG1 sets to 0-byte mode returns
+// bytes at a time, SR.PDE set while more is left. Each port holds a standard
+// digital pad, or with --multitap a 6-player multitap (1: port 1's, 2: both),
+// every connector holding a pad. The players are numbered across the ports in
+// order: without a multitap pad 2 is port 2's, with --multitap 1 pads 1-6 are
+// port 1's and pad 7 port 2's. Port 1's first pad is always plugged in; port
+// 2's own pad only once a script or a controller drives it. A script (--input)
+// presses them; without one, the host's controllers do (host.cpp), each the
+// player it is assigned. A port IREG1 sets to 0-byte mode returns
 // nothing; a pad's 2 bytes fit either of the others. The pad can
 // also be read directly (IOSEL set, the SH-2 driving TH and TR through
 // PDR1 and DDR1): each TH/TR pair selects four of its lines, active low,
@@ -39,12 +42,12 @@ static bool g_irq, g_peri_pending;
 static uint8_t g_area = 0x0C;              // the disc's area (smpc_set_area); TV timing is NTSC (video.cpp)
 static const int kPads = 12;               // two multitaps' worth
 static uint16_t g_script_pressed[kPads];  // what the script holds now, per pad
+static bool g_script_names[kPads];         // the script has pressed or released that pad
 
 // The pads, scripted: "VBLANK:BUTTON+BUTTON,..." (an empty list releases all),
 // pad 1 unless the list starts "N." (N from 1 to 12). Digital pad bits, active
 // low: byte 1 RIGHT LEFT DOWN UP START A C B, byte 2 R X Y Z L.
-struct ScriptStep { uint64_t vblank; int pad; uint16_t pressed; };
-static std::vector<ScriptStep> g_script;
+static std::vector<PadStep> g_script;
 static size_t g_script_pos;
 
 static const struct { const char* name; uint16_t bit; } kButtons[] = {
@@ -53,7 +56,7 @@ static const struct { const char* name; uint16_t bit; } kButtons[] = {
     {"Z", 0x0010}, {"L", 0x0008}};
 
 // "[N.]BUTTON+BUTTON" as a step at `vblank`; false, with what is wrong in `error`, if it does not parse.
-static bool parse_press(uint64_t vblank, std::string list, ScriptStep& step, std::string& error) {
+static bool parse_press(uint64_t vblank, std::string list, PadStep& step, std::string& error) {
     step = {vblank, 0, 0};
     size_t dot = list.find('.');
     if (dot != std::string::npos) {
@@ -74,7 +77,7 @@ static bool parse_press(uint64_t vblank, std::string list, ScriptStep& step, std
     return true;
 }
 
-void smpc_input_script(const std::string& given) {
+std::vector<PadStep> smpc_parse_script(const std::string& given) {
     std::string spec = given;
     if (!spec.empty() && spec[0] == '@') {               // @FILE: the script in a file (--record-input's)
         std::ifstream f(spec.substr(1));
@@ -84,6 +87,7 @@ void smpc_input_script(const std::string& given) {
         spec = ss.str();
         while (!spec.empty() && (spec.back() == '\n' || spec.back() == '\r' || spec.back() == ',')) spec.pop_back();
     }
+    std::vector<PadStep> steps;
     size_t i = 0;
     while (i < spec.size()) {
         size_t j = spec.find(',', i);
@@ -91,23 +95,30 @@ void smpc_input_script(const std::string& given) {
         i = j == std::string::npos ? spec.size() : j + 1;
         size_t colon = item.find(':');
         if (colon == std::string::npos) sat_fatal("--input: %s is not VBLANK:BUTTONS", item.c_str());
-        ScriptStep step;
+        PadStep step;
         std::string error;
         if (!parse_press(std::stoull(item.substr(0, colon)), item.substr(colon + 1), step, error))
             sat_fatal("--input: %s", error.c_str());
-        g_script.push_back(step);
+        steps.push_back(step);
     }
-    std::stable_sort(g_script.begin(), g_script.end(),
-                     [](const ScriptStep& x, const ScriptStep& y) { return x.vblank < y.vblank; });
+    std::stable_sort(steps.begin(), steps.end(),
+                     [](const PadStep& x, const PadStep& y) { return x.vblank < y.vblank; });
+    return steps;
+}
+
+void smpc_input_script(const std::string& given) {
+    g_script = smpc_parse_script(given);
+    for (auto& s : g_script) g_script_names[s.pad] = true;
 }
 
 bool smpc_press(const std::string& spec, std::string& error) {
-    ScriptStep step;
+    PadStep step;
     if (!parse_press(sat_vblanks(), spec, step, error)) return false;
     // after the steps already due, so that it acts as a script's step at this VBlank would
     auto at = std::upper_bound(g_script.begin() + (std::ptrdiff_t)g_script_pos, g_script.end(), step.vblank,
-                               [](uint64_t v, const ScriptStep& x) { return v < x.vblank; });
+                               [](uint64_t v, const PadStep& x) { return v < x.vblank; });
     g_script.insert(at, step);
+    g_script_names[step.pad] = true;
     return true;
 }
 
@@ -140,42 +151,55 @@ void smpc_set_area(char symbol) {
         if (symbol == kSymbols[i]) g_area = kCodes[i];
 }
 
-// The host's pad (keyboard, gamepad), taken once a VBlank, as a script's is,
-// so that --record-input writes what the program saw and --input @FILE
-// gives it back at the same VBlanks
+// The host's pads, taken once a VBlank, as a script's are, so that --record-input
+// writes what the program saw and --input @FILE gives it back at the same VBlanks.
+// A run with a script takes nothing from the host, so it goes the same way again.
 static uint64_t g_host_vblank = ~0ull;
-static uint16_t g_host_pressed;
+static uint16_t g_host_pressed[kPads];
 static FILE* g_record;
 
-static void record_host(uint64_t vblank, uint16_t pressed) {
+static bool host_drives() { return g_cfg.input.empty(); }
+
+static void record_host(uint64_t vblank, int p, uint16_t pressed) {
     if (g_cfg.record_input.empty()) return;
     if (!g_record && !(g_record = std::fopen(g_cfg.record_input.c_str(), "w")))
         sat_fatal("--record-input: cannot write %s", g_cfg.record_input.c_str());
     std::string names;
     for (auto& k : kButtons)
         if (pressed & k.bit) names += (names.empty() ? "" : "+") + std::string(k.name);
-    std::fprintf(g_record, "%llu:%s,", (unsigned long long)vblank, names.c_str());
+    if (p) std::fprintf(g_record, "%llu:%d.%s,", (unsigned long long)vblank, p + 1, names.c_str());
+    else std::fprintf(g_record, "%llu:%s,", (unsigned long long)vblank, names.c_str());
     std::fflush(g_record);
+}
+
+static void sample_host() {
+    if (sat_vblanks() == g_host_vblank || !host_drives()) return;
+    g_host_vblank = sat_vblanks();
+    for (int p = 0; p < kPads && p < kHostSlots; ++p) {
+        uint16_t h = host_pad(p);
+        if (h != g_host_pressed[p]) record_host(g_host_vblank, p, h);
+        g_host_pressed[p] = h;
+    }
 }
 
 // pad p now, active low: byte 1 RIGHT LEFT DOWN UP START A C B, byte 2 R X Y Z L 1 1 1
 static uint16_t pad_now(int p) {
     while (g_script_pos < g_script.size() && g_script[g_script_pos].vblank <= sat_vblanks()) {
-        const ScriptStep& s = g_script[g_script_pos];
+        const PadStep& s = g_script[g_script_pos];
         g_script_pressed[s.pad] = s.pressed;
         if (s.pad) sat_note("pad %d: %04X", s.pad + 1, s.pressed);
         else sat_note("pad: %04X", s.pressed);
         ++g_script_pos;
     }
-    if (p) return (uint16_t)~g_script_pressed[p] | 0x0007;
-    if (sat_vblanks() != g_host_vblank) {
-        g_host_vblank = sat_vblanks();
-        uint16_t h = host_pad();
-        if (h != g_host_pressed) record_host(g_host_vblank, h);
-        g_host_pressed = h;
-    }
-    return (uint16_t)~(g_script_pressed[0] | g_host_pressed) | 0x0007;
+    sample_host();
+    return (uint16_t)~(g_script_pressed[p] | g_host_pressed[p]) | 0x0007;
 }
+
+// the first player on each port
+static int first_on(int port) { return port == 0 ? 0 : g_cfg.multitap >= 1 ? 6 : 1; }
+
+// port 2's own pad, when it has no multitap
+static bool plugged(int p) { return g_script_names[p] || (host_drives() && p < kHostSlots && host_pad_connected(p)); }
 
 static uint16_t pad1_now() { return pad_now(0); }
 
@@ -208,12 +232,13 @@ static void collect_peripheral() {
     for (int port = 0; port < 2; ++port) {
         if ((g_ireg[1] >> (4 + 2 * port) & 3) == 3) continue;   // the port's 0-byte mode
         std::vector<uint8_t> bytes;
+        int first = first_on(port);
         if (port < g_cfg.multitap) {
             bytes.push_back(0x16);           // a 6-player multitap
-            for (int k = 0; k < 6; ++k) put_pad(bytes, port * 6 + k);
-        } else if (port == 0) {
+            for (int k = 0; k < 6; ++k) put_pad(bytes, first + k);
+        } else if (port == 0 || plugged(first)) {
             bytes.push_back(0xF1);           // direct, one peripheral
-            put_pad(bytes, 0);
+            put_pad(bytes, first);
         } else {
             bytes.push_back(0xF0);           // nothing
         }

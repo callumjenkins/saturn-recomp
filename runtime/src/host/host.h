@@ -10,7 +10,9 @@ bool host_open();                                    // the window (unless headl
 void host_present(const Frame& f);                   // show it, take the events
 void host_pace(uint64_t now);                        // wait until the host's clock has caught up
 bool host_wants_frame();                             // a window to show it in
-uint16_t host_pad();                                 // buttons held, smpc.cpp's bits
+const int kHostSlots = 12;                           // players, numbered across both ports (smpc.cpp)
+uint16_t host_pad(int slot);                         // buttons held on that player's controllers, smpc.cpp's bits
+bool host_pad_connected(int slot);                   // a controller drives it: the keyboard always drives the first
 
 bool host_audio_open();                              // with a window; false: no device
 void host_audio_push(const int16_t* lr, int frames); // interleaved stereo, 44 100 Hz

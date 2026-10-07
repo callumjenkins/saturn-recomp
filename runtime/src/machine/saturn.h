@@ -28,6 +28,7 @@
 #include "saturn/sh2.h"
 #include <cstdint>
 #include <string>
+#include <vector>
 
 // ---- the machine (machine.cpp) -------------------------------------------------------
 struct SaturnConfig {
@@ -46,6 +47,7 @@ struct SaturnConfig {
     uint64_t watch_from = 0, watch_to = ~0ull;   // ... between these VBlanks
     std::string input;              // the pad: "VBLANK:BUTTON+BUTTON,..." (or "@FILE" holding that)
     std::string record_input;       // a file: the host's pad, written as an --input script
+    std::string virtual_input;      // an --input script pressed on SDL virtual gamepads, a player each (host.cpp)
     std::string dump;               // N,... : the video memories to out/dump-N.bin at VBlank-IN N
     std::string shots;              // N,... : the picture to out/shot-N.png at VBlank-IN N
     bool headless = false;          // no window
@@ -120,6 +122,8 @@ uint32_t smpc_read(uint32_t off);
 void smpc_write(uint32_t off, uint32_t v);
 void smpc_tick();
 void smpc_input_script(const std::string& spec);   // "VBLANK:BUTTON+BUTTON,..."
+struct PadStep { uint64_t vblank; int pad; uint16_t pressed; };   // from VBlank on, pad (from 0) holds these bits
+std::vector<PadStep> smpc_parse_script(const std::string& spec);  // an --input script or "@FILE", in VBlank order
 bool smpc_press(const std::string& spec, std::string& error);   // "[N.]BUTTON+BUTTON" from this VBlank on
 void smpc_set_area(char symbol);                   // the disc's first area symbol (J T U B K A E L)
 

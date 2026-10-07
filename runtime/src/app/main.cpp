@@ -16,14 +16,16 @@
 // recomp --hook). --watch LO:HI logs each access to a memory area in the
 // range with --trace; in the work RAMs, each store, with the function that
 // made it, with or without --trace; --watch-vblanks FROM:TO narrows that to
-// those VBlanks. --record-input writes the pad as the host presses it (the
-// keyboard, a gamepad), sampled once a VBlank, as an --input script: given
-// back with --input @FILE, the run goes the same way again. --interp draws the fields between the game's frames with
+// those VBlanks. --record-input writes the pads as the host presses them (the
+// keyboard and gamepads, a player each), sampled once a VBlank, as an --input
+// script: given back with --input @FILE, the run goes the same way again, and
+// takes nothing from the host's controllers. --virtual-input SCRIPT, for tests, presses the
+// script's pads on SDL virtual gamepads instead, a player each, through the window's input. --interp draws the fields between the game's frames with
 // everything moved part of the way (vdp1.cpp), one frame behind. --tasks names
 // the game's setjmp and longjmp when it switches its own tasks with them
 // (tasks.cpp); the build hooks both addresses. --multitap puts 6-player
-// multitaps on port 1, or (2) on both ports (smpc.cpp); --input then takes
-// "N." before a pad's buttons. --clock sets the SMPC's clock at power-on,
+// multitaps on port 1, or (2) on both ports (smpc.cpp). --input takes "N."
+// before a pad's buttons for player N, numbered across the ports. --clock sets the SMPC's clock at power-on,
 // which then runs with the run's time; without it the clock is the host's.
 // --agent hands the run to another program through the socket at FD
 // (agent.cpp): it steps VBlanks, presses the pads, reads memory and frames.
@@ -82,6 +84,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--realtime")) cfg.realtime = true;
         else if (!std::strcmp(a, "--input") && more) cfg.input = argv[++i];
         else if (!std::strcmp(a, "--record-input") && more) cfg.record_input = argv[++i];
+        else if (!std::strcmp(a, "--virtual-input") && more) cfg.virtual_input = argv[++i];
         else if (!std::strcmp(a, "--dump") && more) cfg.dump = argv[++i];
         else if (!std::strcmp(a, "--shot") && more) cfg.shots = argv[++i];
         else if (!std::strcmp(a, "--headless")) cfg.headless = true;

@@ -11,7 +11,8 @@ bool host_open() {
 void host_present(const Frame&) {}
 void host_pace(uint64_t) {}
 bool host_wants_frame() { return false; }
-uint16_t host_pad() { return 0; }
+uint16_t host_pad(int) { return 0; }
+bool host_pad_connected(int) { return false; }
 
 bool host_audio_open() { return false; }
 void host_audio_push(const int16_t*, int) {}

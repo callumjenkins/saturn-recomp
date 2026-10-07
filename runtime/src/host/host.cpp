@@ -10,10 +10,11 @@
 // a host that falls behind by more than 100 ms is not made to catch up.
 // --realtime takes the host's clock itself instead.
 //
-// The pad (port 1, a standard Saturn pad; smpc.cpp):
-//   keyboard  arrows, Enter START, Z X C = A B C, A S D = X Y Z, Q W = L R
-//   gamepad   d-pad or left stick, Start, south A, east B, right shoulder C,
-//             west X, north Y, left shoulder Z, triggers L and R
+// The pads (standard Saturn pads; smpc.cpp numbers the players across the ports):
+//   keyboard  player 1: arrows, Enter START, Z X C = A B C, A S D = X Y Z, Q W = L R
+//   gamepads  a player each, in the order they connect (pad_slots.h), the first
+//             player 1 beside the keyboard: d-pad or left stick, Start, south A,
+//             east B, right shoulder C, west X, north Y, left shoulder Z, triggers L and R
 // F12 saves the picture (out/shot-VBLANK.png); F11 or Alt+Enter switches
 // fullscreen. Closing the window ends the run.
 //
@@ -26,6 +27,7 @@
 #include "sound.h"
 #include "video.h"
 #include "host.h"
+#include "pad_slots.h"
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_opengl.h>               // GL's types and constants; its functions come from SDL_GL_GetProcAddress
 #include <algorithm>
@@ -51,17 +53,22 @@ HOST_GL_FUNCS(HOST_GL_DEFINE)
 #undef HOST_GL_DEFINE
 
 static SDL_Window* g_win;
-static SDL_Gamepad* g_pad;
+struct OpenPad { SDL_Gamepad* pad; SDL_JoystickID id; };
+static std::vector<OpenPad> g_pads;
+static PadSlots g_slots(kHostSlots);
 static GLuint g_tex, g_fbo;
 static int g_tex_w, g_tex_h;
-static uint16_t g_buttons;
+static uint16_t g_buttons[kHostSlots];
 static const Frame* g_last;
 using Clock = std::chrono::steady_clock;
 static Clock::time_point g_base;                // host time of virtual time 0
 static bool g_paced;
 
 bool host_wants_frame() { return g_win != nullptr; }
-uint16_t host_pad() { return g_buttons; }
+uint16_t host_pad(int slot) { return g_buttons[slot]; }
+bool host_pad_connected(int slot) { return g_win && (slot == 0 || g_slots.taken(slot)); }
+
+static void virtual_open();
 
 bool host_open() {
     if (g_cfg.headless) return true;
@@ -86,6 +93,7 @@ bool host_open() {
     // host_pace keeps real time; a swap that waited for the display would stall the whole machine
     // whenever the compositor stops sending frames, as KWin does for a window that is out of sight
     SDL_GL_SetSwapInterval(0);
+    if (!g_cfg.virtual_input.empty()) virtual_open();
     host_glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
     host_glGenFramebuffers(1, &g_fbo);
     g_base = Clock::now();
@@ -137,8 +145,29 @@ enum : uint16_t {
     B_C = 0x0200, B_B = 0x0100, B_R = 0x0080, B_X = 0x0040, B_Y = 0x0020, B_Z = 0x0010, B_L = 0x0008,
 };
 
-static void read_pad() {
+static uint16_t gamepad_buttons(SDL_Gamepad* pad) {
+    static const struct { SDL_GamepadButton btn; uint16_t bit; } kButtons[] = {
+        {SDL_GAMEPAD_BUTTON_DPAD_RIGHT, B_RIGHT}, {SDL_GAMEPAD_BUTTON_DPAD_LEFT, B_LEFT},
+        {SDL_GAMEPAD_BUTTON_DPAD_DOWN, B_DOWN}, {SDL_GAMEPAD_BUTTON_DPAD_UP, B_UP},
+        {SDL_GAMEPAD_BUTTON_START, B_START}, {SDL_GAMEPAD_BUTTON_SOUTH, B_A},
+        {SDL_GAMEPAD_BUTTON_EAST, B_B}, {SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, B_C},
+        {SDL_GAMEPAD_BUTTON_WEST, B_X}, {SDL_GAMEPAD_BUTTON_NORTH, B_Y},
+        {SDL_GAMEPAD_BUTTON_LEFT_SHOULDER, B_Z}};
     uint16_t b = 0;
+    for (auto& m : kButtons)
+        if (SDL_GetGamepadButton(pad, m.btn)) b |= m.bit;
+    if (SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) > 16000) b |= B_L;
+    if (SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) > 16000) b |= B_R;
+    int x = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFTX), y = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFTY);
+    if (x > 16000) b |= B_RIGHT;
+    if (x < -16000) b |= B_LEFT;
+    if (y > 16000) b |= B_DOWN;
+    if (y < -16000) b |= B_UP;
+    return b;
+}
+
+static void read_pads() {
+    uint16_t b[kHostSlots] = {};
     const bool* k = SDL_GetKeyboardState(nullptr);
     bool alt = SDL_GetModState() & SDL_KMOD_ALT;
     static const struct { SDL_Scancode key; uint16_t bit; } kKeys[] = {
@@ -147,28 +176,42 @@ static void read_pad() {
         {SDL_SCANCODE_X, B_B}, {SDL_SCANCODE_C, B_C}, {SDL_SCANCODE_A, B_X}, {SDL_SCANCODE_S, B_Y},
         {SDL_SCANCODE_D, B_Z}, {SDL_SCANCODE_Q, B_L}, {SDL_SCANCODE_W, B_R}};
     for (auto& m : kKeys)
-        if (k[m.key] && !(alt && m.key == SDL_SCANCODE_RETURN)) b |= m.bit;
-    if (g_pad) {
-        static const struct { SDL_GamepadButton btn; uint16_t bit; } kButtons[] = {
-            {SDL_GAMEPAD_BUTTON_DPAD_RIGHT, B_RIGHT}, {SDL_GAMEPAD_BUTTON_DPAD_LEFT, B_LEFT},
-            {SDL_GAMEPAD_BUTTON_DPAD_DOWN, B_DOWN}, {SDL_GAMEPAD_BUTTON_DPAD_UP, B_UP},
-            {SDL_GAMEPAD_BUTTON_START, B_START}, {SDL_GAMEPAD_BUTTON_SOUTH, B_A},
-            {SDL_GAMEPAD_BUTTON_EAST, B_B}, {SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, B_C},
-            {SDL_GAMEPAD_BUTTON_WEST, B_X}, {SDL_GAMEPAD_BUTTON_NORTH, B_Y},
-            {SDL_GAMEPAD_BUTTON_LEFT_SHOULDER, B_Z}};
-        for (auto& m : kButtons)
-            if (SDL_GetGamepadButton(g_pad, m.btn)) b |= m.bit;
-        if (SDL_GetGamepadAxis(g_pad, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) > 16000) b |= B_L;
-        if (SDL_GetGamepadAxis(g_pad, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) > 16000) b |= B_R;
-        int x = SDL_GetGamepadAxis(g_pad, SDL_GAMEPAD_AXIS_LEFTX), y = SDL_GetGamepadAxis(g_pad, SDL_GAMEPAD_AXIS_LEFTY);
-        if (x > 16000) b |= B_RIGHT;
-        if (x < -16000) b |= B_LEFT;
-        if (y > 16000) b |= B_DOWN;
-        if (y < -16000) b |= B_UP;
+        if (k[m.key] && !(alt && m.key == SDL_SCANCODE_RETURN)) b[0] |= m.bit;
+    for (auto& p : g_pads) {
+        int s = g_slots.slot_of(p.id);
+        if (s >= 0) b[s] |= gamepad_buttons(p.pad);
     }
-    if ((b & (B_LEFT | B_RIGHT)) == (B_LEFT | B_RIGHT)) b &= (uint16_t)~(B_LEFT | B_RIGHT);   // not on a real pad
-    if ((b & (B_UP | B_DOWN)) == (B_UP | B_DOWN)) b &= (uint16_t)~(B_UP | B_DOWN);
-    g_buttons = b;
+    for (int s = 0; s < kHostSlots; ++s) {
+        if ((b[s] & (B_LEFT | B_RIGHT)) == (B_LEFT | B_RIGHT)) b[s] &= (uint16_t)~(B_LEFT | B_RIGHT);   // not on a real pad
+        if ((b[s] & (B_UP | B_DOWN)) == (B_UP | B_DOWN)) b[s] &= (uint16_t)~(B_UP | B_DOWN);
+        g_buttons[s] = b[s];
+    }
+}
+
+static void pad_added(SDL_JoystickID id) {
+    SDL_Gamepad* pad = SDL_OpenGamepad(id);
+    if (!pad) return;
+    char guid[33];
+    SDL_GUIDToString(SDL_GetGamepadGUIDForID(id), guid, sizeof guid);
+    int s = g_slots.connect(id, guid);
+    if (s < 0) {
+        sat_note("gamepad: %s, not used: every player has one", SDL_GetGamepadName(pad));
+        SDL_CloseGamepad(pad);
+        return;
+    }
+    g_pads.push_back({pad, id});
+    sat_note("gamepad: %s, player %d", SDL_GetGamepadName(pad), s + 1);
+}
+
+static void pad_removed(SDL_JoystickID id) {
+    for (size_t i = 0; i < g_pads.size(); ++i)
+        if (g_pads[i].id == id) {
+            int s = g_slots.disconnect(id);
+            sat_note("gamepad: %s gone, player %d free", SDL_GetGamepadName(g_pads[i].pad), s + 1);
+            SDL_CloseGamepad(g_pads[i].pad);
+            g_pads.erase(g_pads.begin() + (std::ptrdiff_t)i);
+            return;
+        }
 }
 
 static void save_shot() {
@@ -179,7 +222,51 @@ static void save_shot() {
     sat_note("picture saved: %s%s", g_cfg.out.c_str(), name);
 }
 
+// --virtual-input: SDL virtual gamepads, plugged in a player each in order, pressed by a script, so a
+// test reaches the game through SDL and the slots as a player's controllers do
+static std::vector<SDL_Joystick*> g_virtual;
+static std::vector<PadStep> g_virtual_steps;
+static size_t g_virtual_pos;
+
+static void virtual_open() {
+    g_virtual_steps = smpc_parse_script(g_cfg.virtual_input);
+    int n = 0;
+    for (auto& s : g_virtual_steps) n = std::max(n, s.pad + 1);
+    for (int k = 0; k < n; ++k) {
+        SDL_VirtualJoystickDesc d;
+        SDL_INIT_INTERFACE(&d);
+        d.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+        d.naxes = SDL_GAMEPAD_AXIS_COUNT;
+        d.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
+        d.name = "saturn-recomp virtual pad";
+        SDL_JoystickID id = SDL_AttachVirtualJoystick(&d);
+        if (!id) sat_fatal("--virtual-input: %s", SDL_GetError());
+        SDL_Joystick* j = SDL_OpenJoystick(id);
+        SDL_SetJoystickVirtualAxis(j, SDL_GAMEPAD_AXIS_LEFT_TRIGGER, SDL_JOYSTICK_AXIS_MIN);
+        SDL_SetJoystickVirtualAxis(j, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, SDL_JOYSTICK_AXIS_MIN);
+        g_virtual.push_back(j);
+    }
+}
+
+static void virtual_press() {
+    static const struct { uint16_t bit; SDL_GamepadButton btn; } kButtons[] = {
+        {B_RIGHT, SDL_GAMEPAD_BUTTON_DPAD_RIGHT}, {B_LEFT, SDL_GAMEPAD_BUTTON_DPAD_LEFT},
+        {B_DOWN, SDL_GAMEPAD_BUTTON_DPAD_DOWN}, {B_UP, SDL_GAMEPAD_BUTTON_DPAD_UP},
+        {B_START, SDL_GAMEPAD_BUTTON_START}, {B_A, SDL_GAMEPAD_BUTTON_SOUTH}, {B_B, SDL_GAMEPAD_BUTTON_EAST},
+        {B_C, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER}, {B_X, SDL_GAMEPAD_BUTTON_WEST},
+        {B_Y, SDL_GAMEPAD_BUTTON_NORTH}, {B_Z, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER}};
+    for (; g_virtual_pos < g_virtual_steps.size() && g_virtual_steps[g_virtual_pos].vblank <= sat_vblanks(); ++g_virtual_pos) {
+        const PadStep& s = g_virtual_steps[g_virtual_pos];
+        SDL_Joystick* j = g_virtual[s.pad];
+        for (auto& m : kButtons) SDL_SetJoystickVirtualButton(j, m.btn, (s.pressed & m.bit) != 0);
+        // a trigger at rest is the axis's minimum: 0 is half pulled
+        SDL_SetJoystickVirtualAxis(j, SDL_GAMEPAD_AXIS_LEFT_TRIGGER, s.pressed & B_L ? SDL_JOYSTICK_AXIS_MAX : SDL_JOYSTICK_AXIS_MIN);
+        SDL_SetJoystickVirtualAxis(j, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, s.pressed & B_R ? SDL_JOYSTICK_AXIS_MAX : SDL_JOYSTICK_AXIS_MIN);
+    }
+}
+
 static void events() {
+    if (!g_virtual.empty()) virtual_press();
     SDL_Event e;
     HostCall in("SDL_PollEvent");
     while (SDL_PollEvent(&e)) {
@@ -187,13 +274,10 @@ static void events() {
         case SDL_EVENT_QUIT:
             sat_stop("the window was closed");
         case SDL_EVENT_GAMEPAD_ADDED:
-            if (!g_pad) {
-                g_pad = SDL_OpenGamepad(e.gdevice.which);
-                if (g_pad) sat_note("gamepad: %s", SDL_GetGamepadName(g_pad));
-            }
+            pad_added(e.gdevice.which);
             break;
         case SDL_EVENT_GAMEPAD_REMOVED:
-            if (g_pad && SDL_GetGamepadID(g_pad) == e.gdevice.which) { SDL_CloseGamepad(g_pad); g_pad = nullptr; }
+            pad_removed(e.gdevice.which);
             break;
         case SDL_EVENT_KEY_DOWN:
             if (e.key.repeat) break;
@@ -203,7 +287,7 @@ static void events() {
             break;
         }
     }
-    read_pad();
+    read_pads();
 }
 
 void host_present(const Frame& f) {

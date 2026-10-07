@@ -18,12 +18,21 @@
 #include "video.h"
 #include <sstream>
 #include <string>
+#if !defined(_WIN32)
 #include <sys/socket.h>
 #include <unistd.h>
+#endif
+#if !defined(MSG_NOSIGNAL)
+#define MSG_NOSIGNAL 0                      // macOS: a write to a closed socket raises SIGPIPE instead
+#endif
 
 static uint64_t g_until = 1;              // the VBlank the run pauses at next
 static std::string g_in;
 
+#if defined(_WIN32)
+static bool read_line(std::string&) { sat_fatal("--agent: not available on Windows"); }
+static void send(const void*, size_t) { sat_fatal("--agent: not available on Windows"); }
+#else
 static bool read_line(std::string& line) {
     for (;;) {
         size_t nl = g_in.find('\n');
@@ -49,6 +58,7 @@ static void send(const void* data, size_t n) {
         n -= (size_t)k;
     }
 }
+#endif
 
 static void say(const std::string& line) { send((line + "\n").data(), line.size() + 1); }
 

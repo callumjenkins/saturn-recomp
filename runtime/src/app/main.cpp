@@ -6,7 +6,7 @@
 //            [--record-input FILE] [--shot N,...] [--dump N,...] [--peek ADDR[:WORDS],...] [--watch LO:HI]
 //            [--watch-vblanks FROM:TO] [--wav FILE] [--interp] [--hook ADDR:rN=VALUE ...]
 //            [--tasks SETJMP:LONGJMP] [--multitap N] [--clock YYYY-MM-DDTHH:MM:SS] [--agent FD]
-//            [--write VBLANK:ADDR=HEX,...] [--video FILE] [--save FILE|-] [--coverage FILE]
+//            [--write VBLANK:ADDR=HEX,...] [--video FILE] [--save FILE|-] [--coverage FILE] [--checkpoint SECONDS]
 //
 // --vblanks and --starts end the run after that many VBlanks or program
 // starts; the log of the hardware touched goes to DIR/hw-log.txt. --shot
@@ -28,7 +28,8 @@
 // --agent hands the run to another program through the socket at FD
 // (agent.cpp): it steps VBlanks, presses the pads, reads memory and frames.
 // --coverage writes every recompiled function, with its module, address, instruction count and
-// whether it ran, when the run ends. --video writes the run's pictures and sound as an MP4 through ffmpeg, an
+// whether it ran, when the run ends, an error that ends it included; --checkpoint SECONDS writes it again every
+// SECONDS of the host's time. --video writes the run's pictures and sound as an MP4 through ffmpeg, an
 // error that ends it included (movie.cpp).
 // --write sets memory at a VBlank-IN, as the agent's write does: a stage
 // select, say, given as data.
@@ -65,6 +66,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--trace")) cfg.trace = true;
         else if (!std::strcmp(a, "--peek") && more) cfg.peek = argv[++i];
         else if (!std::strcmp(a, "--coverage") && more) cfg.coverage = argv[++i];
+        else if (!std::strcmp(a, "--checkpoint") && more) cfg.checkpoint = std::atoi(argv[++i]);
         else if (!std::strcmp(a, "--watch") && more) {
             const char* w = argv[++i];
             cfg.watch_lo = (uint32_t)std::strtoul(w, nullptr, 16);
@@ -115,7 +117,7 @@ int main(int argc, char** argv) {
                                  "             [--record-input FILE] [--shot N,...] [--dump N,...] [--peek ADDR[:WORDS],...] [--watch LO:HI]\n"
                                  "             [--wav FILE] [--hook ADDR:rN=VALUE ...] [--tasks SETJMP:LONGJMP] [--multitap N]\n"
                                  "             [--clock YYYY-MM-DDTHH:MM:SS] [--agent FD] [--write VBLANK:ADDR=HEX,...] [--video FILE]\n"
-                                 "             [--save FILE|-]\n");
+                                 "             [--save FILE|-] [--coverage FILE] [--checkpoint SECONDS]\n");
             return 2;
         }
     }

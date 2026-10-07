@@ -16,7 +16,7 @@ repository, which takes saturn-recomp as a submodule.
 | Virtual Hydlide (1995) | [vs-sr-dev/pc-virtualhydlide](https://github.com/vs-sr-dev/pc-virtualhydlide) (on saturnkit) | the disc, the SH-2 decoder, the address map, function discovery, cross-program matching, the interpreter, the recompiler, the runtime core (HLE boot and BIOS, SCU, SMPC, the slave as a coroutine, the CD block), VDP1 and VDP2 in software in a window with the pad, the 68000 and the SCSP (sound), recompiler hooks for a game layer, and the fields between a game's frames drawn moving (`--interp`) |
 | Deep Fear (1998) | [vs-sr-dev/pc-deepfear](https://github.com/vs-sr-dev/pc-deepfear) (on saturnkit) | function discovery for GCC and SGL code (GCC's switches, `mova` tables and pointers, tables of records, computed jumps into unrolled code, SGL's hand-written handlers), the SCU DSP (a disassembler, and an interpreter in the runtime), `SYS_CHGUIPR` and the per-interrupt SCU masks, literal-pool slots that the code writes |
 | X JAPAN Virtual Shock 001 (1995) | [vs-sr-dev/pc-xjapan](https://github.com/vs-sr-dev/pc-xjapan) (on saturnkit) | a file system over a Mode 1 and a CD-ROM XA track, interleaved files and records of CD-DA tracks, function discovery through far jumps and callbacks that do nothing, TVSTAT's HBLANK, the pad read directly through the SMPC's ports, the disc's area code, recorded play (`--record-input`, `--input @FILE`) |
-| Saturn Bomberman (1996) | pc-saturnbomberman (private) | a game's own tasks switched with setjmp and longjmp (`--tasks`), 6-player multitaps, the 8-bit VDP1 framebuffer, VDP2 hi-res, interlace and windows, per-character special priority and colour calculation, the SMPC clock (`--clock`), discovery of jump tables reached over a `bra` |
+| Saturn Bomberman (1996) | [callumjenkins/pc-saturnbomberman](https://github.com/callumjenkins/pc-saturnbomberman) | a game's own tasks switched with setjmp and longjmp (`--tasks`), 6-player multitaps, the 8-bit VDP1 framebuffer, VDP2 hi-res, interlace and windows, per-character special priority and colour calculation, the SMPC clock (`--clock`), discovery of jump tables reached over a `bra` |
 
 ## Using it
 
@@ -94,12 +94,20 @@ build/recomp-build/saturn --cue GAME.cue --headless --input @play.txt --vblanks 
 build/recomp-build/saturn --cue GAME.cue --headless --watch 06058D6C:06058DCF --watch-vblanks 7300:7310   # every store, by function
 build/recomp-build/saturn --cue GAME.cue --headless --write 4250:060C179A=0201   # memory set at a VBlank, such as a stage select
 build/recomp-build/saturn --cue GAME.cue --headless --save -        # saves kept for this run alone, starting empty
+build/recomp-build/saturn --cue GAME.cue --coverage cov.txt --checkpoint 600   # which functions ran, rewritten every 10 minutes
 ```
 
 The game's saves go to one file per game in the user's data directory unless `--save` names
 another, as `saturn-recomp/PRODUCT_VERSION/backup.bin` under `$XDG_DATA_HOME` (or
 `~/.local/share`), `~/Library/Application Support` or `%APPDATA%`. A test run should pass
 `--save -` or a file of its own, so it starts from no saves and leaves the player's alone.
+
+## Playtesting
+
+`playtest/` builds a game for other people to play and brings their sessions back for review: a
+launcher for testers, a Cloudflare Worker that keeps the sessions, a release workflow that compiles
+for Linux, Windows and macOS, and `python -m saturnrecomp.playtest` for the maintainer.
+`playtest/README.md` says how to set it up.
 
 ## Licence
 

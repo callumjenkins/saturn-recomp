@@ -26,6 +26,13 @@
     module = "KRNL"
     at = "bomber_hit_flag"
 
+    [playtest]                      # optional: builds for playtesters (saturnrecomp.playtest)
+    endpoint = "https://saturn-playtest.example.workers.dev"
+    repo = "OWNER/NAME"             # the GitHub repository whose releases hold the builds
+    disc = "disc.json"              # the supported disc's manifest (saturnrecomp.disc --manifest)
+    coverage = ["build/test/*/coverage.txt"]   # the runs a session's new code is measured against
+    args = []                       # saturn arguments every session plays with
+
 An address is a number or a name from [symbols]. Paths are relative to the file.
 """
 import json
@@ -52,6 +59,25 @@ class Tasks:
 
 
 @dataclass
+class Playtest:
+    endpoint: str
+    repo: str
+    disc: str
+    coverage: list[str] = field(default_factory=list)
+    args: list[str] = field(default_factory=list)
+
+    @property
+    def manifest(self):
+        return json.load(open(self.disc))
+
+    @property
+    def product(self):
+        """The disc's product number and version as the runtime names its save directory, such as MK-81070_V1.003."""
+        m = self.manifest
+        return f"{m['product']}_{m['version']}"
+
+
+@dataclass
 class Game:
     name: str
     root: str
@@ -62,6 +88,7 @@ class Game:
     tasks: Tasks | None
     hooks: dict[str, list[int]]
     cmake: list[str] = field(default_factory=list)
+    playtest: Playtest | None = None
 
     @property
     def saturn(self):
@@ -108,9 +135,14 @@ def load(path):
     for h in t.get("hook", []):
         hooks.setdefault(known(h["module"], "a [[hook]]"), []).append(_addr(h["at"], symbols))
     game = t.get("game", {})
+    playtest = None
+    if "playtest" in t:
+        p = t["playtest"]
+        playtest = Playtest(p["endpoint"].rstrip("/"), p["repo"], os.path.join(root, p.get("disc", "disc.json")),
+                            [os.path.join(root, g) for g in p.get("coverage", [])], list(p.get("args", [])))
     return Game(game.get("name", os.path.basename(root)), root, os.path.join(root, game.get("build", "build")),
                 os.path.join(root, game.get("seeds", "seeds.json")), modules, symbols, tasks, hooks,
-                list(game.get("cmake", [])))
+                list(game.get("cmake", [])), playtest)
 
 
 def _addr(value, symbols):

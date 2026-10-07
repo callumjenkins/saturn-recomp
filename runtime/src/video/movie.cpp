@@ -12,6 +12,10 @@
 #include <cstdlib>
 #include <string>
 #include <vector>
+#if defined(_WIN32)
+#define popen _popen
+#define pclose _pclose
+#endif
 
 static FILE* g_pipe;
 static int g_w, g_h;

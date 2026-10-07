@@ -43,11 +43,13 @@ bool cdrom_open(const std::string& cue) {
                 fad = p.fad + p.sectors;
             }
             first_file = false;
-            FILE* f = std::fopen((dir + name).c_str(), "rb");
-            if (!f) { std::fprintf(stderr, "cannot open %s\n", (dir + name).c_str()); return false; }
+            bool absolute = name.size() > 2 && (name[0] == '/' || name[0] == '\\' || name[1] == ':');
+            std::string path = absolute ? name : dir + name;
+            FILE* f = std::fopen(path.c_str(), "rb");
+            if (!f) { std::fprintf(stderr, "cannot open %s\n", path.c_str()); return false; }
             std::fseek(f, 0, SEEK_END);
             long size = std::ftell(f);
-            g_files.push_back({dir + name, fad, 0, 2352, false, f});
+            g_files.push_back({path, fad, 0, 2352, false, f});
             g_files.back().sectors = (uint32_t)(size / 2352);   // fixed below for 2048-byte files
         } else if (kw == "TRACK") {
             std::string mode;

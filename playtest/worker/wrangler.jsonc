@@ -1,0 +1,16 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "saturn-playtest",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-10-07",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true, "head_sampling_rate": 1 },
+  "d1_databases": [
+    { "binding": "DB", "database_name": "saturn-playtest", "database_id": "c34e3fe6-2333-4aa8-ab34-0e12af9ab3c6", "migrations_dir": "migrations" }
+  ],
+  "r2_buckets": [
+    { "binding": "BUCKET", "bucket_name": "saturn-playtest" }
+  ],
+  // ADMIN_TOKEN is the maintainer's CLI, CI_TOKEN the release workflow's.
+  "secrets": { "required": ["ADMIN_TOKEN", "CI_TOKEN"] }
+}

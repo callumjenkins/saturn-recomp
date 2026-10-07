@@ -39,6 +39,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <algorithm>
+#include <filesystem>
 #include <map>
 #include <mutex>
 #include <thread>
@@ -206,6 +207,8 @@ static void report_ints() {
     std::fprintf(stderr, "\n");
 }
 
+static void write_coverage(const std::string& path);
+
 void sat_fatal(const char* fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
@@ -218,6 +221,7 @@ void sat_fatal(const char* fmt, ...) {
     report_ints();
     hot_spots();
     mmio_log_write(g_cfg.out + "/hw-log.txt");
+    write_coverage(g_cfg.coverage);
     static bool closing;                        // a fatal error while closing them must not come back here
     if (!closing && (movie_on() || !g_cfg.wav.empty())) {
         closing = true;
@@ -359,16 +363,37 @@ void slave_kick() {
 }
 
 // --coverage FILE: "MODULE ADDRESS INSTRUCTIONS RAN" for every recompiled function, RAN 1 or 0.
+// Written whole and then renamed over the last, so a reader never sees half a file.
 static void write_coverage(const std::string& path) {
     if (path.empty()) return;
-    FILE* f = std::fopen(path.c_str(), "w");
-    if (!f) { sat_note("coverage: cannot write %s", path.c_str()); return; }
+    std::string part = path + ".part";
+    FILE* f = std::fopen(part.c_str(), "w");
+    if (!f) { sat_note("coverage: cannot write %s", part.c_str()); return; }
     for (int i = 0; i < g_sh2_nmodules; ++i) {
         const SH2Module* m = g_sh2_modules[i];
         for (uint32_t k = 0; k < m->nfuncs; ++k)
             std::fprintf(f, "%s %08X %u %d\n", m->name, m->funcs[k].addr, m->sizes[k], m->ran[k] ? 1 : 0);
     }
     std::fclose(f);
+    std::error_code e;
+    std::filesystem::rename(part, path, e);
+    if (e) sat_note("coverage: cannot replace %s: %s", path.c_str(), e.message().c_str());
+}
+
+// --checkpoint SECONDS: coverage written again every SECONDS of the host's time, so a run that is
+// killed rather than stopped still leaves what it ran.
+static void checkpoint_due() {
+    using Clock = std::chrono::steady_clock;
+    static uint64_t vblank = ~0ull;
+    static Clock::time_point next;
+    if (!g_cfg.checkpoint || sat_vblanks() == vblank) return;
+    vblank = sat_vblanks();
+    Clock::time_point now = Clock::now();
+    if (next == Clock::time_point{}) next = now + std::chrono::seconds(g_cfg.checkpoint);
+    if (now < next) return;
+    next = now + std::chrono::seconds(g_cfg.checkpoint);
+    write_coverage(g_cfg.coverage);
+    sat_note("checkpoint at VBlank %llu", (unsigned long long)vblank);
 }
 
 // ---- time, devices, interrupts ----------------------------------------------------------
@@ -380,6 +405,7 @@ void master_poll_devices() {
     cd_tick();
     smpc_tick();
     sound_tick();
+    checkpoint_due();
     if (g_slave_on && !g_slave_idle) to_slave();
     if (g_cfg.stop_vblanks && sat_vblanks() >= g_cfg.stop_vblanks) sat_stop("VBlank limit");
 }

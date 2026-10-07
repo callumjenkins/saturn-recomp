@@ -40,6 +40,7 @@ struct SaturnConfig {
     bool trace = false;             // events to stderr
     std::string peek;               // ADDR[:WORDS],... : memory printed when the run ends
     std::string coverage;           // a file listing the recompiled functions that ran, written when the run ends
+    int checkpoint = 0;             // ... and every this many seconds of the host's time (0: only at the end)
     uint32_t watch_lo = 1, watch_hi = 0;   // memory-area addresses logged one by one (with --trace);
                                            // in the work RAMs, every store, always
     uint64_t watch_from = 0, watch_to = ~0ull;   // ... between these VBlanks

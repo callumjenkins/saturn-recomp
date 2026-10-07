@@ -39,6 +39,9 @@
 // keeps them for the run alone, starting empty. Without it they go to
 // saturn-recomp/PRODUCT_VERSION/backup.bin in the user's data directory
 // ($XDG_DATA_HOME or ~/.local/share, ~/Library/Application Support, %APPDATA%).
+// --settings names the player's settings file, which a run with a window reads (the window, the
+// volume, the controls; host.cpp): "-" keeps the defaults. Without it, it is settings.ini in that
+// directory's saturn-recomp folder, written with the defaults if it is missing.
 #include "saturn.h"
 #include <cstdio>
 #include <cstdlib>
@@ -90,6 +93,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--headless")) cfg.headless = true;
         else if (!std::strcmp(a, "--fullscreen")) cfg.fullscreen = true;
         else if (!std::strcmp(a, "--scale") && more) cfg.scale = std::atoi(argv[++i]);
+        else if (!std::strcmp(a, "--settings") && more) cfg.settings = argv[++i];
         else if (!std::strcmp(a, "--wav") && more) cfg.wav = argv[++i];
         else if (!std::strcmp(a, "--video") && more) cfg.video = argv[++i];
         else if (!std::strcmp(a, "--interp")) cfg.interp = true;
@@ -115,7 +119,7 @@ int main(int argc, char** argv) {
             sh2_hook_set(addr, (int)reg, v);
         }
         else {
-            std::fprintf(stderr, "usage: saturn --cue GAME.cue [--out DIR] [--headless] [--fullscreen] [--scale N]\n"
+            std::fprintf(stderr, "usage: saturn --cue GAME.cue [--out DIR] [--headless] [--fullscreen] [--scale N] [--settings FILE]\n"
                                  "             [--vblanks N] [--starts N] [--trace] [--realtime] [--input VBLANK:BUTTONS,...|@FILE]\n"
                                  "             [--record-input FILE] [--shot N,...] [--dump N,...] [--peek ADDR[:WORDS],...] [--watch LO:HI]\n"
                                  "             [--wav FILE] [--hook ADDR:rN=VALUE ...] [--tasks SETJMP:LONGJMP] [--multitap N]\n"

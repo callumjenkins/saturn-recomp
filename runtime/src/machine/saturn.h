@@ -51,8 +51,10 @@ struct SaturnConfig {
     std::string dump;               // N,... : the video memories to out/dump-N.bin at VBlank-IN N
     std::string shots;              // N,... : the picture to out/shot-N.png at VBlank-IN N
     bool headless = false;          // no window
-    bool fullscreen = false;
-    int scale = 3;                  // the window: 320x240 times this
+    bool fullscreen = false;        // or as the settings say
+    int scale = 0;                  // the window: 320x240 times this; 0: as the settings say
+    std::string settings;           // the player's settings file (host.cpp); "-": none, the defaults; empty: settings.ini
+                                    // in saturn-recomp's directory in the user's data directory
     std::string wav;                // the run's sound to this file (16-bit stereo, 44 100 Hz)
     std::string video;              // the run's pictures and sound to this MP4 (movie.cpp)
     bool interp = false;            // fields between the game's frames drawn moving (vdp1.cpp)
@@ -90,6 +92,7 @@ uint32_t bios_rom_read(uint32_t a, int size);   // the few BIOS ROM words a prog
 bool bios_is_dispatcher(uint32_t vec, uint32_t target);
 void bios_dispatch(SH2Context& c, uint32_t vec);     // the handler SYS_SETUINT installed
 void bios_save();                   // the backup memory to its file
+std::string sat_data_dir();         // the user's data directory by the platform's convention; empty if none
 void bios_select_save(const uint8_t* ip);   // the save file for the disc with this IP.BIN, none loaded yet
 
 // ---- the address map (mmio.cpp) ---------------------------------------------------

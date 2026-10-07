@@ -15,6 +15,7 @@
 //   gamepads  a player each, in the order they connect (pad_slots.h), the first
 //             player 1 beside the keyboard: d-pad or left stick, Start, south A,
 //             east B, right shoulder C, west X, north Y, left shoulder Z, triggers L and R
+// unless the settings (settings.h) bind them otherwise.
 // F12 saves the picture (out/shot-VBLANK.png); F11 or Alt+Enter switches
 // fullscreen. Closing the window ends the run.
 //
@@ -28,6 +29,7 @@
 #include "video.h"
 #include "host.h"
 #include "pad_slots.h"
+#include "settings.h"
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_opengl.h>               // GL's types and constants; its functions come from SDL_GL_GetProcAddress
 #include <algorithm>
@@ -53,8 +55,6 @@ HOST_GL_FUNCS(HOST_GL_DEFINE)
 #undef HOST_GL_DEFINE
 
 static SDL_Window* g_win;
-struct OpenPad { SDL_Gamepad* pad; SDL_JoystickID id; };
-static std::vector<OpenPad> g_pads;
 static PadSlots g_slots(kHostSlots);
 static GLuint g_tex, g_fbo;
 static int g_tex_w, g_tex_h;
@@ -70,6 +70,30 @@ bool host_pad_connected(int slot) { return g_win && (slot == 0 || g_slots.taken(
 
 static void virtual_open();
 
+// ---- the settings (settings.h) -----------------------------------------------------------------
+static Settings g_settings;
+static void bind_keyboard();
+
+static void load_settings() {
+    std::string path = g_cfg.settings;
+    if (path == "-") path.clear();
+    else if (path.empty() && !sat_data_dir().empty()) path = sat_data_dir() + "/saturn-recomp/settings.ini";
+    if (!path.empty()) {
+        bool found = false;
+        std::string text = settings_load(path, found);
+        if (!found) {
+            if (settings_store(path, Settings::default_text())) sat_note("settings: %s, written with the defaults", path.c_str());
+            else sat_note("settings: cannot write %s (the defaults)", path.c_str());
+        } else {
+            std::vector<std::string> problems;
+            g_settings.read(text, problems);
+            sat_note("settings: %s", path.c_str());
+            for (auto& p : problems) sat_note("%s, so its default", p.c_str());
+        }
+    }
+    bind_keyboard();
+}
+
 bool host_open() {
     if (g_cfg.headless) return true;
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD | SDL_INIT_AUDIO)) { sat_note("SDL: %s", SDL_GetError()); return false; }
@@ -78,9 +102,11 @@ bool host_open() {
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG);   // macOS needs it for a core context
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-    int s = std::max(1, g_cfg.scale);
+    load_settings();
+    int s = g_cfg.scale > 0 ? g_cfg.scale : g_settings.number("display", "scale");
+    bool full = g_cfg.fullscreen || g_settings.flag("display", "fullscreen");
     g_win = SDL_CreateWindow("saturn-recomp", 320 * s, 240 * s, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE |
-                             SDL_WINDOW_HIGH_PIXEL_DENSITY | (g_cfg.fullscreen ? SDL_WINDOW_FULLSCREEN : 0));
+                             SDL_WINDOW_HIGH_PIXEL_DENSITY | (full ? SDL_WINDOW_FULLSCREEN : 0));
     if (!g_win) { sat_note("SDL: %s", SDL_GetError()); return false; }
     if (!SDL_GL_CreateContext(g_win)) { sat_note("SDL: no OpenGL 3.2 context: %s", SDL_GetError()); return false; }
     bool ok = true;
@@ -123,6 +149,7 @@ bool host_audio_open() {
     g_audio = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, nullptr, nullptr);
     if (!g_audio) { sat_note("SDL audio: %s (no sound)", SDL_GetError()); return false; }
     audio_silence(kLead);
+    SDL_SetAudioStreamGain(g_audio, g_settings.number("audio", "volume") / 100.0f);
     SDL_ResumeAudioStreamDevice(g_audio);
     return true;
 }
@@ -145,24 +172,78 @@ enum : uint16_t {
     B_C = 0x0200, B_B = 0x0100, B_R = 0x0080, B_X = 0x0040, B_Y = 0x0020, B_Z = 0x0010, B_L = 0x0008,
 };
 
-static uint16_t gamepad_buttons(SDL_Gamepad* pad) {
-    static const struct { SDL_GamepadButton btn; uint16_t bit; } kButtons[] = {
-        {SDL_GAMEPAD_BUTTON_DPAD_RIGHT, B_RIGHT}, {SDL_GAMEPAD_BUTTON_DPAD_LEFT, B_LEFT},
-        {SDL_GAMEPAD_BUTTON_DPAD_DOWN, B_DOWN}, {SDL_GAMEPAD_BUTTON_DPAD_UP, B_UP},
-        {SDL_GAMEPAD_BUTTON_START, B_START}, {SDL_GAMEPAD_BUTTON_SOUTH, B_A},
-        {SDL_GAMEPAD_BUTTON_EAST, B_B}, {SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, B_C},
-        {SDL_GAMEPAD_BUTTON_WEST, B_X}, {SDL_GAMEPAD_BUTTON_NORTH, B_Y},
-        {SDL_GAMEPAD_BUTTON_LEFT_SHOULDER, B_Z}};
+// The Saturn's buttons by the settings' names for them.
+static const struct { const char* name; uint16_t bit; } kSaturn[] = {
+    {"up", B_UP}, {"down", B_DOWN}, {"left", B_LEFT}, {"right", B_RIGHT}, {"start", B_START}, {"a", B_A},
+    {"b", B_B}, {"c", B_C}, {"x", B_X}, {"y", B_Y}, {"z", B_Z}, {"l", B_L}, {"r", B_R}};
+
+// The names in a setting's comma-separated list that `known` takes, or, if one is not, the default's.
+template <typename F>
+static std::vector<int> names(const Settings& set, const std::string& section, const std::string& key, F known) {
+    std::vector<int> out;
+    std::string list = set.get(section, key);
+    for (size_t i = 0; i <= list.size();) {
+        size_t j = std::min(list.find(',', i), list.size());
+        std::string n = list.substr(i, j - i);
+        n.erase(0, n.find_first_not_of(' '));
+        n.erase(n.find_last_not_of(' ') + 1);
+        i = j + 1;
+        if (n.empty()) continue;
+        int v = known(n);
+        if (v < 0) {
+            sat_note("settings: [%s] %s: no %s, so its default", section.c_str(), key.c_str(), n.c_str());
+            return names(Settings(), Settings::kind_of(section), key, known);
+        }
+        out.push_back(v);
+    }
+    return out;
+}
+
+static std::vector<std::pair<SDL_Scancode, uint16_t>> g_keys;
+
+static void bind_keyboard() {
+    g_keys.clear();
+    for (auto& b : kSaturn)
+        for (int k : names(g_settings, "keyboard", b.name, [](const std::string& n) {
+                 SDL_Scancode c = SDL_GetScancodeFromName(n.c_str());
+                 return c == SDL_SCANCODE_UNKNOWN ? -1 : (int)c;
+             }))
+            g_keys.push_back({(SDL_Scancode)k, b.bit});
+}
+
+// A gamepad's bindings: its buttons and trigger axes, with the stick's and the triggers' travel.
+struct PadInput { int button, axis; uint16_t bit; };
+struct PadMap { std::vector<PadInput> inputs; int stick, trigger; };
+struct OpenPad { SDL_Gamepad* pad; SDL_JoystickID id; PadMap map; };
+static std::vector<OpenPad> g_pads;
+
+static PadMap bind_gamepad(const std::string& guid) {
+    std::string section = g_settings.has_section("gamepad " + guid) ? "gamepad " + guid : "gamepad";
+    PadMap m;
+    for (auto& b : kSaturn)
+        for (int v : names(g_settings, section, b.name, [](const std::string& n) {
+                 if (n == "lefttrigger") return 1000 + (int)SDL_GAMEPAD_AXIS_LEFT_TRIGGER;
+                 if (n == "righttrigger") return 1000 + (int)SDL_GAMEPAD_AXIS_RIGHT_TRIGGER;
+                 SDL_GamepadButton btn = SDL_GetGamepadButtonFromString(n.c_str());
+                 return btn == SDL_GAMEPAD_BUTTON_INVALID ? -1 : (int)btn;
+             }))
+            m.inputs.push_back(v >= 1000 ? PadInput{-1, v - 1000, b.bit} : PadInput{v, -1, b.bit});
+    m.stick = SDL_JOYSTICK_AXIS_MAX * g_settings.number(section, "stick") / 100;
+    m.trigger = SDL_JOYSTICK_AXIS_MAX * g_settings.number(section, "trigger") / 100;
+    return m;
+}
+
+static uint16_t gamepad_buttons(SDL_Gamepad* pad, const PadMap& m) {
     uint16_t b = 0;
-    for (auto& m : kButtons)
-        if (SDL_GetGamepadButton(pad, m.btn)) b |= m.bit;
-    if (SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) > 16000) b |= B_L;
-    if (SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) > 16000) b |= B_R;
+    for (auto& in : m.inputs)
+        if (in.button >= 0 ? SDL_GetGamepadButton(pad, (SDL_GamepadButton)in.button)
+                           : SDL_GetGamepadAxis(pad, (SDL_GamepadAxis)in.axis) > m.trigger)
+            b |= in.bit;
     int x = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFTX), y = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFTY);
-    if (x > 16000) b |= B_RIGHT;
-    if (x < -16000) b |= B_LEFT;
-    if (y > 16000) b |= B_DOWN;
-    if (y < -16000) b |= B_UP;
+    if (x > m.stick) b |= B_RIGHT;
+    if (x < -m.stick) b |= B_LEFT;
+    if (y > m.stick) b |= B_DOWN;
+    if (y < -m.stick) b |= B_UP;
     return b;
 }
 
@@ -170,16 +251,11 @@ static void read_pads() {
     uint16_t b[kHostSlots] = {};
     const bool* k = SDL_GetKeyboardState(nullptr);
     bool alt = SDL_GetModState() & SDL_KMOD_ALT;
-    static const struct { SDL_Scancode key; uint16_t bit; } kKeys[] = {
-        {SDL_SCANCODE_RIGHT, B_RIGHT}, {SDL_SCANCODE_LEFT, B_LEFT}, {SDL_SCANCODE_DOWN, B_DOWN},
-        {SDL_SCANCODE_UP, B_UP}, {SDL_SCANCODE_RETURN, B_START}, {SDL_SCANCODE_Z, B_A},
-        {SDL_SCANCODE_X, B_B}, {SDL_SCANCODE_C, B_C}, {SDL_SCANCODE_A, B_X}, {SDL_SCANCODE_S, B_Y},
-        {SDL_SCANCODE_D, B_Z}, {SDL_SCANCODE_Q, B_L}, {SDL_SCANCODE_W, B_R}};
-    for (auto& m : kKeys)
-        if (k[m.key] && !(alt && m.key == SDL_SCANCODE_RETURN)) b[0] |= m.bit;
+    for (auto& [key, bit] : g_keys)
+        if (k[key] && !(alt && key == SDL_SCANCODE_RETURN)) b[0] |= bit;   // Alt+Enter is fullscreen
     for (auto& p : g_pads) {
         int s = g_slots.slot_of(p.id);
-        if (s >= 0) b[s] |= gamepad_buttons(p.pad);
+        if (s >= 0) b[s] |= gamepad_buttons(p.pad, p.map);
     }
     for (int s = 0; s < kHostSlots; ++s) {
         if ((b[s] & (B_LEFT | B_RIGHT)) == (B_LEFT | B_RIGHT)) b[s] &= (uint16_t)~(B_LEFT | B_RIGHT);   // not on a real pad
@@ -199,8 +275,8 @@ static void pad_added(SDL_JoystickID id) {
         SDL_CloseGamepad(pad);
         return;
     }
-    g_pads.push_back({pad, id});
-    sat_note("gamepad: %s, player %d", SDL_GetGamepadName(pad), s + 1);
+    g_pads.push_back({pad, id, bind_gamepad(guid)});
+    sat_note("gamepad: %s (GUID %s), player %d", SDL_GetGamepadName(pad), guid, s + 1);
 }
 
 static void pad_removed(SDL_JoystickID id) {

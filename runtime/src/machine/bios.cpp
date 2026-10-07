@@ -256,7 +256,7 @@ static bool g_bup_changed;                           // since the file was last 
 static std::string g_bup_path;                       // empty: the saves last for the run alone
 
 // The user's data directory, by the platform's convention; empty if the environment names none.
-static std::string data_dir() {
+std::string sat_data_dir() {
     auto env = [](const char* name) { const char* v = std::getenv(name); return std::string(v ? v : ""); };
 #if defined(_WIN32)
     return env("APPDATA");
@@ -270,7 +270,7 @@ static std::string data_dir() {
 
 // DATA/saturn-recomp/PRODUCT_VERSION/backup.bin, from IP.BIN's product number and version.
 static std::string default_save(const uint8_t* ip) {
-    std::string dir = data_dir();
+    std::string dir = sat_data_dir();
     if (dir.empty()) return "";
     auto field = [&](int at, int len) {
         std::string s(reinterpret_cast<const char*>(ip + at), len);

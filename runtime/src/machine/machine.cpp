@@ -293,6 +293,7 @@ static void slave_main() {
 
 // ---- the stall report ---------------------------------------------------------------------------
 std::atomic<const char*> g_host_call{""};
+static std::atomic<bool> g_run_over;           // the run has stopped: what follows (an encoder finishing) is no stall
 
 // Watches a run nothing else steps (no agent) from its own thread: when no VBlank has come for five
 // seconds it reports where both CPUs and the host are, and again when the run goes on. A window
@@ -304,6 +305,7 @@ static void watch_for_stalls() {
     bool stalled = false;
     for (;;) {
         std::this_thread::sleep_for(milliseconds(250));
+        if (g_run_over) return;
         uint64_t now = sat_vblanks();
         double still = duration<double>(steady_clock::now() - since).count();
         if (now != seen) {
@@ -511,6 +513,7 @@ int saturn_main(const SaturnConfig& cfg) {
             break;
         }
     }
+    g_run_over = true;
     sat_note("stopped (%s) after %llu VBlanks, %.3f s, %d program starts, %llu VDP1 frame changes, %llu draws",
              g_stop_why ? g_stop_why : "?", (unsigned long long)sat_vblanks(), sat_now() / 1e9, g_starts,
              (unsigned long long)video_frame_changes(), (unsigned long long)video_draws());

@@ -88,6 +88,12 @@ bool host_open() {
     return true;
 }
 
+// marks the host call the machine's thread is in while it lasts
+struct HostCall {
+    explicit HostCall(const char* what) { g_host_call = what; }
+    ~HostCall() { g_host_call = ""; }
+};
+
 // ---- sound ------------------------------------------------------------------------------------
 static SDL_AudioStream* g_audio;
 static const int kLead = 2205, kMax = 11025;    // frames: 50 ms ahead, 250 ms at most
@@ -109,9 +115,10 @@ bool host_audio_open() {
 }
 
 void host_audio_push(const int16_t* lr, int frames) {
-    int queued = SDL_GetAudioStreamQueued(g_audio) / 4;
+    int queued = [] { HostCall in("SDL_GetAudioStreamQueued"); return SDL_GetAudioStreamQueued(g_audio) / 4; }();
     if (queued + frames > kMax) { ++g_dropped; return; }
     if (queued == 0) { ++g_underruns; audio_silence(kLead); }
+    HostCall in("SDL_PutAudioStreamData");
     SDL_PutAudioStreamData(g_audio, lr, frames * 4);
 }
 
@@ -169,6 +176,7 @@ static void save_shot() {
 
 static void events() {
     SDL_Event e;
+    HostCall in("SDL_PollEvent");
     while (SDL_PollEvent(&e)) {
         switch (e.type) {
         case SDL_EVENT_QUIT:
@@ -218,7 +226,10 @@ void host_present(const Frame& f) {
     int ph = sh * f.h / tv_lines;
     int dx = (ww - sw) / 2, dy = (wh - ph) / 2;
     glBlitNamedFramebuffer(g_fbo, 0, 0, 0, f.w, f.h, dx, dy + ph, dx + sw, dy, GL_COLOR_BUFFER_BIT, GL_LINEAR);
-    SDL_GL_SwapWindow(g_win);
+    {
+        HostCall in("SDL_GL_SwapWindow");
+        SDL_GL_SwapWindow(g_win);
+    }
     events();
 }
 
@@ -227,5 +238,8 @@ void host_pace(uint64_t now) {
     Clock::time_point due = g_base + std::chrono::nanoseconds(now);
     Clock::time_point t = Clock::now();
     if (t > due + std::chrono::milliseconds(100)) g_base += t - due;   // behind: do not run to catch up
-    else if (due > t) SDL_DelayPrecise((Uint64)std::chrono::duration_cast<std::chrono::nanoseconds>(due - t).count());
+    else if (due > t) {
+        HostCall in("SDL_DelayPrecise");
+        SDL_DelayPrecise((Uint64)std::chrono::duration_cast<std::chrono::nanoseconds>(due - t).count());
+    }
 }

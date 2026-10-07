@@ -29,7 +29,9 @@
 // entry on a fresh host stack: the old program's C++ frames do not pile up
 // under the new one.
 #include "saturn.h"
+#include "host.h"
 #include "video.h"
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdarg>
@@ -289,6 +291,37 @@ static void slave_main() {
     }
 }
 
+// ---- the stall report ---------------------------------------------------------------------------
+std::atomic<const char*> g_host_call{""};
+
+// Watches a run nothing else steps (no agent) from its own thread: when no VBlank has come for five
+// seconds it reports where both CPUs and the host are, and again when the run goes on. A window
+// that freezes is otherwise killed with nothing in the log.
+static void watch_for_stalls() {
+    using namespace std::chrono;
+    uint64_t seen = sat_vblanks();
+    auto since = steady_clock::now();
+    bool stalled = false;
+    for (;;) {
+        std::this_thread::sleep_for(milliseconds(250));
+        uint64_t now = sat_vblanks();
+        double still = duration<double>(steady_clock::now() - since).count();
+        if (now != seen) {
+            if (stalled) sat_note("stall over: VBlank %llu came after %.1f s", (unsigned long long)now, still);
+            seen = now, since = steady_clock::now(), stalled = false;
+        } else if (!stalled && still >= 5) {
+            stalled = true;
+            std::fprintf(stderr, "STALL: no VBlank for 5 s after VBlank %llu; running %s, host call \"%s\", turn %s\n",
+                         (unsigned long long)now, g_cpu->cpu ? "slave" : "master", g_host_call.load(),
+                         g_turn ? "slave" : "master");
+            std::fprintf(stderr, "  master pc %08X pr %08X; slave pc %08X pr %08X%s\n", g_master.pc, g_master.pr,
+                         g_slave.pc, g_slave.pr, g_slave_on ? "" : " (off)");
+            hot_spots();
+            std::fflush(stderr);
+        }
+    }
+}
+
 void slave_on() {
     if (!g_slave_thread) {
         g_slave_thread = true;
@@ -460,6 +493,7 @@ int saturn_main(const SaturnConfig& cfg) {
     sat_note("boot: %s at %08X", m->name, entry);
     if (cfg.task_setjmp) tasks_configure(cfg.task_setjmp, cfg.task_longjmp);
     else if (g_sh2_tasks[0]) tasks_configure(g_sh2_tasks[0], g_sh2_tasks[1]);
+    if (cfg.agent_fd < 0) std::thread(watch_for_stalls).detach();
     for (;;) {
         try {
             SH2Func f = sh2_lookup(entry);

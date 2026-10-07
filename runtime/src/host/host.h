@@ -2,6 +2,7 @@
 // window for the picture, the pad, the pace and an audio stream. The rest of
 // the runtime reaches SDL only through these.
 #pragma once
+#include <atomic>
 #include <cstdint>
 #include "video.h"
 
@@ -14,3 +15,6 @@ uint16_t host_pad();                                 // buttons held, smpc.cpp's
 bool host_audio_open();                              // with a window; false: no device
 void host_audio_push(const int16_t* lr, int frames); // interleaved stereo, 44 100 Hz
 void host_audio_report();                            // how the stream fared, to stderr
+
+// the host call the machine's thread is in, or "" between them, for the stall report (machine.cpp)
+extern std::atomic<const char*> g_host_call;

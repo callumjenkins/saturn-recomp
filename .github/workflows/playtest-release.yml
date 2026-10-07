@@ -61,8 +61,11 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxss-dev \
-            libxkbcommon-dev libwayland-dev libegl1-mesa-dev libgl1-mesa-dev libasound2-dev libpulse-dev libdbus-1-dev libudev-dev
+          # SDL's docs/README-linux.md list, less its test and optional input-method packages
+          sudo apt-get install -y clang pkg-config libasound2-dev libpulse-dev libaudio-dev libjack-dev libsndio-dev \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libxtst-dev \
+            libxkbcommon-dev libdrm-dev libgbm-dev libgl1-mesa-dev libgles2-mesa-dev libegl1-mesa-dev libdbus-1-dev \
+            libudev-dev libpipewire-0.3-dev libwayland-dev libdecor-0-dev
       - name: Read the game's product
         id: game
         run: echo "product=$(python -m saturnrecomp.playtest "$CONFIG" product)" >> "$GITHUB_OUTPUT"
@@ -81,7 +84,8 @@ jobs:
           endpoint=$(python -c "import sys; from saturnrecomp import config; print(config.load(sys.argv[1]).playtest.endpoint)" "$CONFIG")
           curl --fail --silent --show-error -H "Authorization: Bearer $CI_TOKEN" \
             "$endpoint/api/sources/${{ steps.game.outputs.product }}/$BUILD" -o "$RUNNER_TEMP/sources.tar.gz"
-          mkdir -p "$RUNNER_TEMP/gen" && tar -xzf "$RUNNER_TEMP/sources.tar.gz" -C "$RUNNER_TEMP/gen"
+          python -c "import sys, tarfile; tarfile.open(sys.argv[1]).extractall(sys.argv[2], filter='data')" \
+            "$RUNNER_TEMP/sources.tar.gz" "$RUNNER_TEMP/gen"
       - name: Compile the game
         run: |
           cmake -S "$RUNNER_TEMP/gen/recomp" -B "$RUNNER_TEMP/game" -G Ninja -DCMAKE_BUILD_TYPE=Release \

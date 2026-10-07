@@ -3,7 +3,7 @@
 // Some kernels run cooperative tasks, each on its own stack: a task saves its
 // registers with setjmp and longjmps into another's saved ones. Recompiled code
 // keeps the SH-2 call chain on the host stack, so each task runs here on its
-// own host fiber (ucontext) on the master's thread. The build hooks the first
+// own host fiber (ucontext, or a Windows fiber) on the master's thread. The build hooks the first
 // instruction of both functions (recomp --hook); `--tasks SETJMP:LONGJMP`
 // tells the runtime which they are.
 //
@@ -19,18 +19,31 @@
 // saturn_main's.
 //
 // Only the master's tasks are handled, and never from inside an interrupt.
+#if defined(__APPLE__)
+#define _XOPEN_SOURCE 600                   // macOS declares the ucontext calls only under it
+#endif
 #include "saturn.h"
 #include <exception>
 #include <map>
 #include <memory>
-#include <ucontext.h>
 #include <vector>
+#if defined(_WIN32)
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>                        // fibers stand in for ucontext
+#else
+#include <ucontext.h>
+#endif
 
 namespace {
 
 struct Fiber {
+#if defined(_WIN32)
+    void* handle = nullptr;
+#else
     ucontext_t ctx;
     std::vector<char> stack;
+#endif
     uint32_t start = 0;
 };
 
@@ -48,7 +61,12 @@ const size_t kStack = 4u << 20;
 void switch_to(Fiber* t) {
     Fiber* me = g_cur;
     g_cur = t;
+#if defined(_WIN32)
+    (void)me;
+    SwitchToFiber(t->handle);
+#else
     swapcontext(&me->ctx, &t->ctx);
+#endif
     if (me == &g_main && g_exc) {
         std::exception_ptr e = g_exc;
         g_exc = nullptr;
@@ -79,13 +97,20 @@ void fiber_main() {
 
 Fiber* new_fiber(uint32_t pc) {
     auto f = std::make_unique<Fiber>();
-    f->stack.resize(kStack);
     f->start = pc;
+#if defined(_WIN32)
+    if (!g_main.handle && !(g_main.handle = ConvertThreadToFiber(nullptr)))
+        sat_fatal("tasks: the master's thread cannot become a fiber (%lu)", GetLastError());
+    f->handle = CreateFiber(kStack, [](void*) { fiber_main(); }, nullptr);
+    if (!f->handle) sat_fatal("tasks: no fiber for %08X (%lu)", pc, GetLastError());
+#else
+    f->stack.resize(kStack);
     getcontext(&f->ctx);
     f->ctx.uc_stack.ss_sp = f->stack.data();
     f->ctx.uc_stack.ss_size = f->stack.size();
     f->ctx.uc_link = nullptr;
     makecontext(&f->ctx, fiber_main, 0);
+#endif
     g_fibers.push_back(std::move(f));
     sat_trace("task: a fiber starts at %08X (r15 %08X)", pc, g_master.r[15]);
     return g_fibers.back().get();

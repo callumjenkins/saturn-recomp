@@ -24,3 +24,13 @@ def test_a_call_to_a_yield_and_its_callers_resume_after_the_call(tmp_path):
 
 def test_unknown_targets_count_as_yields_when_asked(tmp_path):
     assert points(tmp_path, unknown_yields=True) == [G + 4, F + 4, H + 4]
+
+
+def test_a_function_that_jumps_to_a_yield_yields(tmp_path):
+    path = tmp_path / "tail.bin"
+    path.write_bytes(assemble(
+        0xB002, NOP, RTS, NOP,                   # 00: bsr 08
+        0xA000, NOP,                             # 08: bra 0C, its tail
+        RTS, NOP,                                # 0C, the yield
+    ))
+    assert resume_points(str(path), BASE, [BASE + 0x0C], [BASE + 0x0C]) == [BASE + 4]

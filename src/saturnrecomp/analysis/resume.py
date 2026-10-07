@@ -2,7 +2,8 @@
 
 A task parks inside a call to the game's yield (or to setjmp) and comes back at that call's return
 address. That address is inside a function rather than at an entry, so the build needs it as a
-seed. A function yields if it calls one that does, so the set grows from the yields the config names.
+seed. A function yields if it calls one that does, jumps to one as its tail, or runs into one's entry
+as part of its own code, so the set grows from the yields the config names.
 
     python -m saturnrecomp.analysis.resume GAME.toml [--check]
 --check compares the points with the seeds the learning loop found, instead of printing them.
@@ -54,6 +55,8 @@ def resume_points(path, base, seeds, yields, unknown_yields=False, log=None):
     yielding = set(yields)
     while True:
         more = {e for e, _, t in sites if may_yield(t)} - yielding
+        more |= {f.entry for f in p.funcs.values()
+                 if f.entry not in yielding and (f.tails & yielding or (f.code - {f.entry}) & yielding)}
         if not more:
             break
         yielding |= more

@@ -182,16 +182,28 @@ class Program:
 
     def _abs_switch(self, jmp):
         """SHC's absolute jump table: mov #N,rB; cmp/hs r0,rB; bf default;
-        mov.l @(disp,PC),rT; mov.l @(r0,rT),rJ; jmp @rJ  (r0 a byte offset <= N)."""
+        mov.l @(disp,PC),rT; mov.l @(r0,rT),rJ; jmp @rJ  (r0 a byte offset <= N).
+        Its library's block copy has no bound and one instruction between the load and the jmp
+        (mov.l @(r0,rT),rJ; add #-4,r0; jmp @rJ): its callers index the table, which runs as long as its
+        words point at code near the jmp."""
         img = self.img
         j = img.insn(jmp)
-        ld = img.insn(jmp - 2)
+        at = jmp - 2
+        if img.insn(at).op != "mov.l" and j.n not in _writes(img.insn(at)):
+            at -= 2
+        ld = img.insn(at)
         if ld.op != "mov.l" or ld.fmt != "mov.l @(r0,Rm),Rn" or ld.n != j.n:
             return None
-        lit = self._literal_for(jmp - 2, ld.m)
+        lit = self._literal_for(at, ld.m)
         if not lit or lit[0] != "lit":
             return None
         table = lit[1]
+        if at != jmp - 2:
+            near = lambda v: not v & 1 and abs(v - jmp) < 0x1000 and self.inside(v)
+            k = 0
+            while k < 256 and img.contains(table + 4 * k, 4) and near(img.u32(table + 4 * k)):
+                k += 1
+            return ([img.u32(table + 4 * i) for i in range(k)], table, 4 * k) if k >= 2 else None
         n = None
         a = jmp - 4
         for _ in range(8):
@@ -958,9 +970,9 @@ class Program:
         return (w & 0xFF0F) == 0x2F06 and 8 <= (w >> 4) & 15 <= 14 or w == 0x4F22             or (w & 0xFF80) == 0x7F80
 
     def _prologue_seeds(self):
-        """Unreached code that starts with a stack-frame prologue at a boundary:
-        the start of a gap (after padding), or anywhere in it right after a
-        terminator and its delay slot."""
+        """Unreached code at a boundary with a stack-frame prologue in its first
+        three instructions. A boundary is the start of a gap (after padding),
+        or anywhere in it right after a terminator and its delay slot."""
         added = 0
         img = self.img
         for start, n in self.gaps():
@@ -978,7 +990,8 @@ class Program:
             for c in cands:
                 if c >= end or c in self._rejected or c in self.code or c in self.funcs:
                     continue
-                if not self._is_prologue(img.u16(c)):
+                # the compiler schedules an argument's move or a constant ahead of the frame
+                if not any(c + k < end and self._is_prologue(img.u16(c + k)) for k in (0, 2, 4)):
                     continue
                 f, data = self._descend(c, commit=False)
                 if f.bad or f.code & self.data or data & self.code:

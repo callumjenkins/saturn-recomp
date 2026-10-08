@@ -53,6 +53,9 @@ std::map<uint32_t, Saved> g_saved;          // jmp_buf address -> who saved it, 
 bool g_pending;
 uint32_t g_buf;
 std::exception_ptr g_exc;                    // raised in a fiber, for the master's loop
+void (*g_call)(void*);                       // to run on the thread's stack for the fiber that yielded
+void* g_call_arg;
+std::exception_ptr g_call_exc;               // raised by g_call, for that fiber
 const size_t kStack = 4u << 20;
 
 // minicoro's coroutines only resume and yield, so a fiber yields to the master's stack, which resumes the next.
@@ -66,6 +69,11 @@ void switch_to(Fiber* t) {
         g_cur = t;
         if (mco_resume(t->co) != MCO_SUCCESS) sat_fatal("tasks: the fiber from %08X cannot resume", t->start);
         t = g_next;
+        if (g_call) {
+            g_cur = &g_main;
+            try { g_call(g_call_arg); } catch (...) { g_call_exc = std::current_exception(); }
+            g_call = nullptr;
+        }
     }
     g_cur = &g_main;
     if (g_exc) {
@@ -147,6 +155,19 @@ void tasks_route(SH2Context& c, uint32_t expected) {
     if (t->expected != c.pc) restart(t, c.pc);
     g_cur->expected = expected;
     switch_to(t);
+}
+
+void tasks_on_thread_stack(void (*fn)(void*), void* arg) {
+    if (g_cur == &g_main) return fn(arg);
+    g_call = fn;
+    g_call_arg = arg;
+    g_next = g_cur;
+    mco_yield(g_cur->co);
+    if (g_call_exc) {
+        std::exception_ptr e = g_call_exc;
+        g_call_exc = nullptr;
+        std::rethrow_exception(e);
+    }
 }
 
 void tasks_run(uint32_t entry) {

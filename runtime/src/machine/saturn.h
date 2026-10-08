@@ -176,6 +176,9 @@ bool tasks_pending();               // a longjmp ran and its switch has not happ
 void tasks_route(SH2Context& c, uint32_t expected);   // switch; returns once resumed, at expected
 void tasks_run(uint32_t entry);      // the program from entry as the first task; ends only by an exception
 void tasks_reset();                 // a program start: no tasks
+// Runs fn on the thread's own stack. ART aborts a JNI call made from a fiber's stack, which SDL's
+// event pump makes on Android.
+void tasks_on_thread_stack(void (*fn)(void*), void* arg);
 
 // ---- SH7604 on-chip (onchip.cpp) ------------------------------------------------------
 uint32_t onchip_read(SH2Context& c, uint32_t a, int size);

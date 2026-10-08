@@ -344,8 +344,7 @@ static void events() {
     read_pads();
 }
 
-void host_present(const Frame& f) {
-    if (!g_win) return;
+static void present(const Frame& f) {
     g_last = &f;
     if (SDL_GetWindowFlags(g_win) & (SDL_WINDOW_MINIMIZED | SDL_WINDOW_OCCLUDED | SDL_WINDOW_HIDDEN)) {
         events();
@@ -382,6 +381,11 @@ void host_present(const Frame& f) {
         SDL_RenderPresent(g_ren);
     }
     events();
+}
+
+void host_present(const Frame& f) {
+    if (!g_win) return;
+    tasks_on_thread_stack([](void* f) { present(*static_cast<const Frame*>(f)); }, const_cast<Frame*>(&f));
 }
 
 void host_pace(uint64_t now) {

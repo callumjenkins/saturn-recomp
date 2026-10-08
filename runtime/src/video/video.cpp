@@ -16,6 +16,7 @@
 #include "host.h"
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -34,7 +35,10 @@ static void set16(uint8_t* r, uint32_t o, uint16_t v) { r[o] = v >> 8; r[o + 1] 
 
 void video_init() {
     vdp1_init();
-    if (!host_open()) sat_fatal("no window");
+    if (!host_open()) {                         // the host has said why
+        std::fprintf(stderr, "saturn: no window could be opened; --headless runs without one\n");
+        std::exit(3);
+    }
 }
 
 static int display_lines() {

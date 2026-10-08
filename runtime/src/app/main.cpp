@@ -8,6 +8,7 @@
 //            [--tasks SETJMP:LONGJMP] [--multitap N] [--clock YYYY-MM-DDTHH:MM:SS] [--agent FD]
 //            [--write VBLANK:ADDR=HEX,...] [--video FILE] [--save FILE|-] [--coverage FILE] [--checkpoint SECONDS]
 //            [--log FILE] [--state-in FILE] [--state-out FILE] [--state-every SECONDS] [--state-at VBLANK]
+//            [--progress FILE --progress-keep ADDR:BYTES,...]
 //
 // --vblanks and --starts end the run after that many VBlanks or program
 // starts; the log of the hardware touched goes to DIR/hw-log.txt. --shot
@@ -50,6 +51,8 @@
 // --state-out writes one: at the first safe moment from VBlank --state-at, every --state-every
 // SECONDS of the host's time, and when the window is closed or Back pressed, which then wait for it.
 // A safe moment is a task switch (--tasks), so a game without one makes no dumps.
+// --progress adds a line to FILE whenever the first --progress-keep range changes: the VBlank, then
+// each range's bytes in hex. A game's stage number, say, then what a stage start has to be rebuilt from.
 #include "saturn.h"
 #include <cstdio>
 #include <cstdlib>
@@ -109,6 +112,8 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--state-out") && more) cfg.state_out = argv[++i];
         else if (!std::strcmp(a, "--state-every") && more) cfg.state_every = std::atoi(argv[++i]);
         else if (!std::strcmp(a, "--state-at") && more) cfg.state_at = argv[++i];
+        else if (!std::strcmp(a, "--progress") && more) cfg.progress = argv[++i];
+        else if (!std::strcmp(a, "--progress-keep") && more) cfg.progress_keep = argv[++i];
         else if (!std::strcmp(a, "--virtual-input") && more) cfg.virtual_input = argv[++i];
         else if (!std::strcmp(a, "--dump") && more) cfg.dump = argv[++i];
         else if (!std::strcmp(a, "--shot") && more) cfg.shots = argv[++i];
@@ -147,7 +152,8 @@ int main(int argc, char** argv) {
                                  "             [--wav FILE] [--hook ADDR:rN=VALUE ...] [--tasks SETJMP:LONGJMP] [--multitap N]\n"
                                  "             [--clock YYYY-MM-DDTHH:MM:SS] [--agent FD] [--write VBLANK:ADDR=HEX,...] [--video FILE]\n"
                                  "             [--save FILE|-] [--coverage FILE] [--checkpoint SECONDS] [--log FILE]\n"
-                                 "             [--state-in FILE] [--state-out FILE] [--state-every SECONDS] [--state-at VBLANK]\n");
+                                 "             [--state-in FILE] [--state-out FILE] [--state-every SECONDS] [--state-at VBLANK]\n"
+                                 "             [--progress FILE --progress-keep ADDR:BYTES,...]\n");
             return 2;
         }
     }

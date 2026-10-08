@@ -31,6 +31,8 @@ session. A controller's buttons never quit it.
 If a game ends before you meant it to, "Continue a session" picks it up where it stopped. The app
 saves the whole game every minute and when you quit, so it starts from there and plays the last
 minute's presses again at full speed, with a bar along the bottom, before handing you the controller.
+In Normal Game, if a newer build can't load that save, it starts you at the beginning of the stage
+you were on, with your score, lives and power-ups.
 
 What is recorded
 

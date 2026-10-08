@@ -68,6 +68,8 @@ struct SaturnConfig {
     std::string state_out;          // dumps go to this file: at a stop that waits for one, and as below
     int state_every = 0;            // ... every this many seconds of the host's time (0: only at a stop)
     std::string state_at;           // ... at the first safe moment from this VBlank on
+    std::string progress;           // a file the --progress-keep ranges are added to, a line each time the first changes
+    std::string progress_keep;      // "ADDR:BYTES,...": the ranges
 };
 extern SaturnConfig g_cfg;
 extern SH2Context g_master, g_slave;

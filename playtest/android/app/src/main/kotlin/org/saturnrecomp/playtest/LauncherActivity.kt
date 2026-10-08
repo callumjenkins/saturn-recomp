@@ -122,7 +122,15 @@ class LauncherActivity : Activity() {
         work.execute {
             val unfinished = Sessions.unfinished(home)
             if (unfinished.isNotEmpty()) Thread.sleep(2000)     // SDL gives the game a second to write its coverage once it is closed
-            val ended = unfinished.count { Sessions.finish(it) }
+            val finished = unfinished.filter { Sessions.finish(it) }
+            // A Continue this build cannot load the dump of goes on again from the checkpoint or the presses instead.
+            finished.firstOrNull { Sessions.dumpRefused(it) }?.let { refused ->
+                val from = File(home, "sessions/${Sessions.read(refused).getString("continues")}")
+                refused.deleteRecursively()
+                runOnUiThread { play(from, useDump = false) }
+                return@execute
+            }
+            val ended = finished.size
             if (code.isEmpty()) {
                 if (ended > 0) say("Session kept on this phone.")
                 return@execute
@@ -184,7 +192,7 @@ class LauncherActivity : Activity() {
             .show()
     }
 
-    private fun play(from: File? = null) {
+    private fun play(from: File? = null, useDump: Boolean = true) {
         val cue = settings.optString("cue")
         if (cue.isEmpty()) {
             say("Choose your disc first.")
@@ -193,8 +201,13 @@ class LauncherActivity : Activity() {
         val code = token.text.toString().trim()
         settings.put("token", code)
         saveSettings()
-        val (session, args) = Sessions.start(home, info, File(cue), send = code.isNotEmpty(), from = from)
-        say((if (from != null) "The game plays your presses again to get back there, then the controller is yours. " else "") +
+        val (session, args) = Sessions.start(home, info, File(cue), send = code.isNotEmpty(), from = from, useDump = useDump)
+        val record = Sessions.read(session)
+        say((when {
+            record.has("rebuilds") -> "This build can't load where that session ended, so it starts you at the beginning of the stage you were on. "
+            from != null -> "The game plays your presses again to get back there, then the controller is yours. "
+            else -> ""
+        }) +
             if (code.isNotEmpty()) "The session is sent every 10 minutes and when you quit."
             else "Without a tester code this session stays on this phone.")
         val game = Intent(this, GameActivity::class.java)

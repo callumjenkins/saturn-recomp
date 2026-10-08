@@ -29,38 +29,48 @@ object Sessions {
     const val USER_AGENT = "saturn-playtest/0.1"            // Cloudflare's edge refuses some default user agents (error 1010)
     private val LOCAL = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")     // the runtime's --clock
     private val UTC = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ssxxx")    // Python's isoformat
-    private val FILES = listOf("session.json", "input.txt", "clock.txt", "backup-at-start.bin", "state-at-start.bin", "log.txt", "coverage.txt")
+    private val FILES = listOf("session.json", "input.txt", "clock.txt", "backup-at-start.bin", "state-at-start.bin", "log.txt", "coverage.txt", PROGRESS)
     private const val DUMP = "state.bin"                    // the run's latest dump of the machine
+    private const val PROGRESS = "progress.txt"             // the runtime's --progress: the starts Continue can rebuild
 
     /**
      * A new session's directory under `home`/sessions, and the runtime's arguments for it; with `send`, it is sent once it has ended.
      * With `from`, the session goes on where that one ended: from its last dump, or from its start (its clock and saves)
-     * without one, with its presses after that point played again before the controller takes over.
+     * without one, with its presses after that point played again before the controller takes over. With `useDump` false,
+     * it goes on from the last start the game's checkpoint can rebuild (rebuild), and from its presses without one.
      */
-    fun start(home: File, info: JSONObject, cue: File, send: Boolean, from: File? = null): Pair<File, List<String>> {
+    fun start(home: File, info: JSONObject, cue: File, send: Boolean, from: File? = null, useDump: Boolean = true): Pair<File, List<String>> {
         val started = LocalDateTime.now().truncatedTo(ChronoUnit.SECONDS)
         val out = File(home, "sessions/${started.format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))}-${UUID.randomUUID().toString().replace("-", "").take(8)}")
         out.mkdirs()
         val clock = if (from != null) read(from).getString("clock") else started.format(LOCAL)
         File(out, "clock.txt").writeText(clock + "\n")
         val save = File(home, "backup.bin")
-        val dump = from?.let { File(it, DUMP) }?.takeIf { it.exists() }
-        if (from != null && dump == null) {
+        val dump = from?.takeIf { useDump }?.let { File(it, DUMP) }?.takeIf { it.exists() }
+        val rebuilt = from?.takeIf { dump == null }?.let { f -> info.optJSONObject("checkpoint")?.let { rebuild(it, f) } }
+        from?.let { File(it, PROGRESS) }?.takeIf { it.exists() }?.copyTo(File(out, PROGRESS))
+        if (from != null && dump == null && rebuilt == null) {
             save.delete()
             File(from, "backup-at-start.bin").takeIf { it.exists() }?.copyTo(save)
         }
         dump?.copyTo(File(out, "state-at-start.bin"))
         if (save.exists()) save.copyTo(File(out, "backup-at-start.bin"))
-        val extra = info.optJSONArray("args") ?: JSONArray()
+        val extra = JSONArray(info.optJSONArray("args")?.let { a -> (0 until a.length()).map { a.getString(it) } } ?: emptyList<String>())
+        rebuilt?.second?.forEach { extra.put("--write").put(it) }
         val record = JSONObject()
             .put("id", out.name).put("product", info.getString("product")).put("build", info.getString("build"))
             .put("started", started.atZone(ZoneId.systemDefault()).withZoneSameInstant(ZoneOffset.UTC).format(UTC))
             .put("clock", clock).put("args", extra)
             .put("platform", "Android ${Build.VERSION.RELEASE} ${Build.SUPPORTED_ABIS.firstOrNull() ?: ""} ${Build.MANUFACTURER} ${Build.MODEL}")
         if (from != null) record.put("continues", from.name)
+        if (rebuilt != null) record.put("rebuilds", rebuilt.first)
         write(out, record)
         if (send) File(out, UNSENT).createNewFile()
-        val resume = from?.let { File(it, "input.txt") }?.takeIf { it.exists() && it.length() > 0 }?.let {
+        val resume = if (rebuilt != null) {
+            val presses = File(out, "resume.txt")
+            presses.writeText(info.getJSONObject("checkpoint").getString("presses"))
+            listOf("--input", "@${presses.path}", "--resume", info.getJSONObject("checkpoint").getLong("resume").toString())
+        } else from?.let { File(it, "input.txt") }?.takeIf { it.exists() && it.length() > 0 }?.let {
             val presses = File(out, "resume.txt")
             it.copyTo(presses)
             listOf("--input", "@${presses.path}", "--resume", vblanks(from).toString())
@@ -71,8 +81,37 @@ object Sessions {
             "--record-input", File(out, "input.txt").path, "--coverage", File(out, "coverage.txt").path,
             "--checkpoint", CHECKPOINT.toString(), "--log", File(out, "log.txt").path,
             "--state-out", File(out, DUMP).path, "--state-every", DUMP_EVERY.toString(),
-        ) + start + resume + (0 until extra.length()).map { extra.getString(it) }
+        ) + (info.optJSONObject("checkpoint")?.let { listOf("--progress", File(out, PROGRESS).path, "--progress-keep", it.getString("keep")) } ?: emptyList()) +
+            start + resume + (0 until extra.length()).map { extra.getString(it) }
         return out to args
+    }
+
+    /**
+     * The VBlank of the last start `session` noted, and the --write arguments that rebuild it, as saturnrecomp.config's
+     * Checkpoint.rebuild makes them; null when it noted none, or none `checkpoint` accepts.
+     */
+    private fun rebuild(checkpoint: JSONObject, session: File): Pair<Long, List<String>>? {
+        val line = File(session, PROGRESS).takeIf { it.exists() }?.readLines()?.lastOrNull { it.isNotBlank() } ?: return null
+        val fields = line.trim().split(" ")
+        val kept = fields.drop(1).map { f -> f.chunked(2).map { it.toInt(16) } }
+        val accept = checkpoint.getJSONArray("accept")
+        if (kept.size != checkpoint.getString("keep").split(",").size) return null
+        val first = kept[0].fold(0L) { v, b -> v * 256 + b }
+        if ((0 until accept.length()).none { accept.getJSONArray(it).let { r -> first in r.getLong(0)..r.getLong(1) } }) return null
+        val writes = checkpoint.getJSONArray("writes")
+        return fields[0].toLong() to (0 until writes.length()).map { i ->
+            val w = writes.getJSONArray(i)
+            val bytes = kept[w.getInt(2)]
+            val mask = if (w.isNull(3)) null else w.getString(3).chunked(2).map { it.toInt(16) }
+            val data = if (mask == null) bytes else bytes.zip(mask) { b, m -> b and m }
+            "${w.getLong(0)}:${w.getString(1)}=" + data.joinToString("") { "%02X".format(it) }
+        }
+    }
+
+    /** True if `session` was a Continue whose dump the runtime refused (state.cpp's state_fail), so it played nothing. */
+    fun dumpRefused(session: File): Boolean {
+        val record = read(session)
+        return record.has("continues") && File(session, "state-at-start.bin").exists() && record.optString("exit").startsWith("state ")
     }
 
     /** The sessions on this phone that can be continued, newest first. */

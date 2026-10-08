@@ -183,6 +183,50 @@ static void writes_due() {
     }
 }
 
+// --progress FILE: "VBLANK HEX HEX ...", the bytes of each --progress-keep range, added whenever the
+// first range changes. None while --resume's script plays, whose run left its own lines.
+struct Range { uint32_t addr, n; };
+static std::vector<Range> g_keep;
+
+static void parse_keep(const std::string& spec) {
+    size_t i = 0;
+    while (i < spec.size()) {
+        size_t j = spec.find(',', i);
+        std::string item = spec.substr(i, j == std::string::npos ? std::string::npos : j - i);
+        i = j == std::string::npos ? spec.size() : j + 1;
+        unsigned addr, n;
+        if (std::sscanf(item.c_str(), "%x:%u", &addr, &n) != 2 || !n) sat_fatal("--progress-keep: %s is not ADDR:BYTES", item.c_str());
+        g_keep.push_back({addr, n});
+    }
+}
+
+static void progress_due() {
+    static uint64_t vblank = ~0ull;
+    static std::vector<uint8_t> first;
+    if (g_cfg.progress.empty() || g_keep.empty() || sat_vblanks() == vblank) return;
+    vblank = sat_vblanks();
+    std::vector<uint8_t> now(g_keep[0].n);
+    for (uint32_t k = 0; k < now.size(); ++k) now[k] = (uint8_t)ld8(g_keep[0].addr + k);
+    if (now == first) return;
+    bool started = !first.empty();
+    first = now;
+    if (!started || sat_resuming()) return;
+    std::string line = std::to_string(vblank);
+    for (const Range& r : g_keep) {
+        line += ' ';
+        for (uint32_t k = 0; k < r.n; ++k) {
+            char hex[3];
+            std::snprintf(hex, sizeof hex, "%02X", (unsigned)ld8(r.addr + k) & 0xFF);
+            line += hex;
+        }
+    }
+    FILE* f = std::fopen(g_cfg.progress.c_str(), "a");
+    if (!f) { sat_note("progress: cannot write %s", g_cfg.progress.c_str()); return; }
+    std::fprintf(f, "%s\n", line.c_str());
+    std::fclose(f);
+    sat_note("progress at VBlank %llu", (unsigned long long)vblank);
+}
+
 // --peek ADDR[:WORDS],...: 32-bit words of memory, through the ordinary reads
 static void peek(const std::string& spec) {
     size_t i = 0;
@@ -424,6 +468,7 @@ void master_poll_devices() {
     smpc_tick();
     sound_tick();
     checkpoint_due();
+    progress_due();
     state_poll();
     if (g_slave_on && !g_slave_idle) to_slave();
     if (g_cfg.stop_vblanks && sat_vblanks() >= g_cfg.stop_vblanks) sat_stop("VBlank limit");
@@ -525,6 +570,7 @@ int saturn_main(const SaturnConfig& cfg) {
     }
     smpc_input_script(cfg.input);
     parse_writes(cfg.writes);
+    parse_keep(cfg.progress_keep);
     if (!cdrom_open(cfg.cue)) { std::fprintf(stderr, "cannot open the disc %s\n", cfg.cue.c_str()); return 2; }
     g_master = SH2Context{};
     g_master.budget = kBudget;

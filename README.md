@@ -97,6 +97,7 @@ build/recomp-build/saturn --cue GAME.cue --headless --save -        # saves kept
 build/recomp-build/saturn --cue GAME.cue --coverage cov.txt --checkpoint 600   # which functions ran, rewritten every 10 minutes
 build/recomp-build/saturn --cue GAME.cue --state-out game.state --state-every 60   # the machine dumped every minute and at a quit (a game with --tasks)
 build/recomp-build/saturn --cue GAME.cue --state-in game.state       # the run going on from that dump
+build/recomp-build/saturn --cue GAME.cue --progress p.txt --progress-keep 060C029C:2,060C0690:8   # both ranges noted whenever the first changes
 ```
 
 The game's saves go to one file per game in the user's data directory unless `--save` names

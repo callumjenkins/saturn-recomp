@@ -91,7 +91,15 @@ game whose task switch the build knows (the runtime's `--state-out`). "Continue 
 new session from an earlier one's last dump, kept as its `state-at-start.bin` and sent with it, and
 `--resume` plays the presses recorded after the dump before the controller takes over. A session
 without a dump continues from its clock and saves, all its presses played again. `replay` starts
-from `state-at-start.bin` when a session has one. The phone needs a controller for now. `app/build.gradle.kts` lists the properties the workflow builds it with.
+from `state-at-start.bin` when a session has one.
+
+A game's `[checkpoint]` in its game.toml names memory the runs note in the session's `progress.txt`
+whenever the first range changes (the runtime's `--progress`), such as a stage number with what the
+player carries into the stage. When the runtime refuses a dump, as a build with another dump format
+does, the launcher drops that attempt and continues again from the last line it can rebuild: the
+checkpoint's presses from power-on, its writes filled in from the line, and the controller taken
+over at its `resume`. The writes go in the new session's arguments, so `replay` plays it the same
+way. Without such a line, the presses are played again from the start. The phone needs a controller for now. `app/build.gradle.kts` lists the properties the workflow builds it with.
 
 `DiscTest` checks the Kotlin disc check against a real disc. It runs only when `SATURN_CUE` and
 `SATURN_DISC_JSON` name the disc and the game's `disc.json`, with `gradle testDebugUnitTest` and the

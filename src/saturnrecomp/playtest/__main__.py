@@ -58,6 +58,8 @@ def bundle(game, ident, out):
     os.makedirs(out, exist_ok=True)
     info = {"name": game.name, "product": game.playtest.product, "build": ident, "endpoint": game.playtest.endpoint,
             "repo": game.playtest.repo, "args": game.playtest.args, "boxart": game.playtest.boxart}
+    if game.checkpoint:
+        info["checkpoint"] = game.checkpoint.to_json()
     json.dump(info, open(os.path.join(out, "playtest.json"), "w"), indent=1)
     shutil.copy(game.playtest.disc, os.path.join(out, "disc.json"))
 

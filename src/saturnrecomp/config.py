@@ -34,7 +34,15 @@
     args = []                       # saturn arguments every session plays with
     boxart = "https://..."          # the box art the Android app shows, fetched by the app, never bundled
 
-An address is a number or a name from [symbols]. Paths are relative to the file.
+    [checkpoint]                    # optional: a start a session's Continue can rebuild when its dump won't load
+    keep = [["stage_2", 2], ["score", 8], ["objects+0x5E", 1]]   # the first's changes start one
+    accept = [[0x0001, 0x0006], [0x0100, 0x0108]]   # ranges of the first's values, big-endian, it can be rebuilt from
+    presses = ["1900:START", "1910:"]   # from power-on to where the writes go in
+    writes = ["4250:stage=stage_2", "4600:score", "4600:objects+0x5E&08"]   # AT:TARGET[=KEPT][&MASK]
+    resume = 4610                   # the player's pads take over here
+
+An address is a number, a name from [symbols], or either plus an offset ("objects+0x5E"). Paths are
+relative to the file.
 """
 import json
 import os
@@ -80,6 +88,57 @@ class Playtest:
 
 
 @dataclass
+class Checkpoint:
+    """Ranges a session notes whenever the first changes (the runtime's --progress), and how a start is
+    rebuilt from a line of them: presses from power-on, then the kept bytes written back."""
+    keep: list[tuple[int, int]]                 # (address, bytes)
+    accept: list[tuple[int, int]]
+    presses: list[str]
+    writes: list[tuple[int, int, int, bytes | None]]   # (VBlank, address, index into keep, mask)
+    resume: int
+
+    @property
+    def keep_arg(self):
+        return ",".join(f"{a:08X}:{n}" for a, n in self.keep)
+
+    def rebuild(self, line):
+        """The --write arguments that rebuild the start a --progress line names, or None when its first
+        range is outside `accept`."""
+        fields = line.split()
+        kept = [bytes.fromhex(f) for f in fields[1:]]
+        if len(kept) != len(self.keep) or not any(lo <= int.from_bytes(kept[0], "big") <= hi for lo, hi in self.accept):
+            return None
+        out = []
+        for at, addr, k, mask in self.writes:
+            data = kept[k] if mask is None else bytes(b & m for b, m in zip(kept[k], mask))
+            out.append(f"{at}:{addr:08X}={data.hex().upper()}")
+        return out
+
+    def to_json(self):
+        return {"keep": self.keep_arg, "accept": [list(a) for a in self.accept], "presses": ",".join(self.presses), "resume": self.resume,
+                "writes": [[at, f"{addr:08X}", k, mask.hex() if mask else None] for at, addr, k, mask in self.writes]}
+
+
+def _checkpoint(c, symbols):
+    names = [k[0] for k in c["keep"]]
+    keep = [(_addr(name, symbols), n) for name, n in c["keep"]]
+    writes = []
+    for w in c["writes"]:
+        at, rest = w.split(":", 1)
+        rest, _, mask = rest.partition("&")
+        target, _, kept = rest.partition("=")
+        kept = kept or target
+        if kept not in names:
+            raise SystemExit(f"[checkpoint]: the write {w} names {kept}, which keep does not")
+        k = names.index(kept)
+        mask = bytes.fromhex(mask) if mask else None
+        if mask is not None and len(mask) != keep[k][1]:
+            raise SystemExit(f"[checkpoint]: the write {w} has a mask of another length than {kept}")
+        writes.append((int(at), _addr(target, symbols), k, mask))
+    return Checkpoint(keep, [tuple(a) for a in c["accept"]], list(c["presses"]), writes, c["resume"])
+
+
+@dataclass
 class Game:
     name: str
     root: str
@@ -91,6 +150,7 @@ class Game:
     hooks: dict[str, list[int]]
     cmake: list[str] = field(default_factory=list)
     playtest: Playtest | None = None
+    checkpoint: Checkpoint | None = None
 
     @property
     def saturn(self):
@@ -145,12 +205,13 @@ def load(path):
                             p.get("boxart", ""))
     return Game(game.get("name", os.path.basename(root)), root, os.path.join(root, game.get("build", "build")),
                 os.path.join(root, game.get("seeds", "seeds.json")), modules, symbols, tasks, hooks,
-                list(game.get("cmake", [])), playtest)
+                list(game.get("cmake", [])), playtest, _checkpoint(t["checkpoint"], symbols) if "checkpoint" in t else None)
 
 
 def _addr(value, symbols):
     if isinstance(value, int):
         return value
-    if value not in symbols:
-        raise SystemExit(f"no symbol named {value}")
-    return symbols[value]
+    name, plus, offset = value.partition("+")
+    if name not in symbols:
+        raise SystemExit(f"no symbol named {name}")
+    return symbols[name] + (int(offset, 0) if plus else 0)

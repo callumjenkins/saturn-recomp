@@ -131,6 +131,10 @@ const SH2Module* sh2_identify_containing(uint32_t addr, bool* exact) {
 static const int kSlots = 8;
 static const SH2Module* g_active[kSlots];
 
+int sh2_active_slots() { return kSlots; }
+const SH2Module* sh2_active_slot(int i) { return g_active[i]; }
+void sh2_set_active_slot(int i, const SH2Module* m) { g_active[i] = m; }
+
 void sh2_activate(const SH2Module* m) {
     for (auto& a : g_active)
         if (a && a->base < m->base + m->size && m->base < a->base + a->size) a = nullptr;

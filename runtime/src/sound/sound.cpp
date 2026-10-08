@@ -21,6 +21,7 @@
 // The samples go to the window's audio stream (host.cpp) and, with --wav,
 // to a 16-bit stereo WAV file of the whole run (--wav, or --video's).
 #include "saturn.h"
+#include "state.h"
 #include "sound.h"
 #include "host.h"
 #include "video.h"
@@ -28,6 +29,9 @@
 #include <vector>
 extern "C" {
 #include "m68k.h"
+size_t m68k_state_size(void);               // m68k_state.c
+void m68k_state_get(void* out);
+void m68k_state_set(const void* in);
 }
 
 static bool g_on;                                // SNDON: the 68000 runs
@@ -161,4 +165,15 @@ uint32_t sound_read(uint32_t a, int size) {
 void sound_write(uint32_t a, uint32_t v, int size) {
     if (a < 0x05B00000u) { mem_wr(g_sound_ram, a & 0x7FFFF, v, size); return; }
     scsp_write(a & 0xFFF, v, size);
+}
+
+
+void sound_state(State& s) {
+    s(g_on), s(g_samples), s(g_debt), s(g_peak_frames);
+    std::vector<uint8_t> cpu(m68k_state_size());
+    m68k_state_get(cpu.data());
+    s.vec(cpu);
+    if (!s.loading) return;
+    if (cpu.size() != m68k_state_size()) state_fail("the 68000's registers are another size");
+    m68k_state_set(cpu.data());
 }

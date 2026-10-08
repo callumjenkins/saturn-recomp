@@ -29,8 +29,8 @@ takes about 600 MB on the phone. Press the phone's Back twice to quit the game a
 session. A controller's buttons never quit it.
 
 If a game ends before you meant it to, "Continue a session" picks it up where it stopped. The app
-plays your presses from that session again at full speed, with a bar along the bottom, then hands you
-the controller. It takes a few minutes for a long session.
+saves the whole game every minute and when you quit, so it starts from there and plays the last
+minute's presses again at full speed, with a bar along the bottom, before handing you the controller.
 
 What is recorded
 

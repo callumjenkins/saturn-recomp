@@ -26,6 +26,7 @@
 // (the special function codes), gradation of RBG0, extended colour
 // calculation, the exclusive resolutions. A register that asks for one of them is noted once.
 #include "saturn.h"
+#include "state.h"
 #include "video.h"
 #include <algorithm>
 #include <cstring>
@@ -488,3 +489,5 @@ void vdp2_compose(Frame& f) {
         }
     }
 }
+
+void vdp2_state(State& s) { s(g_vdp2_vram), s(g_vdp2_cram), s(g_vdp2_regs); }

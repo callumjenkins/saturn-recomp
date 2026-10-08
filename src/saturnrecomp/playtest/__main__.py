@@ -103,17 +103,20 @@ def pull(game, pulled):
 
 
 def replay(game, session, video):
-    """The session played again headless on the current build, into its replay/ directory."""
+    """The session played again headless on the current build, into its replay/ directory, from the dump it
+    started from if it has one."""
     info = json.load(open(os.path.join(session, "session.json")))
     out = os.path.join(session, "replay")
     os.makedirs(out, exist_ok=True)
     save = "-"
     if os.path.exists(os.path.join(session, "backup-at-start.bin")):
         save = shutil.copy(os.path.join(session, "backup-at-start.bin"), os.path.join(out, "backup.bin"))
+    dump = os.path.join(session, "state-at-start.bin")
     recorded = os.path.join(session, "input.txt")
     has_presses = os.path.exists(recorded) and open(recorded).read().strip(",\n")
     args = [game.saturn, "--cue", _cue(), "--out", out, "--save", save, "--clock", info["clock"], "--headless",
             *(["--input", f"@{recorded}"] if has_presses else []), "--vblanks", str(vblanks(session) + 600),
+            *(["--state-in", dump] if os.path.exists(dump) else []),
             "--coverage", os.path.join(out, "coverage.txt"), *info.get("args", []),
             *(["--video", os.path.abspath(os.path.join(out, "video.mp4"))] if video else [])]
     with open(os.path.join(out, "log.txt"), "w") as log:

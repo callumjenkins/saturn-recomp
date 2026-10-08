@@ -12,6 +12,7 @@
 // VDP1 is vdp1.cpp, VDP2's picture vdp2.cpp; VDP2's registers, VRAM and
 // colour RAM keep what is written.
 #include "saturn.h"
+#include "state.h"
 #include "video.h"
 #include "host.h"
 #include <algorithm>
@@ -139,3 +140,5 @@ void video_write(uint32_t a, uint32_t v, int size) {
     if (a < 0x05D00020u) { vdp1_reg_write(a & 0x1F, v, size); return; }
     mem_wr(g_vdp2_regs, a & 0x1FF, v, size);
 }
+
+void video_state(State& s) { s(g_line_abs), s(g_vblanks); }

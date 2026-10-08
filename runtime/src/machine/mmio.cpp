@@ -15,6 +15,7 @@
 //     area R|W  NAME  LO  HI  COUNT
 //     call TARGET FROM COUNT
 #include "saturn.h"
+#include "state.h"
 #include <cstdio>
 #include <map>
 #include <tuple>
@@ -149,4 +150,9 @@ void sh2_mmio_write(uint32_t a, uint32_t v, int size) {
     if (a >= 0x05FE0000u && a < 0x05FE0100u) { scu_write(a & 0xFF, v, size); return; }
     if (video_owns(a)) { video_write(a, v, size); return; }
     sat_fatal("%d-byte write of %08X to %08X: nothing there", size, v, a);
+}
+
+void mmio_state(State& s) {
+    s(g_backup);
+    s(g_cache);
 }

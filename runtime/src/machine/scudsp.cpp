@@ -20,6 +20,7 @@
 // the ALU's new value). The multiplier holds RX * RY from the previous
 // operation. Jumps and loops have a delay slot: the next word runs first.
 #include "saturn.h"
+#include "state.h"
 #include <cstring>
 
 namespace {
@@ -268,3 +269,5 @@ void scu_dsp_write(uint32_t off, uint32_t v) {
         return;
     }
 }
+
+void scudsp_state(State& s) { s(g); }

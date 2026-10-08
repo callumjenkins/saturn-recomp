@@ -15,6 +15,7 @@
 // SBL's CDC library; where the documents leave a value open, the choice is
 // noted here.
 #include "saturn.h"
+#include "state.h"
 #include <cstring>
 #include <deque>
 #include <string>
@@ -565,4 +566,22 @@ void cd_write(uint32_t off, uint32_t v, int size) {
     case 0x90024: g_cr[3] = (uint16_t)v; command(); return;
     }
     sat_fatal("CD block write %05X = %X (%d bytes)", off, v, size);
+}
+
+void cdblock_state(State& s) {
+    s(g_block);
+    s.vec(g_free);
+    for (auto& p : g_part) s.deq(p);
+    s(g_filter), s(g_cddev), s(g_lastbuf);
+    s(g_hirq), s(g_hmask), s(g_cr), s(g_out), s(g_cmd_busy), s(g_next_peri);
+    s(g_status), s(g_fad), s(g_play_end), s(g_play_start), s(g_repeat), s(g_repeat_left), s(g_audio_play);
+    s(g_play_t0), s(g_play_done), s(g_getlen);
+    s.deq(g_cdda);
+    s(g_xfer);
+    s.vec(g_words), s.vec(g_xblocks);
+    s(g_xpos), s(g_xdelete), s(g_xpart), s(g_xcount), s(g_calcsize);
+    uint64_t n = g_dir.size();
+    s(n);
+    if (s.loading) g_dir.resize(n);
+    for (auto& f : g_dir) s(f.fad), s(f.size), s(f.attr), s(f.fn), s.str(f.name);
 }

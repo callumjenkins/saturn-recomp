@@ -7,7 +7,7 @@ import urllib.error
 import urllib.request
 import zipfile
 
-FILES = ["session.json", "input.txt", "clock.txt", "backup-at-start.bin", "log.txt", "coverage.txt"]
+FILES = ["session.json", "input.txt", "clock.txt", "backup-at-start.bin", "state-at-start.bin", "log.txt", "coverage.txt"]
 UNSENT = "unsent"                       # in a session that ended before its last upload got through
 USER_AGENT = "saturn-playtest/0.1"      # Cloudflare's edge refuses Python's default user agent (error 1010)
 

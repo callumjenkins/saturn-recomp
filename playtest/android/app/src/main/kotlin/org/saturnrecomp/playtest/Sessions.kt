@@ -23,17 +23,19 @@ import java.util.zip.ZipOutputStream
 object Sessions {
     private const val TAG = "saturn-playtest"
     const val CHECKPOINT = 600
+    const val DUMP_EVERY = 60                               // seconds: how far Continue may have to play presses again
     const val SEND_AFTER_CHECKPOINT = 15
     const val UNSENT = "unsent"                             // in a session played with a tester code, until the Worker has it whole
     const val USER_AGENT = "saturn-playtest/0.1"            // Cloudflare's edge refuses some default user agents (error 1010)
     private val LOCAL = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")     // the runtime's --clock
     private val UTC = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ssxxx")    // Python's isoformat
-    private val FILES = listOf("session.json", "input.txt", "clock.txt", "backup-at-start.bin", "log.txt", "coverage.txt")
+    private val FILES = listOf("session.json", "input.txt", "clock.txt", "backup-at-start.bin", "state-at-start.bin", "log.txt", "coverage.txt")
+    private const val DUMP = "state.bin"                    // the run's latest dump of the machine
 
     /**
      * A new session's directory under `home`/sessions, and the runtime's arguments for it; with `send`, it is sent once it has ended.
-     * With `from`, the session goes on from where that one ended: the run starts as it did, with its clock and saves,
-     * and plays its presses again before the controller takes over, so the new session's input holds both.
+     * With `from`, the session goes on where that one ended: from its last dump, or from its start (its clock and saves)
+     * without one, with its presses after that point played again before the controller takes over.
      */
     fun start(home: File, info: JSONObject, cue: File, send: Boolean, from: File? = null): Pair<File, List<String>> {
         val started = LocalDateTime.now().truncatedTo(ChronoUnit.SECONDS)
@@ -42,10 +44,12 @@ object Sessions {
         val clock = if (from != null) read(from).getString("clock") else started.format(LOCAL)
         File(out, "clock.txt").writeText(clock + "\n")
         val save = File(home, "backup.bin")
-        if (from != null) {
+        val dump = from?.let { File(it, DUMP) }?.takeIf { it.exists() }
+        if (from != null && dump == null) {
             save.delete()
             File(from, "backup-at-start.bin").takeIf { it.exists() }?.copyTo(save)
         }
+        dump?.copyTo(File(out, "state-at-start.bin"))
         if (save.exists()) save.copyTo(File(out, "backup-at-start.bin"))
         val extra = info.optJSONArray("args") ?: JSONArray()
         val record = JSONObject()
@@ -56,23 +60,25 @@ object Sessions {
         if (from != null) record.put("continues", from.name)
         write(out, record)
         if (send) File(out, UNSENT).createNewFile()
-        val resume = from?.let {
+        val resume = from?.let { File(it, "input.txt") }?.takeIf { it.exists() && it.length() > 0 }?.let {
             val presses = File(out, "resume.txt")
-            File(it, "input.txt").copyTo(presses)
-            listOf("--input", "@${presses.path}", "--resume", vblanks(it).toString())
+            it.copyTo(presses)
+            listOf("--input", "@${presses.path}", "--resume", vblanks(from).toString())
         } ?: emptyList()
+        val start = if (dump != null) listOf("--state-in", File(out, "state-at-start.bin").path) else emptyList()
         val args = listOf(
             "--cue", cue.path, "--out", out.path, "--clock", clock, "--save", save.path,
             "--record-input", File(out, "input.txt").path, "--coverage", File(out, "coverage.txt").path,
             "--checkpoint", CHECKPOINT.toString(), "--log", File(out, "log.txt").path,
-        ) + resume + (0 until extra.length()).map { extra.getString(it) }
+            "--state-out", File(out, DUMP).path, "--state-every", DUMP_EVERY.toString(),
+        ) + start + resume + (0 until extra.length()).map { extra.getString(it) }
         return out to args
     }
 
     /** The sessions on this phone that can be continued, newest first. */
     fun continuable(home: File): List<File> =
         File(home, "sessions").listFiles()
-            ?.filter { File(it, "session.json").exists() && (File(it, "input.txt").takeIf { f -> f.exists() }?.length() ?: 0) > 0 }
+            ?.filter { File(it, "session.json").exists() && (File(it, DUMP).exists() || (File(it, "input.txt").takeIf { f -> f.exists() }?.length() ?: 0) > 0) }
             ?.sortedDescending() ?: emptyList()
 
     /** Records how a session ended, if it has not been yet; true if this call did. */

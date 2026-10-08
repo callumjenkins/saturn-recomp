@@ -95,6 +95,8 @@ build/recomp-build/saturn --cue GAME.cue --headless --watch 06058D6C:06058DCF --
 build/recomp-build/saturn --cue GAME.cue --headless --write 4250:060C179A=0201   # memory set at a VBlank, such as a stage select
 build/recomp-build/saturn --cue GAME.cue --headless --save -        # saves kept for this run alone, starting empty
 build/recomp-build/saturn --cue GAME.cue --coverage cov.txt --checkpoint 600   # which functions ran, rewritten every 10 minutes
+build/recomp-build/saturn --cue GAME.cue --state-out game.state --state-every 60   # the machine dumped every minute and at a quit (a game with --tasks)
+build/recomp-build/saturn --cue GAME.cue --state-in game.state       # the run going on from that dump
 ```
 
 The game's saves go to one file per game in the user's data directory unless `--save` names

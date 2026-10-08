@@ -325,7 +325,7 @@ static void events() {
     while (SDL_PollEvent(&e)) {
         switch (e.type) {
         case SDL_EVENT_QUIT:
-            sat_stop("the window was closed");
+            state_stop("the window was closed");
         case SDL_EVENT_GAMEPAD_ADDED:
             pad_added(e.gdevice.which);
             break;
@@ -334,7 +334,7 @@ static void events() {
             break;
         case SDL_EVENT_KEY_DOWN:
             if (e.key.repeat) break;
-            if (e.key.scancode == SDL_SCANCODE_AC_BACK) sat_stop("Back was pressed");     // Android's Back
+            if (e.key.scancode == SDL_SCANCODE_AC_BACK) state_stop("Back was pressed");     // Android's Back
             if (e.key.scancode == SDL_SCANCODE_F12) save_shot();
             if (e.key.scancode == SDL_SCANCODE_F11 || (e.key.scancode == SDL_SCANCODE_RETURN && (e.key.mod & SDL_KMOD_ALT)))
                 SDL_SetWindowFullscreen(g_win, !(SDL_GetWindowFlags(g_win) & SDL_WINDOW_FULLSCREEN));

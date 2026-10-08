@@ -23,6 +23,7 @@
 //
 // Only the master's tasks are handled, and never from inside an interrupt.
 #include "saturn.h"
+#include "state.h"
 #include <exception>
 #include <map>
 #include <memory>
@@ -137,6 +138,7 @@ bool tasks_pending() { return g_pending; }
 void tasks_route(SH2Context& c, uint32_t expected) {
     if (sat_in_interrupt()) sat_fatal("task switch to %08X inside an interrupt: not handled", c.pc);
     g_pending = false;
+    state_point(c);
     Fiber* t = nullptr;
     auto it = g_saved.find(g_buf);
     if (it != g_saved.end() && it->second.r15 == c.r[15] && it->second.pr == c.pc) t = it->second.fiber;
@@ -149,6 +151,38 @@ void tasks_route(SH2Context& c, uint32_t expected) {
 
 void tasks_run(uint32_t entry) {
     switch_to(new_fiber(entry));
+}
+
+// The saved buffers, with which fiber saved each. A loaded dump has fibers that have run nothing yet:
+// each starts over where it is first switched to.
+void tasks_state(State& s) {
+    std::map<Fiber*, uint32_t> index;
+    for (size_t i = 0; i < g_fibers.size(); ++i) index[g_fibers[i].get()] = (uint32_t)i;
+    uint32_t nfibers = (uint32_t)g_fibers.size();
+    uint64_t n = g_saved.size();
+    s(nfibers);
+    s(n);
+    if (s.loading) {
+        if (g_cur != &g_main) state_fail("loaded from a task");
+        g_fibers.clear();
+        g_saved.clear();
+        for (uint32_t i = 0; i < nfibers; ++i) new_fiber(0);
+    }
+    auto it = g_saved.begin();
+    for (uint64_t k = 0; k < n; ++k) {
+        uint32_t buf = 0, fiber = 0, r15 = 0, pr = 0;
+        if (!s.loading) {
+            buf = it->first, r15 = it->second.r15, pr = it->second.pr;
+            auto f = index.find(it->second.fiber);
+            if (f == index.end()) state_fail("a buffer saved outside a task");
+            fiber = f->second;
+            ++it;
+        }
+        s(buf), s(fiber), s(r15), s(pr);
+        if (!s.loading) continue;
+        if (fiber >= nfibers) state_fail("a buffer saved by no task");
+        g_saved[buf] = {g_fibers[fiber].get(), r15, pr};
+    }
 }
 
 void tasks_reset() {

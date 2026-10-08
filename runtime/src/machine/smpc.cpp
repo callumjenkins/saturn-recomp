@@ -25,6 +25,7 @@
 // the same bits INTBACK reports in its two bytes (byte 1: 01 then 10, byte 2:
 // 00 then 11), and the order MAME's Saturn driver reads them in.
 #include "saturn.h"
+#include "state.h"
 #include "video.h"
 #include "host.h"
 #include <algorithm>
@@ -344,4 +345,22 @@ void smpc_tick() {
         g_irq = false;
         scu_raise(IRQ_SMPC);
     }
+}
+
+// The pads hold what they held, whether a script or the host's controllers pressed them, and a
+// script goes on from the dump's VBlank: a step at that VBlank sets what it may already have set.
+void smpc_state(State& s) {
+    s(g_ireg), s(g_oreg), s(g_sr), s(g_sf), s(g_port), s(g_smem), s(g_irq), s(g_peri_pending), s(g_area);
+    uint16_t held[kPads];
+    bool named[kPads];
+    for (int p = 0; p < kPads; ++p) held[p] = g_script_pressed[p] | g_host_pressed[p], named[p] = g_script_names[p];
+    s(held), s(named);
+    s.vec(g_peri), s(g_peri_pos), s(g_oreg_peri);
+    if (!s.loading) return;
+    g_host_vblank = ~0ull;
+    for (int p = 0; p < kPads; ++p) {
+        g_script_names[p] |= named[p];
+        (host_drives() ? g_host_pressed : g_script_pressed)[p] = held[p];
+    }
+    while (g_script_pos < g_script.size() && g_script[g_script_pos].vblank < sat_vblanks()) ++g_script_pos;
 }

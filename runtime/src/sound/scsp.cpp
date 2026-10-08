@@ -43,6 +43,7 @@
 // hardware's as Mednafen documents it. Not done: MIDI (its input reads empty), the DSP's
 // ring-buffer writes on even steps.
 #include "saturn.h"
+#include "state.h"
 #include "sound.h"
 #include <algorithm>
 #include <cmath>
@@ -673,4 +674,27 @@ void scsp_sample(int16_t exts_l, int16_t exts_r, int16_t out[2]) {
     float mv = g_mvol[g_com[0] & 15];
     out[0] = (int16_t)std::clamp((int32_t)(l * mv), -32768, 32767);
     out[1] = (int16_t)std::clamp((int32_t)(r * mv), -32768, 32767);
+}
+
+// An LFO's tables by their number among the tables of their kind.
+template <size_t N>
+static void lfo_table(State& s, const int*& p, int (&tables)[N][256]) {
+    int8_t k = -1;
+    for (size_t i = 0; i < N; ++i)
+        if (p == tables[i]) k = (int8_t)i;
+    s(k);
+    if (s.loading) p = k < 0 ? nullptr : tables[k];
+}
+
+void scsp_state(State& s) {
+    s(g_sound_ram);
+    for (Slot& sl : g_slot) {
+        s(sl.r), s(sl.active), s(sl.keyed), s(sl.backwards), s(sl.pos), s(sl.eg_state), s(sl.eg_vol);
+        s(sl.ar), s(sl.d1r), s(sl.d2r), s(sl.rr), s(sl.dl);
+        for (Lfo* l : {&sl.plfo, &sl.alfo}) s(l->phase), s(l->step);
+        lfo_table(s, sl.plfo.table, g_plfo), lfo_table(s, sl.plfo.scale, g_pscale);
+        lfo_table(s, sl.alfo.table, g_alfo), lfo_table(s, sl.alfo.scale, g_ascale);
+    }
+    s(g_com), s(g_timer), s(g_scieb), s(g_scipd), s(g_scilv), s(g_mcieb), s(g_mcipd), s(g_main_line);
+    s(g_samples), s(g_stack), s(g_stack_pos), s(g_dsp), s(g_noise), s(g_rbl), s(g_rbp), s(g_cpu_level);
 }

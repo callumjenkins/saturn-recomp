@@ -14,6 +14,7 @@
 // rate WTCSR selects and interrupts on each overflow, at IPRA's WDT priority
 // and VCRWDT's vector.
 #include "saturn.h"
+#include "state.h"
 
 struct OnChip {
     uint8_t regs[0x200];
@@ -242,3 +243,5 @@ void onchip_write(SH2Context& c, uint32_t a, uint32_t v, int size) {
     else if (off >= 0x19C && off < 0x1A0) dma(o, 1);
     else if (off >= 0x1B0 && off < 0x1B4) { dma(o, 0); dma(o, 1); }
 }
+
+void onchip_state(State& s) { s(g_oc); }

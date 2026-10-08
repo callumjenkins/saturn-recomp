@@ -64,6 +64,10 @@ struct SaturnConfig {
     uint32_t task_setjmp = 0, task_longjmp = 0;   // the game's own task switch (tasks.cpp), 0: none
     int agent_fd = -1;              // a socket another program plays the run through (agent.cpp)
     std::string writes;             // "VBLANK:ADDR=HEX,...": memory written at those VBlank-INs, as the agent's write
+    std::string state_in;           // a dump (state.cpp) the run starts from instead of power-on
+    std::string state_out;          // dumps go to this file: at a stop that waits for one, and as below
+    int state_every = 0;            // ... every this many seconds of the host's time (0: only at a stop)
+    std::string state_at;           // ... at the first safe moment from this VBlank on
 };
 extern SaturnConfig g_cfg;
 extern SH2Context g_master, g_slave;
@@ -84,6 +88,19 @@ void slave_off();                   // SSHOFF: held in reset
 void slave_idle_check(uint32_t ftcsr);   // the slave read its FTCSR: yield if nothing is there
 void slave_kick();                  // SINIT: the slave's input capture, and the CPU to it
 void master_poll_devices();
+bool state_slave_busy();            // the slave is on: no dump can be taken (state.cpp)
+
+// ---- dumps of the machine (state.cpp; state.h for the parts) ----------------------------------
+void state_enable();                // the run has safe moments: a game's task switch
+void state_init();
+void state_poll();                  // from the master's polls: dumps due, a stop that waited too long
+void state_point(SH2Context& c);    // a safe moment: c's registers and PC are all the run needs to go on
+void state_stop(const char* why);   // the run stops at the next dump, or soon without one
+void state_finish();                // the last dump written
+void state_load(const std::string& path);   // after the boot: the machine as the dump has it
+int  sh2_active_slots();            // the modules active now (core.cpp)
+const SH2Module* sh2_active_slot(int i);
+void sh2_set_active_slot(int i, const SH2Module* m);
 
 // ---- the BIOS (bios.cpp) -----------------------------------------------------------
 void bios_boot();                   // the state the BIOS leaves, the 1st read file loaded

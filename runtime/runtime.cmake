@@ -15,7 +15,7 @@ add_library(saturn_stub OBJECT ${_src}/stub/services_stub.cpp)
 add_library(saturn_machine OBJECT
     ${_src}/machine/machine.cpp ${_src}/machine/bios.cpp ${_src}/machine/mmio.cpp ${_src}/machine/tasks.cpp
     ${_src}/machine/onchip.cpp ${_src}/machine/scu.cpp ${_src}/machine/scudsp.cpp ${_src}/machine/smpc.cpp
-    ${_src}/machine/cdrom.cpp ${_src}/machine/cdblock.cpp ${_src}/machine/agent.cpp
+    ${_src}/machine/cdrom.cpp ${_src}/machine/cdblock.cpp ${_src}/machine/agent.cpp ${_src}/machine/state.cpp
     ${_src}/video/video.cpp ${_src}/video/vdp1.cpp ${_src}/video/vdp2.cpp ${_src}/video/png.cpp ${_src}/video/movie.cpp
     ${_src}/sound/sound.cpp ${_src}/sound/scsp.cpp)
 option(SATURN_NO_SDL "build the headless host even if SDL3 is installed" OFF)
@@ -36,7 +36,8 @@ endif()
 enable_language(C)
 set(_m68k ${_rt}/third_party/musashi)
 add_library(saturn_m68k STATIC
-    ${_m68k}/m68kcpu.c ${_m68k}/m68kops.c ${_m68k}/m68kdasm.c ${_m68k}/softfloat/softfloat.c)
+    ${_m68k}/m68kcpu.c ${_m68k}/m68kops.c ${_m68k}/m68kdasm.c ${_m68k}/softfloat/softfloat.c
+    ${_src}/sound/m68k_state.c)
 target_include_directories(saturn_m68k PUBLIC ${_m68k})
 target_include_directories(saturn_machine PRIVATE ${_rt}/third_party/minicoro)
 target_compile_options(saturn_m68k PRIVATE -w)

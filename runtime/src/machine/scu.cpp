@@ -11,6 +11,7 @@
 // through the ordinary memory functions, so a transfer to a device's
 // registers or from the CD block's data port does what the CPU would.
 #include "saturn.h"
+#include "state.h"
 
 static uint32_t g_ist, g_ims = 0xBFFFu;
 static uint32_t g_t0c, g_t1s, g_t1md;
@@ -184,4 +185,8 @@ void scu_write(uint32_t off, uint32_t v, int size) {
         return;
     }
     g_regs[off / 4] = v;
+}
+
+void scu_state(State& s) {
+    s(g_ist), s(g_ims), s(g_t0c), s(g_t1s), s(g_t1md), s(g_regs), s(g_dma);
 }

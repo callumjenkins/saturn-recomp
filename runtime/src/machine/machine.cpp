@@ -31,6 +31,7 @@
 #include "saturn.h"
 #include "host.h"
 #include "video.h"
+#include "state.h"
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -328,6 +329,8 @@ static void watch_for_stalls() {
     }
 }
 
+bool state_slave_busy() { return g_slave_on; }
+
 void slave_on() {
     if (!g_slave_thread) {
         g_slave_thread = true;
@@ -360,6 +363,21 @@ void slave_kick() {
     if (!g_slave_on) return;
     g_slave_idle = false;
     to_slave();
+}
+
+// The clock and the multitap are the run's own settings, but a dump goes on with the ones it was made with.
+void machine_state(State& s) {
+    uint8_t ip[16];
+    std::memcpy(ip, g_wram_h + 0x2020, sizeof ip);     // IP.BIN's product number and version
+    s(ip);
+    if (s.loading && std::memcmp(ip, g_wram_h + 0x2020, sizeof ip)) state_fail("a dump of another disc");
+    if (!s.loading && g_slave_on) state_fail("taken with the slave on");
+    s(g_vtime);
+    s(g_starts);
+    s(g_ints);
+    s(g_cfg.clock);
+    s(g_cfg.multitap);
+    s(g_master);
 }
 
 // --coverage FILE: "MODULE ADDRESS INSTRUCTIONS RAN" for every recompiled function, RAN 1 or 0.
@@ -406,6 +424,7 @@ void master_poll_devices() {
     smpc_tick();
     sound_tick();
     checkpoint_due();
+    state_poll();
     if (g_slave_on && !g_slave_idle) to_slave();
     if (g_cfg.stop_vblanks && sat_vblanks() >= g_cfg.stop_vblanks) sat_stop("VBlank limit");
 }
@@ -522,6 +541,13 @@ int saturn_main(const SaturnConfig& cfg) {
     if (cfg.task_setjmp) tasks_configure(cfg.task_setjmp, cfg.task_longjmp);
     else if (g_sh2_tasks[0]) tasks_configure(g_sh2_tasks[0], g_sh2_tasks[1]);
     bool tasks = cfg.task_setjmp || g_sh2_tasks[0];
+    if (tasks) state_enable();
+    state_init();
+    if (!cfg.state_in.empty()) {
+        state_load(cfg.state_in);
+        entry = g_master.pc;
+        tasks = true;                           // the dump goes on from one PC, on a task's fresh stack
+    }
     if (cfg.agent_fd < 0) std::thread(watch_for_stalls).detach();
     for (;;) {
         try {
@@ -555,6 +581,7 @@ int saturn_main(const SaturnConfig& cfg) {
     movie_finish();
     mmio_log_write(cfg.out + "/hw-log.txt");
     bios_save();
+    state_finish();
     std::fflush(stderr);
     std::fflush(stdout);
     std::_Exit(0);                  // the slave's thread is parked: do not wait for it

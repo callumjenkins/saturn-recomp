@@ -31,6 +31,7 @@
 // 1 and erases in the next field when FCT is 0. The erase writes EWDR over EWLR-EWRR. The CPU sees
 // the framebuffer being drawn.
 #include "saturn.h"
+#include "state.h"
 #include "video.h"
 #include <algorithm>
 #include <array>
@@ -673,4 +674,24 @@ void vdp1_dump(FILE* f) {
     std::fwrite(g_vdp1_vram, 1, sizeof g_vdp1_vram, f);
     for (uint16_t p : g_fb[g_draw_fb]) { uint8_t b[2] = {(uint8_t)(p >> 8), (uint8_t)p}; std::fwrite(b, 1, 2, f); }
     for (uint16_t r : g_reg) { uint8_t b[2] = {(uint8_t)(r >> 8), (uint8_t)r}; std::fwrite(b, 1, 2, f); }
+}
+
+// A full-height framebuffer goes in only while it is drawn so. The frames recorded for --interp are
+// for the picture alone and start again empty.
+void vdp1_state(State& s) {
+    s(g_vdp1_vram), s(g_fb), s(g_hi_on);
+    for (int i = 0; i < 2; ++i)
+        if (g_hi_on[i]) s(g_hi[i]);
+    int8_t target = g_target == g_fb[0] ? 0 : g_target == g_fb[1] ? 1 : -1;
+    int8_t hi_target = g_hi_target == g_hi[0] ? 0 : g_hi_target == g_hi[1] ? 1 : -1;
+    s(target), s(hi_target);
+    if (s.loading) {
+        if (target < 0) state_fail("VDP1 was drawing a frame in between");
+        g_target = g_fb[target];
+        g_hi_target = hi_target < 0 ? nullptr : g_hi[hi_target];
+        g_tex = g_vdp1_vram;
+    }
+    s(g_dil), s(g_draw_fb), s(g_reg), s(g_change_pending), s(g_erase_pending), s(g_erase_field), s(g_drawing);
+    s(g_draw_end), s(g_frame_changes), s(g_draws);
+    s(g_sys_x), s(g_sys_y), s(g_ux0), s(g_uy0), s(g_ux1), s(g_uy1), s(g_local_x), s(g_local_y), s(g_fb8);
 }

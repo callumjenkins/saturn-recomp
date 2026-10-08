@@ -166,7 +166,7 @@ class LauncherActivity : Activity() {
             .show()
     }
 
-    // A session's clock is when it started, so it names the session as the tester saw it.
+    // A session's directory is named for when it started on this phone; its clock can be an earlier session's.
     private fun chooseSession() {
         val sessions = Sessions.continuable(home).take(20)
         if (sessions.isEmpty()) {
@@ -174,7 +174,7 @@ class LauncherActivity : Activity() {
             return
         }
         val labels = sessions.map {
-            val started = LocalDateTime.parse(Sessions.read(it).getString("clock"))
+            val started = LocalDateTime.parse(it.name.take(15), DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))
             "${started.format(DateTimeFormatter.ofPattern("EEE d MMM, HH:mm"))}: ${Sessions.vblanks(it) / 3600} min in"
         }
         AlertDialog.Builder(this)

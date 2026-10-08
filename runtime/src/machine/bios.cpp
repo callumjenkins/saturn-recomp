@@ -19,6 +19,7 @@
 // --save's or one per game in the user's data directory; see the BUP section
 // for what is and is not implemented.
 #include "saturn.h"
+#include "state.h"
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
@@ -463,4 +464,21 @@ static bool bup_call(SH2Context& c, uint32_t k) {
     }
     }
     sat_fatal("BUP function %u not implemented", k);
+}
+
+// The saves as the game has them; the file is written as usual when they change.
+void bios_state(State& s) {
+    s(g_first_read), s(g_pal), s(g_uint), s(g_uipr), s(g_sem);
+    s(g_bup_loaded), s(g_bup_changed);
+    uint64_t n = g_bup.size();
+    s(n);
+    if (s.loading) g_bup.clear();
+    auto it = g_bup.begin();
+    for (uint64_t k = 0; k < n; ++k) {
+        std::string name;
+        BupFile b;
+        if (!s.loading) name = it->first, b = it->second, ++it;
+        s.str(name), s.str(b.comment), s(b.language), s(b.date), s.vec(b.data);
+        if (s.loading) g_bup[name] = b;
+    }
 }

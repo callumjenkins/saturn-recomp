@@ -7,7 +7,7 @@
 //            [--watch-vblanks FROM:TO] [--wav FILE] [--interp] [--hook ADDR:rN=VALUE ...]
 //            [--tasks SETJMP:LONGJMP] [--multitap N] [--clock YYYY-MM-DDTHH:MM:SS] [--agent FD]
 //            [--write VBLANK:ADDR=HEX,...] [--video FILE] [--save FILE|-] [--coverage FILE] [--checkpoint SECONDS]
-//            [--log FILE]
+//            [--log FILE] [--state-in FILE] [--state-out FILE] [--state-every SECONDS] [--state-at VBLANK]
 //
 // --vblanks and --starts end the run after that many VBlanks or program
 // starts; the log of the hardware touched goes to DIR/hw-log.txt. --shot
@@ -46,6 +46,10 @@
 // volume, the controls; host.cpp): "-" keeps the defaults. Without it, it is settings.ini in that
 // directory's saturn-recomp folder, written with the defaults if it is missing.
 // --log writes what would go to stdout and stderr to FILE instead, for a host that shows neither (Android).
+// --state-in starts the run from a dump of the machine instead of power-on (state.cpp), and
+// --state-out writes one: at the first safe moment from VBlank --state-at, every --state-every
+// SECONDS of the host's time, and when the window is closed or Back pressed, which then wait for it.
+// A safe moment is a task switch (--tasks), so a game without one makes no dumps.
 #include "saturn.h"
 #include <cstdio>
 #include <cstdlib>
@@ -101,6 +105,10 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--input") && more) cfg.input = argv[++i];
         else if (!std::strcmp(a, "--record-input") && more) cfg.record_input = argv[++i];
         else if (!std::strcmp(a, "--resume") && more) cfg.resume = std::strtoull(argv[++i], nullptr, 10);
+        else if (!std::strcmp(a, "--state-in") && more) cfg.state_in = argv[++i];
+        else if (!std::strcmp(a, "--state-out") && more) cfg.state_out = argv[++i];
+        else if (!std::strcmp(a, "--state-every") && more) cfg.state_every = std::atoi(argv[++i]);
+        else if (!std::strcmp(a, "--state-at") && more) cfg.state_at = argv[++i];
         else if (!std::strcmp(a, "--virtual-input") && more) cfg.virtual_input = argv[++i];
         else if (!std::strcmp(a, "--dump") && more) cfg.dump = argv[++i];
         else if (!std::strcmp(a, "--shot") && more) cfg.shots = argv[++i];
@@ -138,7 +146,8 @@ int main(int argc, char** argv) {
                                  "             [--record-input FILE] [--resume N] [--shot N,...] [--dump N,...] [--peek ADDR[:WORDS],...] [--watch LO:HI]\n"
                                  "             [--wav FILE] [--hook ADDR:rN=VALUE ...] [--tasks SETJMP:LONGJMP] [--multitap N]\n"
                                  "             [--clock YYYY-MM-DDTHH:MM:SS] [--agent FD] [--write VBLANK:ADDR=HEX,...] [--video FILE]\n"
-                                 "             [--save FILE|-] [--coverage FILE] [--checkpoint SECONDS] [--log FILE]\n");
+                                 "             [--save FILE|-] [--coverage FILE] [--checkpoint SECONDS] [--log FILE]\n"
+                                 "             [--state-in FILE] [--state-out FILE] [--state-every SECONDS] [--state-at VBLANK]\n");
             return 2;
         }
     }

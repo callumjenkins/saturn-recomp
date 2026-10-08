@@ -84,10 +84,14 @@ same `playtest.json` and `disc.json` as the desktop launcher. The launcher activ
 mirrors the desktop launcher, the disc check included. The game runs in SDL's activity in a process
 of its own, as `libmain.so`. That activity sends the session while it plays, and the launcher
 finishes and sends it once the game's process has gone. The phone's own Back, pressed twice, quits
-the game, and a Back from a controller is dropped. "Continue a session" starts a new session from an
-earlier one's clock and saves, with the runtime's `--resume` playing its presses again before the
-controller takes over, so the new session's `input.txt` replays the whole game. The phone needs a
-controller for now. `app/build.gradle.kts` lists the properties the workflow builds it with.
+the game, and a Back from a controller is dropped.
+
+The app's runs also dump the machine to the session's `state.bin` every minute and at a quit, on a
+game whose task switch the build knows (the runtime's `--state-out`). "Continue a session" starts a
+new session from an earlier one's last dump, kept as its `state-at-start.bin` and sent with it, and
+`--resume` plays the presses recorded after the dump before the controller takes over. A session
+without a dump continues from its clock and saves, all its presses played again. `replay` starts
+from `state-at-start.bin` when a session has one. The phone needs a controller for now. `app/build.gradle.kts` lists the properties the workflow builds it with.
 
 `DiscTest` checks the Kotlin disc check against a real disc. It runs only when `SATURN_CUE` and
 `SATURN_DISC_JSON` name the disc and the game's `disc.json`, with `gradle testDebugUnitTest` and the

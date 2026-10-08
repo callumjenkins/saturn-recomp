@@ -53,11 +53,11 @@ TEST(changed_settings_are_written_over_the_players_file) {
     s.read(file, problems);
     s.set("display", "scale", "4");
     s.set("display", "fullscreen", "true");
-    s.set("launcher", "cue", "/discs/game.cue");
+    s.set("launcher", "multitap", "2");
     s.set("gamepad 0300abcd", "a", "b");
     std::string out = s.write_over(file);
     CHECK_EQ(out == "; mine\n[display]\nscale = 4\nfullscreen = true\n\n[keyboard]\na = Space\n"
-                    "\n[gamepad 0300abcd]\na = b\n\n[launcher]\ncue = /discs/game.cue\n", true);
+                    "\n[gamepad 0300abcd]\na = b\n\n[launcher]\nmultitap = 2\n", true);
     Settings back;
     back.read(out, problems);
     CHECK_EQ(problems.size(), 0);

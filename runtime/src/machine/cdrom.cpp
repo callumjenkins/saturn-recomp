@@ -25,9 +25,6 @@ static uint32_t msf(const std::string& s) {
 }
 
 bool cdrom_open(const std::string& cue) {
-    for (CueFile& f : g_files) std::fclose(f.f);         // the launcher checks discs before the run opens one
-    g_files.clear();
-    g_tracks.clear();
     std::ifstream in(cue);
     if (!in) return false;
     std::string dir = cue.substr(0, cue.find_last_of("/\\") + 1), line;

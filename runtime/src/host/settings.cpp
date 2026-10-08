@@ -59,10 +59,8 @@ stick = 50
 ; a trigger presses its button once pulled this far, in percent
 trigger = 50
 
-; What the launcher last started: it opens when saturn runs without --cue, or with --launcher.
+; What the launcher (saturn --launcher) last started with.
 [launcher]
-; the disc's .cue file
-cue =
 ; 6-player multitaps: 0 for none, 1 on port 1, 2 on both ports
 multitap = 0
 )";

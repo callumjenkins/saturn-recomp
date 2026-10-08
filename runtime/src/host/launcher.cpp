@@ -1,63 +1,20 @@
-// saturn-recomp runtime — the launcher: a menu in the window before the run starts, for the disc,
-// the players, the controls, the display and the volume (Dear ImGui). A mouse, the keyboard or
-// any gamepad drives it. What it sets is saved to the settings file at once (settings.h); Start
-// hands the disc and the multitaps to the run, which opens in the same window. F12 saves the menu's
-// picture (OUT/launcher.png); with SATURN_LAUNCHER_SHOT=FILE, its first frames go there and it closes,
-// for a check without a display.
+// saturn-recomp runtime — the launcher (saturn --launcher): a menu in the window before the run
+// starts, for the players, the controls, the display and the volume (Dear ImGui). A mouse, the
+// keyboard or any gamepad drives it. What it sets is saved to the settings file at once
+// (settings.h); Start hands the multitaps to the run, which opens in the same window. The disc is
+// the caller's (--cue).
+// F12 saves the menu's picture (OUT/launcher.png). With SATURN_LAUNCHER_SHOT=FILE, its first frames
+// go there and it closes, for a check without a display.
 #include "host.h"
 #include "host_sdl.h"
 #include "video.h"
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
 #include "imgui_impl_sdlrenderer3.h"
-#include <saturn/sh2.h>
 #include <algorithm>
 #include <cstring>
-#include <mutex>
 
 namespace {
-
-struct Disc { bool ok = false; std::string about; };
-
-std::string field(const uint8_t* ip, int at, int len) {
-    std::string s(reinterpret_cast<const char*>(ip + at), len);
-    s.erase(s.find_last_not_of(' ') + 1);
-    return s;
-}
-
-// The disc is this build's when its 1st read file is the image a recompiled module was made from.
-Disc check_disc(const std::string& cue) {
-    if (cue.empty()) return {false, "No disc chosen"};
-    if (!cdrom_open(cue)) return {false, "Cannot read " + cue};
-    uint8_t raw[2352], ip[2048];
-    if (!cdrom_read(150, raw)) return {false, "Cannot read the disc"};
-    std::memcpy(ip, raw + 16, sizeof ip);
-    if (std::memcmp(ip, "SEGA SEGASATURN ", 16)) return {false, "Not a Saturn disc"};
-    std::string name = field(ip, 0x60, 0x70) + " (" + field(ip, 0x20, 10) + " " + field(ip, 0x2A, 6) + ")";
-    uint32_t at = (uint32_t)ip[0xF0] << 24 | ip[0xF1] << 16 | ip[0xF2] << 8 | ip[0xF3], fad, size;
-    std::string first = cdrom_first_file();
-    if (first.empty() || !cdrom_find(first.c_str(), &fad, &size)) return {false, name + ": no 1st read file"};
-    std::vector<uint8_t> image(size);
-    for (uint32_t o = 0; o < size; o += 2048, ++fad) {
-        if (!cdrom_read(fad, raw)) return {false, name + ": cannot read the 1st read file"};
-        std::memcpy(image.data() + o, raw + 16, std::min<uint32_t>(2048, size - o));
-    }
-    for (int i = 0; i < g_sh2_nmodules; ++i) {
-        const SH2Module* m = g_sh2_modules[i];
-        if (m->base == at && m->size <= size && sh2_crc32(image.data(), m->size) == m->crc) return {true, name};
-    }
-    return {false, name + ": not the disc this game was built from"};
-}
-
-// SDL's file dialog answers on another thread.
-std::mutex g_pick_lock;
-std::string g_picked;
-
-void SDLCALL picked(void*, const char* const* files, int) {
-    if (!files || !files[0]) return;
-    std::lock_guard<std::mutex> hold(g_pick_lock);
-    g_picked = files[0];
-}
 
 const struct { const char* key; const char* label; } kButtons[] = {
     {"up", "Up"}, {"down", "Down"}, {"left", "Left"}, {"right", "Right"}, {"start", "Start"},
@@ -100,9 +57,6 @@ bool any_gamepad_input() {
 class Launcher {
 public:
     explicit Launcher(SaturnConfig& cfg) : cfg_(cfg), set_(host_settings()) {
-        cue_ = cfg.cue.empty() ? set_.get("launcher", "cue") : cfg.cue;
-        fixed_disc_ = !cfg.cue.empty();
-        disc_ = check_disc(cue_);
         taps_ = cfg.multitap ? cfg.multitap : set_.number("launcher", "multitap");
     }
 
@@ -124,7 +78,6 @@ public:
         ImGui_ImplSDL3_InitForSDLRenderer(win, ren);
         ImGui_ImplSDLRenderer3_Init(ren);
         ImGui_ImplSDL3_SetGamepadMode(ImGui_ImplSDL3_GamepadMode_AutoAll);
-        SDL_SetWindowTitle(win, disc_.ok ? disc_.about.c_str() : "saturn-recomp");
 
         const char* shot = SDL_getenv("SATURN_LAUNCHER_SHOT");
         bool going = true;
@@ -137,7 +90,6 @@ public:
                 host_pad_event(e);
                 if (!listen(e)) ImGui_ImplSDL3_ProcessEvent(&e);
             }
-            take_pick();
             // a gamepad's press that was just bound must not also press the menu
             bool quiet = !binding_.empty() || (settling_ && any_gamepad_input());
             if (!quiet) settling_ = false;
@@ -165,7 +117,6 @@ public:
         ImGui_ImplSDL3_Shutdown();
         ImGui::DestroyContext();
         if (!started_) return false;
-        cfg_.cue = cue_;
         cfg_.multitap = taps_;
         return true;
     }
@@ -174,19 +125,6 @@ private:
     void save() {
         host_settings_save();
         host_rebind();
-    }
-
-    void take_pick() {
-        std::string got;
-        {
-            std::lock_guard<std::mutex> hold(g_pick_lock);
-            got.swap(g_picked);
-        }
-        if (got.empty()) return;
-        cue_ = got;
-        disc_ = check_disc(cue_);
-        set_.set("launcher", "cue", cue_);
-        save();
     }
 
     // While a button waits for its binding, the next key or gamepad button is that binding; true
@@ -220,13 +158,11 @@ private:
         ImGui::SetNextWindowSize(vp->WorkSize);
         ImGui::Begin("launcher", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                                               ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus);
-        ImGui::BeginDisabled(!disc_.ok);
         if (ImGui::Button("  Start  ")) {
             set_.set("launcher", "multitap", std::to_string(taps_));
             save();
             started_ = true;
         }
-        ImGui::EndDisabled();
         if (ImGui::IsWindowAppearing()) ImGui::SetItemDefaultFocus();
         ImGui::SameLine();
         if (ImGui::Button("Quit")) {
@@ -234,12 +170,10 @@ private:
             q.type = SDL_EVENT_QUIT;
             SDL_PushEvent(&q);
         }
-        ImGui::SameLine();
-        ImGui::TextUnformatted(disc_.ok ? disc_.about.c_str() : "");
 
         if (ImGui::BeginTable("layout", 2, ImGuiTableFlags_SizingStretchSame)) {
             ImGui::TableNextColumn();
-            disc_and_players();
+            players();
             display_and_sound();
             ImGui::TableNextColumn();
             controls();
@@ -248,21 +182,7 @@ private:
         ImGui::End();
     }
 
-    void disc_and_players() {
-        ImGui::SeparatorText("Disc");
-        ImGui::TextWrapped("%s", cue_.empty() ? "(none)" : cue_.c_str());
-        if (!disc_.ok) ImGui::TextColored(ImVec4(1, 0.5f, 0.4f, 1), "%s", disc_.about.c_str());
-        ImGui::BeginDisabled(fixed_disc_);
-        if (ImGui::Button("Choose a disc...")) {
-            static const SDL_DialogFileFilter filter[] = {{"Saturn disc (.cue)", "cue"}};
-            SDL_ShowOpenFileDialog(picked, nullptr, host_sdl_window(), filter, 1, nullptr, false);
-        }
-        ImGui::EndDisabled();
-        if (fixed_disc_) {
-            ImGui::SameLine();
-            ImGui::TextDisabled("given by --cue");
-        }
-
+    void players() {
         ImGui::SeparatorText("Players");
         for (int t = 0; t < 3; ++t)
             if (ImGui::RadioButton(kTaps[t], taps_ == t)) taps_ = t;
@@ -345,9 +265,6 @@ private:
 
     SaturnConfig& cfg_;
     Settings& set_;
-    std::string cue_;
-    bool fixed_disc_;
-    Disc disc_;
     int taps_;
     bool started_ = false;
     bool want_picture_ = false;

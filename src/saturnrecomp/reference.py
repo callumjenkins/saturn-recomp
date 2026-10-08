@@ -192,6 +192,18 @@ class Core:
         raw = C.string_at(self.lib.retro_get_memory_data(MEMORY_SYSTEM_RAM) + lo, hi - lo)
         return swap16(raw)[start - lo:start - lo + n]
 
+    def write(self, addr, data):
+        """Sets work RAM at a Saturn address, as --write does on ours."""
+        base, at = next(((b, o) for b, o in WORK_RAM if b <= addr and addr + len(data) <= b + 0x100000), (None, None))
+        if base is None:
+            raise ValueError(f"{addr:08X}+{len(data)} is not in a work RAM")
+        start = at + addr - base
+        lo, hi = start & ~1, (start + len(data) + 1) & ~1
+        mem = self.lib.retro_get_memory_data(MEMORY_SYSTEM_RAM)
+        words = bytearray(swap16(C.string_at(mem + lo, hi - lo)))
+        words[start - lo:start - lo + len(data)] = data
+        C.memmove(mem + lo, swap16(bytes(words)), hi - lo)
+
     def read32(self, addr):
         return int.from_bytes(self.read(addr, 4), "big")
 
@@ -218,14 +230,16 @@ def placed(ticks):
     return out
 
 
-def play_synced(core, tick_addr, ticks, presses_by_vblank, shots, limit, on_shot):
-    """Plays our run's presses on the core, each at its place by the game's tick (`placed`), and calls
+def play_synced(core, tick_addr, ticks, presses_by_vblank, shots, limit, on_shot, writes_by_vblank=None):
+    """Plays our run's presses and writes ({VBlank: [(addr, bytes)]}) on the core, each at its place by
+    the game's tick (`placed`), and calls
     on_shot(our VBlank, core frame number) where each of `shots` falls. A place the core passes
     without stopping at, a tick it skips or a stall it ends sooner, comes on its next frame. Returns
     the frames run, or None if `limit` ran out first."""
     at = placed(ticks)
     events = sorted([(at[v], v, 0, what) for v, what in presses_by_vblank.items() if v in at]
-                    + [(at[v], v, 1, None) for v in shots if v in at])
+                    + [(at[v], v, 1, what) for v, what in (writes_by_vblank or {}).items() if v in at]
+                    + [(at[v], v, 2, None) for v in shots if v in at])
     j, last, since = 0, None, 0
     while j < len(events):
         if core.frames >= limit:
@@ -239,6 +253,9 @@ def play_synced(core, tick_addr, ticks, presses_by_vblank, shots, limit, on_shot
             if kind == 0:
                 for port, buttons in what:
                     core.pads[port] = buttons
+            elif kind == 1:
+                for addr, data in what:
+                    core.write(addr, data)
             else:
                 on_shot(v, core.frames)
             j += 1
@@ -266,6 +283,16 @@ def difference(ours, theirs):
                     row[2 * w * 3 + x:2 * w * 3 + x + 3] = b"\xff\x00\xff"
         side[y * w * 9:(y + 1) * w * 9] = row
     return n, worst, agent.Frame(w * 3, h, bytes(side))
+
+
+def writes(spec):
+    """{VBlank: [(addr, bytes)]} from --write's "VBLANK:ADDR=HEX,..."."""
+    out = {}
+    for item in filter(None, spec):
+        at, _, what = item.partition(":")
+        addr, _, value = what.partition("=")
+        out.setdefault(int(at), []).append((int(addr, 16), bytes.fromhex(value)))
+    return out
 
 
 def presses(spec):

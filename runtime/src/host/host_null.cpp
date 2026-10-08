@@ -3,6 +3,11 @@
 #include "saturn.h"
 #include "host.h"
 
+bool host_launch(SaturnConfig&) {
+    sat_note("built without SDL: no launcher (run with --cue)");
+    return false;
+}
+
 bool host_open() {
     if (g_cfg.headless) return true;
     sat_note("built without SDL: no window (run with --headless)");

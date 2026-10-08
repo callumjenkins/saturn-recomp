@@ -46,6 +46,26 @@ TEST(one_models_gamepad_section_starts_from_the_gamepad_defaults) {
     CHECK_EQ(s.get("gamepad", "a") == "a", true);
 }
 
+TEST(changed_settings_are_written_over_the_players_file) {
+    Settings s;
+    std::vector<std::string> problems;
+    std::string file = "; mine\n[display]\nscale = 2\n\n[keyboard]\na = Space\n";
+    s.read(file, problems);
+    s.set("display", "scale", "4");
+    s.set("display", "fullscreen", "true");
+    s.set("launcher", "cue", "/discs/game.cue");
+    s.set("gamepad 0300abcd", "a", "b");
+    std::string out = s.write_over(file);
+    CHECK_EQ(out == "; mine\n[display]\nscale = 4\nfullscreen = true\n\n[keyboard]\na = Space\n"
+                    "\n[gamepad 0300abcd]\na = b\n\n[launcher]\ncue = /discs/game.cue\n", true);
+    Settings back;
+    back.read(out, problems);
+    CHECK_EQ(problems.size(), 0);
+    CHECK_EQ(back.number("display", "scale"), 4);
+    CHECK_EQ(back.get("gamepad 0300abcd", "c") == "rightshoulder", true);
+    CHECK_EQ(Settings().write_over(Settings::default_text()) == Settings::default_text(), true);
+}
+
 TEST(settings_are_written_whole_and_read_back) {
     namespace fs = std::filesystem;
     fs::path dir = fs::temp_directory_path() / "saturn-settings-test";

@@ -28,6 +28,7 @@
 #include "sound.h"
 #include "video.h"
 #include "host.h"
+#include "host_sdl.h"
 #include "pad_slots.h"
 #include "settings.h"
 #include <SDL3/SDL.h>
@@ -54,12 +55,15 @@ static void virtual_open();
 
 // ---- the settings (settings.h) -----------------------------------------------------------------
 static Settings g_settings;
+static std::string g_settings_path, g_settings_text;     // the file and its text, which a save writes over
 static void bind_keyboard();
 
-static void load_settings() {
-    std::string path = g_cfg.settings;
+static void load_settings(const std::string& named) {
+    std::string path = named;
     if (path == "-") path.clear();
     else if (path.empty() && !sat_data_dir().empty()) path = sat_data_dir() + "/saturn-recomp/settings.ini";
+    g_settings_path = path;
+    g_settings_text = Settings::default_text();
     if (!path.empty()) {
         bool found = false;
         std::string text = settings_load(path, found);
@@ -67,6 +71,7 @@ static void load_settings() {
             if (settings_store(path, Settings::default_text())) sat_note("settings: %s, written with the defaults", path.c_str());
             else sat_note("settings: cannot write %s (the defaults)", path.c_str());
         } else {
+            g_settings_text = text;
             std::vector<std::string> problems;
             g_settings.read(text, problems);
             sat_note("settings: %s", path.c_str());
@@ -76,12 +81,28 @@ static void load_settings() {
     bind_keyboard();
 }
 
-bool host_open() {
-    if (g_cfg.headless) return true;
+Settings& host_settings() { return g_settings; }
+
+bool host_settings_save() {
+    if (g_settings_path.empty()) return true;
+    std::string text = g_settings.write_over(g_settings_text);
+    if (!settings_store(g_settings_path, text)) {
+        sat_note("settings: cannot write %s", g_settings_path.c_str());
+        return false;
+    }
+    g_settings_text = text;
+    return true;
+}
+
+SDL_Window* host_sdl_window() { return g_win; }
+SDL_Renderer* host_sdl_renderer() { return g_ren; }
+
+bool host_window(const SaturnConfig& cfg) {
+    if (g_win) return true;
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD | SDL_INIT_AUDIO)) { sat_note("SDL: %s", SDL_GetError()); return false; }
-    load_settings();
-    int s = g_cfg.scale > 0 ? g_cfg.scale : g_settings.number("display", "scale");
-    bool full = g_cfg.fullscreen || g_settings.flag("display", "fullscreen");
+    load_settings(cfg.settings);
+    int s = cfg.scale > 0 ? cfg.scale : g_settings.number("display", "scale");
+    bool full = cfg.fullscreen || g_settings.flag("display", "fullscreen");
 #if defined(__ANDROID__)
     // SDL picks the phone's orientation itself, from the window, over the manifest's
     SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
@@ -96,6 +117,12 @@ bool host_open() {
     // host_pace keeps real time; a present that waited for the display would stall the whole machine
     // whenever the compositor stops sending frames, as KWin does for a window that is out of sight
     SDL_SetRenderVSync(g_ren, 0);
+    return true;
+}
+
+bool host_open() {
+    if (g_cfg.headless) return true;
+    if (!host_window(g_cfg)) return false;
     if (!g_cfg.virtual_input.empty()) virtual_open();
     g_base = Clock::now();
     g_paced = !g_cfg.realtime;
@@ -265,6 +292,31 @@ static void pad_removed(SDL_JoystickID id) {
         }
 }
 
+void host_rebind() {
+    bind_keyboard();
+    for (auto& p : g_pads) {
+        char guid[33];
+        SDL_GUIDToString(SDL_GetGamepadGUIDForID(p.id), guid, sizeof guid);
+        p.map = bind_gamepad(guid);
+    }
+}
+
+void host_pad_event(const SDL_Event& e) {
+    if (e.type == SDL_EVENT_GAMEPAD_ADDED) pad_added(e.gdevice.which);
+    if (e.type == SDL_EVENT_GAMEPAD_REMOVED) pad_removed(e.gdevice.which);
+}
+
+std::vector<HostController> host_controllers() {
+    read_pads();
+    std::vector<HostController> out;
+    for (auto& p : g_pads) {
+        int s = g_slots.slot_of(p.id);
+        if (s >= 0) out.push_back({SDL_GetGamepadName(p.pad), s, gamepad_buttons(p.pad, p.map) != 0});
+    }
+    std::sort(out.begin(), out.end(), [](const HostController& a, const HostController& b) { return a.slot < b.slot; });
+    return out;
+}
+
 static void save_shot() {
     if (!g_last) return;
     char name[64];
@@ -325,10 +377,8 @@ static void events() {
         case SDL_EVENT_QUIT:
             sat_stop("the window was closed");
         case SDL_EVENT_GAMEPAD_ADDED:
-            pad_added(e.gdevice.which);
-            break;
         case SDL_EVENT_GAMEPAD_REMOVED:
-            pad_removed(e.gdevice.which);
+            host_pad_event(e);
             break;
         case SDL_EVENT_KEY_DOWN:
             if (e.key.repeat) break;

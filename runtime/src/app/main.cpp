@@ -7,7 +7,7 @@
 //            [--watch-vblanks FROM:TO] [--wav FILE] [--interp] [--hook ADDR:rN=VALUE ...]
 //            [--tasks SETJMP:LONGJMP] [--multitap N] [--clock YYYY-MM-DDTHH:MM:SS] [--agent FD]
 //            [--write VBLANK:ADDR=HEX,...] [--video FILE] [--save FILE|-] [--coverage FILE] [--checkpoint SECONDS]
-//            [--log FILE]
+//            [--log FILE] [--launcher]
 //
 // --vblanks and --starts end the run after that many VBlanks or program
 // starts; the log of the hardware touched goes to DIR/hw-log.txt. --shot
@@ -43,8 +43,13 @@
 // --settings names the player's settings file, which a run with a window reads (the window, the
 // volume, the controls; host.cpp): "-" keeps the defaults. Without it, it is settings.ini in that
 // directory's saturn-recomp folder, written with the defaults if it is missing.
+// --launcher opens a menu in the window before the run, for the disc, the players, the controls,
+// the display and the volume (launcher.cpp); it opens too when there is no --cue and a window. What it
+// chooses for the run, as saturn's own arguments, goes to DIR/launch.txt
+// (with --out), one a line, for a replay.
 // --log writes what would go to stdout and stderr to FILE instead, for a host that shows neither (Android).
 #include "saturn.h"
+#include "host.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -65,6 +70,7 @@ static int64_t clock_seconds(const char* s) {
 
 int main(int argc, char** argv) {
     SaturnConfig cfg;
+    bool launcher = false;
     for (int i = 1; i < argc; ++i) {
         const char* a = argv[i];
         bool more = i + 1 < argc;
@@ -102,6 +108,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--dump") && more) cfg.dump = argv[++i];
         else if (!std::strcmp(a, "--shot") && more) cfg.shots = argv[++i];
         else if (!std::strcmp(a, "--headless")) cfg.headless = true;
+        else if (!std::strcmp(a, "--launcher")) launcher = true;
         else if (!std::strcmp(a, "--fullscreen")) cfg.fullscreen = true;
         else if (!std::strcmp(a, "--scale") && more) cfg.scale = std::atoi(argv[++i]);
         else if (!std::strcmp(a, "--settings") && more) cfg.settings = argv[++i];
@@ -135,8 +142,15 @@ int main(int argc, char** argv) {
                                  "             [--record-input FILE] [--shot N,...] [--dump N,...] [--peek ADDR[:WORDS],...] [--watch LO:HI]\n"
                                  "             [--wav FILE] [--hook ADDR:rN=VALUE ...] [--tasks SETJMP:LONGJMP] [--multitap N]\n"
                                  "             [--clock YYYY-MM-DDTHH:MM:SS] [--agent FD] [--write VBLANK:ADDR=HEX,...] [--video FILE]\n"
-                                 "             [--save FILE|-] [--coverage FILE] [--checkpoint SECONDS] [--log FILE]\n");
+                                 "             [--save FILE|-] [--coverage FILE] [--checkpoint SECONDS] [--log FILE] [--launcher]\n");
             return 2;
+        }
+    }
+    if (launcher || (cfg.cue.empty() && !cfg.headless)) {
+        if (!host_launch(cfg)) return host_wants_frame() ? 0 : 2;       // closed, or no window to show it in
+        if (FILE* f = cfg.out == "." ? nullptr : std::fopen((cfg.out + "/launch.txt").c_str(), "w")) {
+            std::fprintf(f, "--multitap\n%d\n", cfg.multitap);
+            std::fclose(f);
         }
     }
     if (cfg.cue.empty()) { std::fprintf(stderr, "saturn: --cue is required\n"); return 2; }

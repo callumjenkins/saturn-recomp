@@ -58,11 +58,18 @@ r = righttrigger
 stick = 50
 ; a trigger presses its button once pulled this far, in percent
 trigger = 50
+
+; What the launcher last started: it opens when saturn runs without --cue, or with --launcher.
+[launcher]
+; the disc's .cue file
+cue =
+; 6-player multitaps: 0 for none, 1 on port 1, 2 on both ports
+multitap = 0
 )";
 
 // The range a number may take, by key.
 static const struct { const char* key; int lo, hi; } kRanges[] = {
-    {"scale", 1, 8}, {"volume", 0, 100}, {"stick", 5, 95}, {"trigger", 5, 95}};
+    {"scale", 1, 8}, {"volume", 0, 100}, {"stick", 5, 95}, {"trigger", 5, 95}, {"multitap", 0, 2}};
 
 static std::string trim(const std::string& s) {
     size_t a = s.find_first_not_of(" \t\r"), b = s.find_last_not_of(" \t\r");
@@ -128,6 +135,58 @@ void Settings::read(const std::string& text, std::vector<std::string>& problems)
         }
         values_[section][key] = value;
     });
+}
+
+void Settings::set(const std::string& section, const std::string& key, const std::string& value) {
+    if (!values_.count(section)) {
+        values_[section] = values_[kind_of(section)];
+        order_[section] = order_[kind_of(section)];
+    }
+    values_[section][key] = value;
+}
+
+std::string Settings::write_over(const std::string& text) const {
+    static const Settings defaults;
+    std::vector<std::string> lines;
+    std::map<std::string, size_t> section_end;          // the line after each section's last
+    std::map<std::string, std::map<std::string, bool>> written;
+    std::istringstream in(text);
+    std::string line, section;
+    while (std::getline(in, line)) {
+        std::string t = trim(line);
+        if (!t.empty() && t[0] == '[') section = trim(t.substr(1, t.find(']') - 1));
+        size_t eq = t.find('=');
+        if (!t.empty() && t[0] != ';' && t[0] != '#' && t[0] != '[' && eq != std::string::npos) {
+            std::string key = trim(t.substr(0, eq));
+            auto s = values_.find(section);
+            if (s != values_.end() && s->second.count(key)) {
+                const std::string& v = s->second.at(key);
+                if (trim(t.substr(eq + 1)) != v) line = key + " =" + (v.empty() ? "" : " " + v);
+                written[section][key] = true;
+            }
+        }
+        lines.push_back(line);
+        if (!t.empty() && t[0] != ';' && t[0] != '#') section_end[section] = lines.size();
+    }
+    // the values the text lacks, where they differ from the defaults: in their section, or a new one at the end
+    std::map<size_t, std::vector<std::string>> insert;
+    std::string tail;
+    for (auto& [name, keys] : values_) {
+        std::string added;
+        for (auto& key : order_.at(name))
+            if (!written[name][key] && keys.at(key) != defaults.get(name, key))
+                added += key + " = " + keys.at(key) + "\n";
+        if (added.empty()) continue;
+        auto end = section_end.find(name);
+        if (end == section_end.end()) tail += "\n[" + name + "]\n" + added;
+        else insert[end->second].push_back(added);
+    }
+    std::string out;
+    for (size_t i = 0; i <= lines.size(); ++i) {
+        for (auto& a : insert[i]) out += a;
+        if (i < lines.size()) out += lines[i] + "\n";
+    }
+    return out + tail;
 }
 
 std::string Settings::get(const std::string& section, const std::string& key) const {

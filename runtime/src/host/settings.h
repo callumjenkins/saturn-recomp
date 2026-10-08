@@ -19,6 +19,13 @@ public:
     // The defaults as a file, every key explained, for a player to edit.
     static const char* default_text();
 
+    // A value, for the launcher; a model's section starts as a copy of the defaults, as in a file.
+    void set(const std::string& section, const std::string& key, const std::string& value);
+
+    // The text with these settings in it: each key's line rewritten, its comments and order kept,
+    // and a key it lacks added where its value is not the default.
+    std::string write_over(const std::string& text) const;
+
     std::string get(const std::string& section, const std::string& key) const;
     bool flag(const std::string& section, const std::string& key) const;   // true or false
     int number(const std::string& section, const std::string& key) const;

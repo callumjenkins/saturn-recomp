@@ -47,6 +47,7 @@ struct SaturnConfig {
     uint64_t watch_from = 0, watch_to = ~0ull;   // ... between these VBlanks
     std::string input;              // the pad: "VBLANK:BUTTON+BUTTON,..." (or "@FILE" holding that)
     std::string record_input;       // a file: the host's pad, written as an --input script
+    uint64_t resume = 0;            // with input: the host's pads take over at this VBlank, which the run reaches unpaced
     std::string virtual_input;      // an --input script pressed on SDL virtual gamepads, a player each (host.cpp)
     std::string dump;               // N,... : the video memories to out/dump-N.bin at VBlank-IN N
     std::string shots;              // N,... : the picture to out/shot-N.png at VBlank-IN N
@@ -71,6 +72,7 @@ extern SH2Context* g_cpu;           // the CPU running now
 int  saturn_main(const SaturnConfig& cfg);
 uint64_t sat_now();                 // ns since power-on (virtual or host)
 uint64_t sat_vblanks();
+inline bool sat_resuming() { return g_cfg.resume && sat_vblanks() < g_cfg.resume; }   // --resume's script still plays
 void sat_trace(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
 void sat_note(const char* fmt, ...) __attribute__((format(printf, 1, 2)));   // always printed
 [[noreturn]] void sat_fatal(const char* fmt, ...) __attribute__((format(printf, 1, 2)));

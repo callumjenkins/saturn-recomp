@@ -25,7 +25,12 @@ last few years has, and a controller: Bluetooth or USB, as there are no on-scree
 
 "Choose files" copies your disc into the app, so pick every file it is made of at once (the .cue
 and all its .bin files), or a single .iso, .bin or .zip. "From a URL" downloads it. Either way it
-takes about 600 MB on the phone. Back quits the game and sends the session.
+takes about 600 MB on the phone. Press the phone's Back twice to quit the game and send the
+session. A controller's buttons never quit it.
+
+If a game ends before you meant it to, "Continue a session" picks it up where it stopped. The app
+plays your presses from that session again at full speed, with a bar along the bottom, then hands you
+the controller. It takes a few minutes for a long session.
 
 What is recorded
 

@@ -20,14 +20,14 @@
             android:name=".LauncherActivity"
             android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
             android:exported="true"
-            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden">
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|density|keyboard|keyboardHidden|navigation">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
         <!-- A process of its own: SDL and the runtime keep their state in globals, so each play starts a new one.
-             SDL takes Back through onBackPressed, which predictive back would skip. -->
+             GameActivity takes Back as a key event, which predictive back would replace. -->
         <activity
             android:name=".GameActivity"
             android:process=":game"
@@ -35,7 +35,7 @@
             android:exported="false"
             android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"
             android:screenOrientation="sensorLandscape"
-            android:configChanges="layoutDirection|locale|grammaticalGender|fontScale|fontWeightAdjustment|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation"
+            android:configChanges="layoutDirection|locale|grammaticalGender|fontScale|fontWeightAdjustment|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|density|keyboard|keyboardHidden|navigation|touchscreen|colorMode"
             android:preferMinimalPostProcessing="true" />
     </application>
 </manifest>

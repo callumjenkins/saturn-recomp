@@ -153,12 +153,14 @@ void smpc_set_area(char symbol) {
 
 // The host's pads, taken once a VBlank, as a script's are, so that --record-input
 // writes what the program saw and --input @FILE gives it back at the same VBlanks.
-// A run with a script takes nothing from the host, so it goes the same way again.
+// A run with a script takes nothing from the host, so it goes the same way again,
+// until --resume's VBlank: there the script lets go of its pads and the host's take them.
 static uint64_t g_host_vblank = ~0ull;
 static uint16_t g_host_pressed[kPads];
 static FILE* g_record;
+static bool g_handed_over;
 
-static bool host_drives() { return g_cfg.input.empty(); }
+static bool host_drives() { return g_cfg.input.empty() || (g_cfg.resume && !sat_resuming()); }
 
 static void record_host(uint64_t vblank, int p, uint16_t pressed) {
     if (g_cfg.record_input.empty()) return;
@@ -184,12 +186,20 @@ static void sample_host() {
 
 // pad p now, active low: byte 1 RIGHT LEFT DOWN UP START A C B, byte 2 R X Y Z L 1 1 1
 static uint16_t pad_now(int p) {
-    while (g_script_pos < g_script.size() && g_script[g_script_pos].vblank <= sat_vblanks()) {
+    while (g_script_pos < g_script.size() && g_script[g_script_pos].vblank <= sat_vblanks() &&
+           !(g_cfg.resume && g_script[g_script_pos].vblank >= g_cfg.resume)) {
         const PadStep& s = g_script[g_script_pos];
         g_script_pressed[s.pad] = s.pressed;
-        if (s.pad) sat_note("pad %d: %04X", s.pad + 1, s.pressed);
+        if (g_cfg.resume) record_host(s.vblank, s.pad, s.pressed);
+        else if (s.pad) sat_note("pad %d: %04X", s.pad + 1, s.pressed);
         else sat_note("pad: %04X", s.pressed);
         ++g_script_pos;
+    }
+    if (host_drives() && g_cfg.resume && !g_handed_over) {
+        g_handed_over = true;
+        sat_note("resumed at VBlank %llu: the controllers have the pads", (unsigned long long)sat_vblanks());
+        for (int q = 0; q < kPads; ++q)
+            if (g_script_pressed[q]) record_host(sat_vblanks(), q, g_script_pressed[q] = 0);
     }
     sample_host();
     return (uint16_t)~(g_script_pressed[p] | g_host_pressed[p]) | 0x0007;

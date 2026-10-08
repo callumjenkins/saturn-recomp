@@ -30,14 +30,22 @@ object Sessions {
     private val UTC = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ssxxx")    // Python's isoformat
     private val FILES = listOf("session.json", "input.txt", "clock.txt", "backup-at-start.bin", "log.txt", "coverage.txt")
 
-    /** A new session's directory under `home`/sessions, and the runtime's arguments for it; with `send`, it is sent once it has ended. */
-    fun start(home: File, info: JSONObject, cue: File, send: Boolean): Pair<File, List<String>> {
+    /**
+     * A new session's directory under `home`/sessions, and the runtime's arguments for it; with `send`, it is sent once it has ended.
+     * With `from`, the session goes on from where that one ended: the run starts as it did, with its clock and saves,
+     * and plays its presses again before the controller takes over, so the new session's input holds both.
+     */
+    fun start(home: File, info: JSONObject, cue: File, send: Boolean, from: File? = null): Pair<File, List<String>> {
         val started = LocalDateTime.now().truncatedTo(ChronoUnit.SECONDS)
         val out = File(home, "sessions/${started.format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))}-${UUID.randomUUID().toString().replace("-", "").take(8)}")
         out.mkdirs()
-        val clock = started.format(LOCAL)
+        val clock = if (from != null) read(from).getString("clock") else started.format(LOCAL)
         File(out, "clock.txt").writeText(clock + "\n")
         val save = File(home, "backup.bin")
+        if (from != null) {
+            save.delete()
+            File(from, "backup-at-start.bin").takeIf { it.exists() }?.copyTo(save)
+        }
         if (save.exists()) save.copyTo(File(out, "backup-at-start.bin"))
         val extra = info.optJSONArray("args") ?: JSONArray()
         val record = JSONObject()
@@ -45,15 +53,27 @@ object Sessions {
             .put("started", started.atZone(ZoneId.systemDefault()).withZoneSameInstant(ZoneOffset.UTC).format(UTC))
             .put("clock", clock).put("args", extra)
             .put("platform", "Android ${Build.VERSION.RELEASE} ${Build.SUPPORTED_ABIS.firstOrNull() ?: ""} ${Build.MANUFACTURER} ${Build.MODEL}")
+        if (from != null) record.put("continues", from.name)
         write(out, record)
         if (send) File(out, UNSENT).createNewFile()
+        val resume = from?.let {
+            val presses = File(out, "resume.txt")
+            File(it, "input.txt").copyTo(presses)
+            listOf("--input", "@${presses.path}", "--resume", vblanks(it).toString())
+        } ?: emptyList()
         val args = listOf(
             "--cue", cue.path, "--out", out.path, "--clock", clock, "--save", save.path,
             "--record-input", File(out, "input.txt").path, "--coverage", File(out, "coverage.txt").path,
             "--checkpoint", CHECKPOINT.toString(), "--log", File(out, "log.txt").path,
-        ) + (0 until extra.length()).map { extra.getString(it) }
+        ) + resume + (0 until extra.length()).map { extra.getString(it) }
         return out to args
     }
+
+    /** The sessions on this phone that can be continued, newest first. */
+    fun continuable(home: File): List<File> =
+        File(home, "sessions").listFiles()
+            ?.filter { File(it, "session.json").exists() && (File(it, "input.txt").takeIf { f -> f.exists() }?.length() ?: 0) > 0 }
+            ?.sortedDescending() ?: emptyList()
 
     /** Records how a session ended, if it has not been yet; true if this call did. */
     fun finish(session: File): Boolean {

@@ -20,6 +20,8 @@ import android.widget.ScrollView
 import android.widget.TextView
 import org.json.JSONObject
 import java.io.File
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
 import java.util.concurrent.Executors
 import kotlin.concurrent.thread
 
@@ -91,6 +93,7 @@ class LauncherActivity : Activity() {
             column.addView(this)
         }
         playButton = button("Play") { play() }
+        button("Continue a session…") { chooseSession() }
         button("My sessions") { openSessions() }
         status = text().apply { setPadding(0, pad, 0, 0) }
         setContentView(ScrollView(this).apply {
@@ -163,7 +166,25 @@ class LauncherActivity : Activity() {
             .show()
     }
 
-    private fun play() {
+    // A session's clock is when it started, so it names the session as the tester saw it.
+    private fun chooseSession() {
+        val sessions = Sessions.continuable(home).take(20)
+        if (sessions.isEmpty()) {
+            say("No session on this phone to continue yet.")
+            return
+        }
+        val labels = sessions.map {
+            val started = LocalDateTime.parse(Sessions.read(it).getString("clock"))
+            "${started.format(DateTimeFormatter.ofPattern("EEE d MMM, HH:mm"))}: ${Sessions.vblanks(it) / 3600} min in"
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Continue from where a session ended")
+            .setItems(labels.toTypedArray()) { _, i -> play(sessions[i]) }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun play(from: File? = null) {
         val cue = settings.optString("cue")
         if (cue.isEmpty()) {
             say("Choose your disc first.")
@@ -172,9 +193,10 @@ class LauncherActivity : Activity() {
         val code = token.text.toString().trim()
         settings.put("token", code)
         saveSettings()
-        val (session, args) = Sessions.start(home, info, File(cue), send = code.isNotEmpty())
-        say(if (code.isNotEmpty()) "Playing. The session is sent every 10 minutes and when you quit."
-            else "Playing. Without a tester code this session stays on this phone.")
+        val (session, args) = Sessions.start(home, info, File(cue), send = code.isNotEmpty(), from = from)
+        say((if (from != null) "The game plays your presses again to get back there, then the controller is yours. " else "") +
+            if (code.isNotEmpty()) "The session is sent every 10 minutes and when you quit."
+            else "Without a tester code this session stays on this phone.")
         val game = Intent(this, GameActivity::class.java)
             .putExtra(GameActivity.ARGS, args.toTypedArray())
             .putExtra(GameActivity.SESSION, session.path)

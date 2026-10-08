@@ -83,7 +83,10 @@ launchers of older builds point their testers at the new one. CI never sees the 
 same `playtest.json` and `disc.json` as the desktop launcher. The launcher activity is Kotlin and
 mirrors the desktop launcher, the disc check included. The game runs in SDL's activity in a process
 of its own, as `libmain.so`. That activity sends the session while it plays, and the launcher
-finishes and sends it once the game's process has gone. Back quits the game. The phone needs a
+finishes and sends it once the game's process has gone. The phone's own Back, pressed twice, quits
+the game, and a Back from a controller is dropped. "Continue a session" starts a new session from an
+earlier one's clock and saves, with the runtime's `--resume` playing its presses again before the
+controller takes over, so the new session's `input.txt` replays the whole game. The phone needs a
 controller for now. `app/build.gradle.kts` lists the properties the workflow builds it with.
 
 `DiscTest` checks the Kotlin disc check against a real disc. It runs only when `SATURN_CUE` and

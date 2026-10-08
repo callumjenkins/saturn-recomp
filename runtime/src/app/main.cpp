@@ -3,7 +3,7 @@
 //
 //     saturn --cue GAME.cue [--out DIR] [--headless] [--fullscreen] [--scale N]
 //            [--vblanks N] [--starts N] [--trace] [--realtime] [--input VBLANK:BUTTONS,...|@FILE]
-//            [--record-input FILE] [--shot N,...] [--dump N,...] [--peek ADDR[:WORDS],...] [--watch LO:HI]
+//            [--record-input FILE] [--resume N] [--shot N,...] [--dump N,...] [--peek ADDR[:WORDS],...] [--watch LO:HI]
 //            [--watch-vblanks FROM:TO] [--wav FILE] [--interp] [--hook ADDR:rN=VALUE ...]
 //            [--tasks SETJMP:LONGJMP] [--multitap N] [--clock YYYY-MM-DDTHH:MM:SS] [--agent FD]
 //            [--write VBLANK:ADDR=HEX,...] [--video FILE] [--save FILE|-] [--coverage FILE] [--checkpoint SECONDS]
@@ -20,7 +20,9 @@
 // those VBlanks. --record-input writes the pads as the host presses them (the
 // keyboard and gamepads, a player each), sampled once a VBlank, as an --input
 // script: given back with --input @FILE, the run goes the same way again, and
-// takes nothing from the host's controllers. --virtual-input SCRIPT, for tests, presses the
+// takes nothing from the host's controllers. --resume N plays an --input script that far as fast as the host
+// can, showing every 30th picture without sound, then hands the pads to the host's controllers; with
+// --record-input, the script's presses are written too, so the file plays the whole run. --virtual-input SCRIPT, for tests, presses the
 // script's pads on SDL virtual gamepads instead, a player each, through the window's input. --interp draws the fields between the game's frames with
 // everything moved part of the way (vdp1.cpp), one frame behind. --tasks names
 // the game's setjmp and longjmp when it switches its own tasks with them
@@ -98,6 +100,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--realtime")) cfg.realtime = true;
         else if (!std::strcmp(a, "--input") && more) cfg.input = argv[++i];
         else if (!std::strcmp(a, "--record-input") && more) cfg.record_input = argv[++i];
+        else if (!std::strcmp(a, "--resume") && more) cfg.resume = std::strtoull(argv[++i], nullptr, 10);
         else if (!std::strcmp(a, "--virtual-input") && more) cfg.virtual_input = argv[++i];
         else if (!std::strcmp(a, "--dump") && more) cfg.dump = argv[++i];
         else if (!std::strcmp(a, "--shot") && more) cfg.shots = argv[++i];
@@ -132,7 +135,7 @@ int main(int argc, char** argv) {
         else {
             std::fprintf(stderr, "usage: saturn --cue GAME.cue [--out DIR] [--headless] [--fullscreen] [--scale N] [--settings FILE]\n"
                                  "             [--vblanks N] [--starts N] [--trace] [--realtime] [--input VBLANK:BUTTONS,...|@FILE]\n"
-                                 "             [--record-input FILE] [--shot N,...] [--dump N,...] [--peek ADDR[:WORDS],...] [--watch LO:HI]\n"
+                                 "             [--record-input FILE] [--resume N] [--shot N,...] [--dump N,...] [--peek ADDR[:WORDS],...] [--watch LO:HI]\n"
                                  "             [--wav FILE] [--hook ADDR:rN=VALUE ...] [--tasks SETJMP:LONGJMP] [--multitap N]\n"
                                  "             [--clock YYYY-MM-DDTHH:MM:SS] [--agent FD] [--write VBLANK:ADDR=HEX,...] [--video FILE]\n"
                                  "             [--save FILE|-] [--coverage FILE] [--checkpoint SECONDS] [--log FILE]\n");

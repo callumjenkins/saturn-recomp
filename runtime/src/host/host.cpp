@@ -17,7 +17,8 @@
 //             east B, right shoulder C, west X, north Y, left shoulder Z, triggers L and R
 // unless the settings (settings.h) bind them otherwise.
 // F12 saves the picture (out/shot-VBLANK.png); F11 or Alt+Enter switches
-// fullscreen. Closing the window, or Android's Back, ends the run.
+// fullscreen. Closing the window, or Android's Back, ends the run. Until --resume's VBlank the run
+// goes as fast as it can, without sound, every 30th picture shown with a bar for how far it has got.
 //
 // Sound (sound.cpp) comes as it is made, in virtual time, into an SDL audio
 // stream at 44 100 Hz: the window's pace keeps it level with the device.
@@ -46,7 +47,7 @@ using Clock = std::chrono::steady_clock;
 static Clock::time_point g_base;                // host time of virtual time 0
 static bool g_paced;
 
-bool host_wants_frame() { return g_win != nullptr; }
+bool host_wants_frame() { return g_win && (!sat_resuming() || sat_vblanks() % 30 == 0); }
 uint16_t host_pad(int slot) { return g_buttons[slot]; }
 bool host_pad_connected(int slot) { return g_win && (slot == 0 || g_slots.taken(slot)); }
 
@@ -130,6 +131,7 @@ bool host_audio_open() {
 }
 
 void host_audio_push(const int16_t* lr, int frames) {
+    if (sat_resuming()) return;
     int queued = [] { HostCall in("SDL_GetAudioStreamQueued"); return SDL_GetAudioStreamQueued(g_audio) / 4; }();
     if (queued + frames > kMax) { ++g_dropped; return; }
     if (queued == 0) { ++g_underruns; audio_silence(kLead); }
@@ -370,6 +372,11 @@ void host_present(const Frame& f) {
     int ph = sh * f.h / tv_lines;
     SDL_FRect dst = {(float)((ww - sw) / 2), (float)((wh - ph) / 2), (float)sw, (float)ph};
     SDL_RenderTexture(g_ren, g_tex, nullptr, &dst);
+    if (sat_resuming()) {                       // how far --resume has got
+        SDL_FRect bar = {dst.x, dst.y + dst.h - 8, dst.w * sat_vblanks() / g_cfg.resume, 8};
+        SDL_SetRenderDrawColor(g_ren, 255, 255, 255, 255);
+        SDL_RenderFillRect(g_ren, &bar);
+    }
     {
         HostCall in("SDL_RenderPresent");
         SDL_RenderPresent(g_ren);
@@ -379,6 +386,10 @@ void host_present(const Frame& f) {
 
 void host_pace(uint64_t now) {
     if (!g_win || !g_paced) return;
+    if (sat_resuming()) {
+        g_base = Clock::now() - std::chrono::nanoseconds(now);
+        return;
+    }
     Clock::time_point due = g_base + std::chrono::nanoseconds(now);
     Clock::time_point t = Clock::now();
     if (t > due + std::chrono::milliseconds(100)) g_base += t - due;   // behind: do not run to catch up

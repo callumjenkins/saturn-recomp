@@ -17,6 +17,7 @@ import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 import java.util.UUID
 import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 
 /** Play sessions as saturnrecomp.playtest.session and .upload keep and send them, so the Worker and the review see no difference. */
@@ -29,7 +30,8 @@ object Sessions {
     const val USER_AGENT = "saturn-playtest/0.1"            // Cloudflare's edge refuses some default user agents (error 1010)
     private val LOCAL = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")     // the runtime's --clock
     private val UTC = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ssxxx")    // Python's isoformat
-    private val FILES = listOf("session.json", "input.txt", "clock.txt", "backup-at-start.bin", "state-at-start.bin", "log.txt", "coverage.txt", PROGRESS)
+    // The latest dump goes too, so a Continue on another phone has at most a minute of presses to play again.
+    private val FILES = listOf("session.json", "input.txt", "clock.txt", "backup-at-start.bin", "state-at-start.bin", "log.txt", "coverage.txt", PROGRESS, DUMP)
     private const val DUMP = "state.bin"                    // the run's latest dump of the machine
     private const val PROGRESS = "progress.txt"             // the runtime's --progress: the starts Continue can rebuild
 
@@ -205,6 +207,49 @@ object Sessions {
             Log.w(TAG, "session ${info.getString("id")}: not sent", e)
             false
         }
+    }
+
+    /** Every tester's sessions of `product` on the Worker, newest first, or null if it could not be asked. */
+    fun remote(endpoint: String, product: String): List<JSONObject>? = try {
+        val c = URL("$endpoint/api/games/$product/sessions").openConnection() as HttpURLConnection
+        c.setRequestProperty("user-agent", USER_AGENT)
+        c.connectTimeout = 10_000
+        c.readTimeout = 30_000
+        val list = JSONObject(c.inputStream.use { it.readBytes().decodeToString() }).getJSONArray("sessions")
+        (0 until list.length()).map { list.getJSONObject(it) }
+    } catch (e: Exception) {
+        Log.w(TAG, "sessions not listed", e)
+        null
+    }
+
+    /**
+     * The session `entry` names (one of remote's) in this phone's sessions, downloaded unless it is there already,
+     * to be continued like one played here. It is recorded as ended and never sent from here, since it is another
+     * session's. A session sent before uploads had their latest dump goes on from its starting dump.
+     */
+    fun fetch(endpoint: String, product: String, entry: JSONObject, home: File): File {
+        val id = entry.getString("id")
+        require(Regex("""[\w-]+""").matches(id)) { "a session id: $id" }
+        val out = File(home, "sessions/$id")
+        if (File(out, "session.json").exists()) return out
+        val part = File(home, "sessions/.$id.part").apply { deleteRecursively(); mkdirs() }
+        val c = URL("$endpoint/api/games/$product/sessions/$id/bundle").openConnection() as HttpURLConnection
+        c.setRequestProperty("user-agent", USER_AGENT)
+        c.connectTimeout = 30_000
+        c.readTimeout = 60_000
+        if (c.responseCode !in 200..299) throw java.io.IOException("the server answered ${c.responseCode} for session $id")
+        ZipInputStream(c.inputStream).use { zip ->
+            while (true) {
+                val e = zip.nextEntry ?: break
+                if (e.name in FILES) File(part, e.name).outputStream().use { zip.copyTo(it) }
+            }
+        }
+        if (!File(part, DUMP).exists()) File(part, "state-at-start.bin").takeIf { it.exists() }?.copyTo(File(part, DUMP))
+        val record = read(part)
+        if (!record.has("ended")) record.put("ended", entry.optString("updated_at")).put("exit", entry.optString("exit").ifEmpty { "quit" })
+        write(part, record.put("tester", entry.optString("tester")))
+        if (!part.renameTo(out)) throw java.io.IOException("cannot move session $id into place")
+        return out
     }
 
     /** The latest build the Worker knows of, or null if it could not be asked. */

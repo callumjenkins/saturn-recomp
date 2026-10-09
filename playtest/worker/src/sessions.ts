@@ -56,9 +56,25 @@ export const mySessions = async (env: Env, tester: Tester) => {
 	return json({ tester: tester.name, sessions: results })
 }
 
-export const readBundle = async (env: Env, id: string) => {
+/**
+ * Every tester's sessions of a game, for the launcher's Continue: open to anyone with the Worker's
+ * address, since a session holds only a game's presses, saves and dumps.
+ */
+export const gameSessions = async (env: Env, product: string) => {
+	const { results } = await env.DB.prepare(
+		`SELECT s.id, t.name AS tester, s.build, s.started_at, s.updated_at, s.ended_at, s.exit, s.vblanks, s.status
+		 FROM sessions s JOIN testers t ON t.id = s.tester_id
+		 WHERE s.product = ? AND s.vblanks > 0 ORDER BY s.started_at DESC LIMIT 500`,
+	)
+		.bind(product)
+		.all()
+	return json({ sessions: results })
+}
+
+/** The session's last upload, if it is one of `product`'s when that is given. */
+export const readBundle = async (env: Env, id: string, product?: string) => {
 	const session = await env.DB.prepare('SELECT product FROM sessions WHERE id = ?').bind(id).first<Pick<Session, 'product'>>()
-	const object = session && (await env.BUCKET.get(bundleKey(session.product, id)))
+	const object = session && (!product || session.product === product) && (await env.BUCKET.get(bundleKey(session.product, id)))
 	if (!object) throw new HttpError(404, `no bundle for session ${id}`)
 	return new Response(object.body, { headers: { 'content-type': 'application/zip', 'content-length': String(object.size) } })
 }

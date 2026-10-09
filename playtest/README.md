@@ -94,6 +94,12 @@ new session from an earlier one's last dump, kept as its `state-at-start.bin` an
 without a dump continues from its clock and saves, all its presses played again. `replay` starts
 from `state-at-start.bin` when a session has one.
 
+Continue also lists every tester's sessions from the Worker, picked by the tester's name: the
+Worker's `GET /api/games/PRODUCT/sessions` and `.../sessions/ID/bundle` answer without a token,
+since a session holds only presses, saves and dumps. The app downloads the chosen one into its own
+sessions, marked ended and never sent from there, and continues it as one played on the phone.
+Uploads carry the latest `state.bin`; a session sent before they did goes on from its starting dump.
+
 A game's `[checkpoint]` in its game.toml names memory the runs note in the session's `progress.txt`
 whenever the first range changes (the runtime's `--progress`), such as a stage number with what the
 player carries into the stage. When the runtime refuses a dump, as a build with another dump format

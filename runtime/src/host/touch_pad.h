@@ -1,8 +1,8 @@
 // saturn-recomp runtime — a Saturn pad drawn on a touchscreen (host.cpp draws it and feeds it fingers).
 //
 // The d-pad sits bottom left, A B C with X Y Z above them bottom right, START between them, L and R
-// in the top corners, and the menu button top centre. Sizes follow the screen's shorter side, so the
-// pad keeps its shape on a phone, a folded-out phone and a tablet.
+// in the top corners, and the menu button top centre. The pad is `unit` pixels across its height, the
+// same size on every screen of the same density, and smaller where the screen is too small for it.
 #pragma once
 #include "host.h"
 #include <algorithm>
@@ -31,8 +31,8 @@ struct TouchFinger {
     bool on_dpad;
 };
 
-inline TouchLayout touch_layout(int w, int h) {
-    float u = (float)std::min(w, h), m = 0.05f * u;
+inline TouchLayout touch_layout(int w, int h, float unit) {
+    float u = std::min({unit, w / 1.1f, h / 0.5f}), m = 0.05f * u;
     TouchLayout l;
     l.dpad_r = 0.17f * u;
     l.dpad_x = m + l.dpad_r;

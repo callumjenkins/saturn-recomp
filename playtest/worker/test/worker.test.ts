@@ -70,6 +70,21 @@ describe('sessions', () => {
 	})
 })
 
+describe("a game's sessions", () => {
+	it("list every tester's sessions with their names, and give out their files, without a token", async () => {
+		await upload(await invite('Sam'), 'session-f', true)
+		const token = await invite('Jo')
+		await upload(token, 'session-e', false, 'PK session e')
+		const listed = await (await call(`/api/games/${PRODUCT}/sessions`)).json<Listed>()
+		expect(listed.sessions.find((s) => s.id === 'session-e')).toMatchObject({ tester: 'Jo', status: 'playing' })
+		expect(listed.sessions.find((s) => s.id === 'session-f')).toMatchObject({ tester: 'Sam', status: 'ended' })
+
+		expect(await bytesAsText(await call(`/api/games/${PRODUCT}/sessions/session-e/bundle`))).toBe('PK session e')
+		expect((await call('/api/games/another-game/sessions/session-e/bundle')).status).toBe(404)
+		expect(await (await call('/api/games/another-game/sessions')).json()).toMatchObject({ sessions: [] })
+	})
+})
+
 describe('auth', () => {
 	it.each([
 		['no token', '/api/me', undefined, 401],

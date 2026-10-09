@@ -67,6 +67,10 @@ trigger = 50
 controls = auto
 ; western: the black pad; japanese: the white pad, its A B C green, yellow and blue
 style = western
+; the pad's size, in percent
+size = 100
+; the menu's button at the top of a touchscreen, shown with the pad or without it
+menu_button = true
 )";
 
 // The values a word may take, by key.
@@ -75,7 +79,7 @@ static const struct { const char* key; const char* values[3]; } kChoices[] = {
 
 // The range a number may take, by key.
 static const struct { const char* key; int lo, hi; } kRanges[] = {
-    {"scale", 1, 8}, {"volume", 0, 100}, {"stick", 5, 95}, {"trigger", 5, 95}};
+    {"scale", 1, 8}, {"size", 50, 200}, {"volume", 0, 100}, {"stick", 5, 95}, {"trigger", 5, 95}};
 
 static std::string trim(const std::string& s) {
     size_t a = s.find_first_not_of(" \t\r"), b = s.find_last_not_of(" \t\r");

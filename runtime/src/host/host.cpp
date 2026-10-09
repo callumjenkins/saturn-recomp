@@ -17,8 +17,8 @@
 //             east B, right shoulder C, west X, north Y, left shoulder Z, triggers L and R
 // unless the settings (settings.h) bind them otherwise.
 // The touchscreen has a Saturn pad of its own for player 1 (touch_pad.h). Android's Back, Escape, a
-// gamepad's Back or Guide, or the touch pad's menu button opens a menu that pauses the game, sets
-// the touch pad, and quits. F12 saves the picture (out/shot-VBLANK.png); F11 or Alt+Enter switches
+// gamepad's Back or Guide, or the menu button at the top of a touchscreen opens a menu that pauses
+// the game, sets the touch pad, and quits. F12 saves the picture (out/shot-VBLANK.png); F11 or Alt+Enter switches
 // fullscreen. Closing the window, or Quit in the menu, ends the run. Until --resume's VBlank the run
 // goes as fast as it can, without sound, every 30th picture shown with a bar for how far it has got.
 //
@@ -348,17 +348,30 @@ static bool touch_shown() {
     return g_touchscreen && g_pads.empty();
 }
 
+static bool menu_button_shown() { return g_touchscreen && g_settings.flag("touch", "menu_button"); }
+
+// The window's pixels to a density-independent pixel: Android's density, 1 on most desktops.
+static float display_scale() {
+    float s = g_win ? SDL_GetWindowDisplayScale(g_win) : 0;
+    return s > 0 ? s : 1;
+}
+
+// The pad's height on the screen: 480 density-independent pixels at its default size.
+static TouchLayout pad_layout() {
+    return touch_layout(g_out_w, g_out_h, 4.8f * display_scale() * (float)g_settings.number("touch", "size"));
+}
+
 static uint16_t touch_read() {
     if (!touch_shown() || g_fingers.empty()) return g_touch_held = 0;
     std::vector<TouchFinger> fingers;
     for (auto& [id, f] : g_fingers) fingers.push_back(f);
-    return g_touch_held = touch_buttons(touch_layout(g_out_w, g_out_h), fingers);
+    return g_touch_held = touch_buttons(pad_layout(), fingers);
 }
 
 // ---- the menu ---------------------------------------------------------------------------------
 // It pauses the game: virtual time stands still while it is open, and the host's clock is moved on
 // by as long as it was, so the run is the same run with or without it.
-enum MenuItem { M_RESUME, M_CONTROLS, M_STYLE, M_QUIT, M_COUNT };
+enum MenuItem { M_RESUME, M_CONTROLS, M_SIZE, M_STYLE, M_MENU_BUTTON, M_QUIT, M_COUNT };
 static bool g_menu_open, g_quitting;
 static int g_menu_at;
 
@@ -378,7 +391,9 @@ static std::string menu_label(int item) {
         std::string m = g_settings.get("touch", "controls");
         return "Touch controls: " + std::string(m == "on" ? "On" : m == "off" ? "Off" : "Auto");
     }
+    case M_SIZE: return "Pad size: " + g_settings.get("touch", "size") + "%";
     case M_STYLE: return g_settings.get("touch", "style") == "japanese" ? "Pad style: Japanese" : "Pad style: Western";
+    case M_MENU_BUTTON: return g_settings.flag("touch", "menu_button") ? "Menu button: On" : "Menu button: Off";
     default: return "Quit";
     }
 }
@@ -386,6 +401,14 @@ static std::string menu_label(int item) {
 static void menu_close() {
     g_menu_open = false;
     for (auto& h : g_held_over) h = 0xFFFF;
+}
+
+// The pad's size, a tenth at a time, from half to twice its default; at either end Enter goes round.
+static void pad_size_step(int dir, bool wrap) {
+    int size = g_settings.number("touch", "size") + 10 * dir;
+    if (size > 200) size = wrap ? 50 : 200;
+    if (size < 50) size = wrap ? 200 : 50;
+    setting_change("size", std::to_string(size).c_str());
 }
 
 static void menu_choose(int item) {
@@ -397,9 +420,11 @@ static void menu_choose(int item) {
         setting_change("controls", m == "auto" ? "on" : m == "on" ? "off" : "auto");
         break;
     }
+    case M_SIZE: pad_size_step(1, true); break;
     case M_STYLE:
         setting_change("style", g_settings.get("touch", "style") == "japanese" ? "western" : "japanese");
         break;
+    case M_MENU_BUTTON: setting_change("menu_button", g_settings.flag("touch", "menu_button") ? "false" : "true"); break;
     case M_QUIT:
         menu_close();
         g_quitting = true;
@@ -410,9 +435,23 @@ static void menu_choose(int item) {
 
 // The menu's rows, centred, each tall enough for a thumb.
 static SDL_FRect menu_row(int item) {
-    float u = (float)std::min(g_out_w, g_out_h), h = std::max(48.0f, 0.13f * u), w = std::min(0.9f * g_out_w, 7.5f * h);
+    float u = (float)std::min(g_out_w, g_out_h), h = std::max(40.0f, std::min(0.11f * u, 52 * display_scale()));
+    float w = std::min(0.9f * g_out_w, 8.5f * h);
     float top = g_out_h / 2.0f - ((float)M_COUNT * h * 1.2f) / 2 + h * 0.5f;
     return {(g_out_w - w) / 2, top + item * h * 1.2f, w, h};
+}
+
+static int menu_row_at(float x, float y);
+
+// A tap on the size row's left half makes the pad smaller, and on its right half bigger.
+static void menu_tap(float x, float y) {
+    int i = menu_row_at(x, y);
+    if (i < 0) return;
+    SDL_FRect r = menu_row(i);
+    if (i == M_SIZE) {
+        g_menu_at = i;
+        pad_size_step(x < r.x + r.w / 2 ? -1 : 1, false);
+    } else menu_choose(i);
 }
 
 static int menu_row_at(float x, float y) {
@@ -437,8 +476,9 @@ static bool escape_is_a_button() {
 }
 
 // ---- the events -------------------------------------------------------------------------------
-static void on_menu_key(int dy, bool choose, bool back) {
+static void on_menu_key(int dy, bool choose, bool back, int dx) {
     if (back) menu_close();
+    else if (dx && g_menu_at == M_SIZE) pad_size_step(dx, false);
     else if (choose) menu_choose(g_menu_at);
     else g_menu_at = (g_menu_at + dy + M_COUNT) % M_COUNT;
 }
@@ -468,7 +508,8 @@ static void on_event(const SDL_Event& e) {
             break;
         }
         on_menu_key(k == SDL_SCANCODE_UP ? -1 : k == SDL_SCANCODE_DOWN ? 1 : 0,
-                    !e.key.repeat && (k == SDL_SCANCODE_RETURN || k == SDL_SCANCODE_SPACE), back && !e.key.repeat);
+                    !e.key.repeat && (k == SDL_SCANCODE_RETURN || k == SDL_SCANCODE_SPACE), back && !e.key.repeat,
+                    k == SDL_SCANCODE_LEFT ? -1 : k == SDL_SCANCODE_RIGHT ? 1 : 0);
         break;
     }
     case SDL_EVENT_GAMEPAD_BUTTON_DOWN: {
@@ -479,14 +520,15 @@ static void on_event(const SDL_Event& e) {
         }
         on_menu_key(b == SDL_GAMEPAD_BUTTON_DPAD_UP ? -1 : b == SDL_GAMEPAD_BUTTON_DPAD_DOWN ? 1 : 0,
                     b == SDL_GAMEPAD_BUTTON_SOUTH || b == SDL_GAMEPAD_BUTTON_START,
-                    b == SDL_GAMEPAD_BUTTON_EAST || b == SDL_GAMEPAD_BUTTON_BACK || b == SDL_GAMEPAD_BUTTON_GUIDE);
+                    b == SDL_GAMEPAD_BUTTON_EAST || b == SDL_GAMEPAD_BUTTON_BACK || b == SDL_GAMEPAD_BUTTON_GUIDE,
+                    b == SDL_GAMEPAD_BUTTON_DPAD_LEFT ? -1 : b == SDL_GAMEPAD_BUTTON_DPAD_RIGHT ? 1 : 0);
         break;
     }
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
         if (g_menu_open && e.button.which != SDL_TOUCH_MOUSEID) {
             float x = e.button.x, y = e.button.y;
             SDL_RenderCoordinatesFromWindow(g_ren, e.button.x, e.button.y, &x, &y);
-            if (int i = menu_row_at(x, y); i >= 0) menu_choose(i);
+            menu_tap(x, y);
         }
         break;
     case SDL_EVENT_FINGER_DOWN:
@@ -495,13 +537,16 @@ static void on_event(const SDL_Event& e) {
         float x = e.tfinger.x * g_out_w, y = e.tfinger.y * g_out_h;
         if (g_menu_open) {
             if (e.type == SDL_EVENT_FINGER_DOWN)
-                if (int i = menu_row_at(x, y); i >= 0) menu_choose(i);
+                menu_tap(x, y);
+            break;
+        }
+        TouchLayout l = pad_layout();
+        if (e.type == SDL_EVENT_FINGER_DOWN && menu_button_shown() && touch_on_menu(l, x, y)) {
+            menu_open();
             break;
         }
         if (!touch_shown()) break;
-        TouchLayout l = touch_layout(g_out_w, g_out_h);
         if (e.type == SDL_EVENT_FINGER_DOWN) {
-            if (touch_on_menu(l, x, y)) { menu_open(); break; }
             g_fingers[e.tfinger.fingerID] = {x, y, touch_on_dpad(l, x, y)};
         } else if (auto f = g_fingers.find(e.tfinger.fingerID); f != g_fingers.end()) {
             f->second.x = x;
@@ -584,7 +629,7 @@ static SDL_FColor faded(SDL_FColor c, bool held) {
 
 static void draw_touch_pad() {
     bool jp = g_settings.get("touch", "style") == "japanese";
-    TouchLayout l = touch_layout(g_out_w, g_out_h);
+    TouchLayout l = pad_layout();
     const SDL_FColor shade = rgba(0, 0, 0, 0.3f);
 
     // the d-pad: a cross, each arm lit while held
@@ -615,7 +660,10 @@ static void draw_touch_pad() {
             draw_text(b.x, b.y, (b.shape == TouchButton::Pill ? 0.42f : 0.5f) * b.h, b.label, label);
         }
     }
+}
 
+static void draw_menu_button() {
+    TouchLayout l = pad_layout();
     // the menu's button: three bars
     fill_circle(l.menu_x, l.menu_y, l.menu_r, rgba(0.13f, 0.13f, 0.15f, 0.55f));
     for (int i = -1; i <= 1; ++i)
@@ -633,6 +681,10 @@ static void draw_menu() {
         SDL_FRect r = menu_row(i);
         fill_rounded(r, 0.2f * r.h, i == g_menu_at ? rgba(0.25f, 0.45f, 0.85f, 0.95f) : rgba(0.16f, 0.16f, 0.19f, 0.95f));
         draw_text(r.x + r.w / 2, r.y + r.h / 2, 0.36f * r.h, menu_label(i), rgba(1, 1, 1, 1));
+        if (i == M_SIZE) {
+            draw_text(r.x + 0.6f * r.h, r.y + r.h / 2, 0.5f * r.h, "-", rgba(1, 1, 1, 0.8f));
+            draw_text(r.x + r.w - 0.6f * r.h, r.y + r.h / 2, 0.5f * r.h, "+", rgba(1, 1, 1, 0.8f));
+        }
     }
 }
 
@@ -651,7 +703,10 @@ static void draw() {
     }
     SDL_SetRenderDrawBlendMode(g_ren, SDL_BLENDMODE_BLEND);
     if (g_menu_open) draw_menu();
-    else if (touch_shown()) draw_touch_pad();
+    else {
+        if (touch_shown()) draw_touch_pad();
+        if (menu_button_shown()) draw_menu_button();
+    }
     if (g_quitting) {
         float u = (float)std::min(g_out_w, g_out_h);
         draw_text(g_out_w / 2.0f, 0.12f * u, 0.05f * u, "Saving...", rgba(1, 1, 1, 0.9f));

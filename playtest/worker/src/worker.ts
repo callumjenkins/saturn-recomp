@@ -2,7 +2,7 @@ import { requireMaintainer, requireTester } from './auth'
 import { latestBuild, putBuild, putGame, putSources, readSources } from './builds'
 import { errorResponse, HttpError } from './http'
 import { PAGE } from './page'
-import { listSessions, mySessions, readBundle, reviewSession, uploadSession } from './sessions'
+import { gameSessions, listSessions, mySessions, readBundle, reviewSession, uploadSession } from './sessions'
 import { inviteTester, revokeTester } from './testers'
 
 type Route = [method: string, pattern: RegExp, handle: (env: Env, request: Request, url: URL, ...params: string[]) => Promise<Response>]
@@ -10,6 +10,8 @@ type Route = [method: string, pattern: RegExp, handle: (env: Env, request: Reque
 const ROUTES: Route[] = [
 	['GET', /^\/$/, async () => new Response(PAGE, { headers: { 'content-type': 'text/html; charset=utf-8' } })],
 	['GET', /^\/api\/games\/([^/]+)\/latest$/, (env, _, __, product) => latestBuild(env, product)],
+	['GET', /^\/api\/games\/([^/]+)\/sessions$/, (env, _, __, product) => gameSessions(env, product)],
+	['GET', /^\/api\/games\/([^/]+)\/sessions\/([^/]+)\/bundle$/, (env, _, __, product, id) => readBundle(env, id, product)],
 	['GET', /^\/api\/me$/, async (env, request) => mySessions(env, await requireTester(env, request))],
 	['PUT', /^\/api\/sessions\/([^/]+)$/, async (env, request, _, id) => uploadSession(env, request, await requireTester(env, request), id)],
 

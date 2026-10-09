@@ -17,7 +17,7 @@ uint16_t held(const TouchLayout& l, std::vector<TouchFinger> fingers) { return t
 
 TEST(each_button_is_pressed_on_its_centre_and_nothing_between_them) {
     for (auto [w, h] : {std::pair{2520, 1080}, std::pair{2184, 1968}, std::pair{1280, 800}}) {
-        TouchLayout l = touch_layout(w, h);
+        TouchLayout l = touch_layout(w, h, (float)std::min(w, h));
         CHECK_EQ(l.buttons.size(), 9);
         for (auto& b : l.buttons) CHECK_EQ(held(l, {{b.x, b.y, false}}), b.bit);
         CHECK_EQ(held(l, {{w / 2.0f, h / 2.0f, false}}), 0);
@@ -26,7 +26,7 @@ TEST(each_button_is_pressed_on_its_centre_and_nothing_between_them) {
 
 TEST(the_buttons_stay_on_the_screen_and_apart) {
     for (auto [w, h] : {std::pair{2520, 1080}, std::pair{2184, 1968}, std::pair{1280, 800}}) {
-        TouchLayout l = touch_layout(w, h);
+        TouchLayout l = touch_layout(w, h, (float)std::min(w, h));
         for (auto& a : l.buttons) {
             float rw = a.shape == TouchButton::Round ? a.w : a.w / 2, rh = a.shape == TouchButton::Round ? a.w : a.h / 2;
             CHECK_EQ(a.x - rw >= 0 && a.x + rw <= w && a.y - rh >= 0 && a.y + rh <= h, true);
@@ -37,15 +37,33 @@ TEST(the_buttons_stay_on_the_screen_and_apart) {
     }
 }
 
+TEST(a_unit_too_big_for_the_screen_still_fits_it) {
+    for (auto [w, h] : {std::pair{2520, 1080}, std::pair{2184, 1968}, std::pair{800, 1280}}) {
+        TouchLayout l = touch_layout(w, h, 5000);
+        for (auto& a : l.buttons) {
+            float rw = a.shape == TouchButton::Round ? a.w : a.w / 2, rh = a.shape == TouchButton::Round ? a.w : a.h / 2;
+            CHECK_EQ(a.x - rw >= 0 && a.x + rw <= w && a.y - rh >= 0 && a.y + rh <= h, true);
+            for (auto& b : l.buttons)
+                if (&a != &b) CHECK_EQ(touch_distance(a, b.x, b.y) > 0, true);
+        }
+        CHECK_EQ(l.dpad_x - l.dpad_r >= 0 && l.dpad_y + l.dpad_r <= h, true);
+    }
+}
+
+TEST(one_unit_is_one_size_on_a_small_screen_and_a_big_one) {
+    TouchLayout cover = touch_layout(2520, 1080, 1000), inner = touch_layout(2184, 1968, 1000);
+    CHECK_EQ(cover.dpad_r == inner.dpad_r && button(cover, B_A).w == button(inner, B_A).w, true);
+}
+
 TEST(a_finger_between_a_and_b_presses_the_nearer) {
-    TouchLayout l = touch_layout(2520, 1080);
+    TouchLayout l = touch_layout(2520, 1080, 1080);
     const TouchButton &a = button(l, B_A), &b = button(l, B_B);
     CHECK_EQ(held(l, {{a.x + 0.4f * (b.x - a.x), a.y, false}}), B_A);
     CHECK_EQ(held(l, {{a.x + 0.6f * (b.x - a.x), a.y, false}}), B_B);
 }
 
 TEST(the_dpad_gives_eight_directions_and_rests_in_the_middle) {
-    TouchLayout l = touch_layout(2520, 1080);
+    TouchLayout l = touch_layout(2520, 1080, 1080);
     float x = l.dpad_x, y = l.dpad_y, r = l.dpad_r;
     CHECK_EQ(held(l, {{x, y, true}}), 0);
     CHECK_EQ(held(l, {{x + r, y, true}}), B_RIGHT);
@@ -55,7 +73,7 @@ TEST(the_dpad_gives_eight_directions_and_rests_in_the_middle) {
 }
 
 TEST(fingers_together_hold_all_they_press) {
-    TouchLayout l = touch_layout(2520, 1080);
+    TouchLayout l = touch_layout(2520, 1080, 1080);
     const TouchButton &c = button(l, B_C), &start = button(l, B_START);
     CHECK_EQ(held(l, {{l.dpad_x, l.dpad_y - l.dpad_r, true}, {c.x, c.y, false}, {start.x, start.y, false}}),
              B_UP | B_C | B_START);

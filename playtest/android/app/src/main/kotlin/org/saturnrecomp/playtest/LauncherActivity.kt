@@ -12,15 +12,21 @@ import android.text.Editable
 import android.text.InputType
 import android.text.TextWatcher
 import android.view.View
+import android.widget.AdapterView
+import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ListView
 import android.widget.ScrollView
+import android.widget.Spinner
 import android.widget.TextView
 import org.json.JSONObject
 import java.io.File
 import java.time.LocalDateTime
+import java.time.OffsetDateTime
+import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.Executors
 import kotlin.concurrent.thread
@@ -174,22 +180,82 @@ class LauncherActivity : Activity() {
             .show()
     }
 
-    // A session's directory is named for when it started on this phone; its clock can be an earlier session's.
+    // Sessions from this phone, or any tester's from the Worker, chosen by name. A session's directory is named for
+    // when it started; its clock can be an earlier session's.
     private fun chooseSession() {
-        val sessions = Sessions.continuable(home).take(20)
-        if (sessions.isEmpty()) {
-            say("No session on this phone to continue yet.")
-            return
+        start {
+            val remote = Sessions.remote(info.getString("endpoint"), info.getString("product"))
+            runOnUiThread { showSessions(remote ?: emptyList(), offline = remote == null) }
         }
-        val labels = sessions.map {
-            val started = LocalDateTime.parse(it.name.take(15), DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))
-            "${started.format(DateTimeFormatter.ofPattern("EEE d MMM, HH:mm"))}: ${Sessions.vblanks(it) / 3600} min in"
+    }
+
+    private fun showSessions(remote: List<JSONObject>, offline: Boolean) {
+        val local = Sessions.continuable(home).take(30)
+        val testers = remote.map { it.optString("tester") }.filter { it.isNotEmpty() }.distinct().sorted()
+        val sources = listOf(THIS_PHONE) + testers
+        val day = DateTimeFormatter.ofPattern("EEE d MMM, HH:mm")
+        val pad = (16 * resources.displayMetrics.density).toInt()
+        val picker = Spinner(this).apply {
+            adapter = ArrayAdapter(this@LauncherActivity, android.R.layout.simple_spinner_dropdown_item, sources)
+            setSelection(sources.indexOf(settings.optString("continue_from")).coerceAtLeast(0))
         }
-        AlertDialog.Builder(this)
+        val list = ListView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (360 * resources.displayMetrics.density).toInt())
+        }
+        val note = TextView(this).apply { setPadding(0, pad / 2, 0, 0) }
+        val view = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(pad, pad / 2, pad, 0)
+            addView(picker)
+            addView(note)
+            addView(list)
+        }
+        val dialog = AlertDialog.Builder(this)
             .setTitle("Continue from where a session ended")
-            .setItems(labels.toTypedArray()) { _, i -> play(sessions[i]) }
+            .setView(view)
             .setNegativeButton("Cancel", null)
-            .show()
+            .create()
+        var choices: List<() -> Unit> = emptyList()
+        fun show(source: String) {
+            settings.put("continue_from", source)
+            saveSettings()
+            val labels: List<String>
+            if (source == THIS_PHONE) {
+                labels = local.map {
+                    val started = LocalDateTime.parse(it.name.take(15), DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))
+                    "${started.format(day)}: ${Sessions.vblanks(it) / 3600} min in"
+                }
+                choices = local.map { f -> { play(f) } }
+                note.text = if (local.isEmpty()) "No session on this phone yet." else if (offline) "The server can't be reached, so only this phone's sessions are here." else ""
+            } else {
+                val theirs = remote.filter { it.optString("tester") == source }.take(50)
+                labels = theirs.map {
+                    val started = try { OffsetDateTime.parse(it.getString("started_at")).atZoneSameInstant(ZoneId.systemDefault()).format(day) } catch (_: Exception) { it.optString("started_at") }
+                    "$started: ${it.optLong("vblanks") / 3600} min in" + if (it.optString("status") == "playing") " (still playing?)" else ""
+                }
+                choices = theirs.map { entry -> { continueRemote(entry) } }
+                note.text = "$source's sessions from every phone they played on."
+            }
+            list.adapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, labels)
+        }
+        picker.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, v: View?, position: Int, id: Long) = show(sources[position])
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
+        list.setOnItemClickListener { _, _, position, _ ->
+            dialog.dismiss()
+            choices[position]()
+        }
+        show(sources[picker.selectedItemPosition.coerceAtLeast(0)])
+        dialog.show()
+    }
+
+    private fun continueRemote(entry: JSONObject) {
+        say("Downloading the session…")
+        start {
+            val session = Sessions.fetch(info.getString("endpoint"), info.getString("product"), entry, home)
+            runOnUiThread { play(session) }
+        }
     }
 
     private fun play(from: File? = null, useDump: Boolean = true) {
@@ -328,5 +394,6 @@ class LauncherActivity : Activity() {
     companion object {
         private const val PICK = 1
         private const val BOX_ART = "boxart"
+        private const val THIS_PHONE = "This phone"
     }
 }

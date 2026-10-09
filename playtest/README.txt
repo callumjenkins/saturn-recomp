@@ -28,14 +28,18 @@ own whenever no controller is connected.
 and all its .bin files), or a single .iso, .bin or .zip. "From a URL" downloads it. Either way it
 takes about 600 MB on the phone. The phone's Back, the button at the top of the screen, or a
 controller's Back or Select button pauses the game and opens a menu. From there you can turn the
-on-screen pad on or off, switch it between the black Western pad and the white Japanese one, and
-Quit, which saves and sends the session.
+on-screen pad on or off, make it bigger or smaller, switch it between the black Western pad and
+the white Japanese one, hide the menu button, and Quit, which saves and sends the session.
 
 If a game ends before you meant it to, "Continue a session" picks it up where it stopped. The app
 saves the whole game every minute and when you quit, so it starts from there and plays the last
 minute's presses again at full speed, with a bar along the bottom, before handing you the controller.
 In Normal Game, if a newer build can't load that save, it starts you at the beginning of the stage
 you were on, with your score, lives and power-ups.
+
+The list starts with this phone's own sessions. Pick a name from the drop-down above it to see that
+tester's sessions from every phone they played on, yours from another phone included, and continue
+one of those instead. The app downloads it first.
 
 What is recorded
 

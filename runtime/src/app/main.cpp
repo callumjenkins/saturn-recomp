@@ -8,7 +8,7 @@
 //            [--tasks SETJMP:LONGJMP] [--multitap N] [--clock YYYY-MM-DDTHH:MM:SS] [--agent FD]
 //            [--write VBLANK:ADDR=HEX,...] [--video FILE] [--save FILE|-] [--coverage FILE] [--checkpoint SECONDS]
 //            [--log FILE] [--state-in FILE] [--state-out FILE] [--state-every SECONDS] [--state-at VBLANK]
-//            [--progress FILE --progress-keep ADDR:BYTES,...]
+//            [--progress FILE --progress-keep ADDR:BYTES,...] [--after FILE]
 //
 // --vblanks and --starts end the run after that many VBlanks or program
 // starts; the log of the hardware touched goes to DIR/hw-log.txt. --shot
@@ -49,10 +49,12 @@
 // --log writes what would go to stdout and stderr to FILE instead, for a host that shows neither (Android).
 // --state-in starts the run from a dump of the machine instead of power-on (state.cpp), and
 // --state-out writes one: at the first safe moment from VBlank --state-at, every --state-every
-// SECONDS of the host's time, and when the window is closed or Back pressed, which then wait for it.
+// SECONDS of the host's time, and when the window is closed or Quit chosen in its menu, which then wait for it.
 // A safe moment is a task switch (--tasks), so a game without one makes no dumps.
 // --progress adds a line to FILE whenever the first --progress-keep range changes: the VBlank, then
 // each range's bytes in hex. A game's stage number, say, then what a stage start has to be rebuilt from.
+// --after gives the window's menu Save files, which writes "saves" to FILE and quits, for a launcher to
+// open its save files once the run has ended.
 #include "saturn.h"
 #include <cstdio>
 #include <cstdlib>
@@ -121,6 +123,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--fullscreen")) cfg.fullscreen = true;
         else if (!std::strcmp(a, "--scale") && more) cfg.scale = std::atoi(argv[++i]);
         else if (!std::strcmp(a, "--settings") && more) cfg.settings = argv[++i];
+        else if (!std::strcmp(a, "--after") && more) cfg.after = argv[++i];
         else if (!std::strcmp(a, "--wav") && more) cfg.wav = argv[++i];
         else if (!std::strcmp(a, "--video") && more) cfg.video = argv[++i];
         else if (!std::strcmp(a, "--interp")) cfg.interp = true;
@@ -153,7 +156,7 @@ int main(int argc, char** argv) {
                                  "             [--clock YYYY-MM-DDTHH:MM:SS] [--agent FD] [--write VBLANK:ADDR=HEX,...] [--video FILE]\n"
                                  "             [--save FILE|-] [--coverage FILE] [--checkpoint SECONDS] [--log FILE]\n"
                                  "             [--state-in FILE] [--state-out FILE] [--state-every SECONDS] [--state-at VBLANK]\n"
-                                 "             [--progress FILE --progress-keep ADDR:BYTES,...]\n");
+                                 "             [--progress FILE --progress-keep ADDR:BYTES,...] [--after FILE]\n");
             return 2;
         }
     }

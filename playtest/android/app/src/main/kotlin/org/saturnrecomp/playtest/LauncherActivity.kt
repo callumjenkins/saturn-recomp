@@ -12,21 +12,15 @@ import android.text.Editable
 import android.text.InputType
 import android.text.TextWatcher
 import android.view.View
-import android.widget.AdapterView
-import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
-import android.widget.ListView
 import android.widget.ScrollView
-import android.widget.Spinner
 import android.widget.TextView
 import org.json.JSONObject
 import java.io.File
 import java.time.LocalDateTime
-import java.time.OffsetDateTime
-import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.Executors
 import kotlin.concurrent.thread
@@ -99,7 +93,7 @@ class LauncherActivity : Activity() {
             column.addView(this)
         }
         playButton = button("Play") { play() }
-        button("Continue a session…") { chooseSession() }
+        button("Save files…") { chooseSession() }
         button("My sessions") { openSessions() }
         status = text().apply { setPadding(0, pad, 0, 0) }
         setContentView(ScrollView(this).apply {
@@ -131,17 +125,22 @@ class LauncherActivity : Activity() {
             val finished = unfinished.filter { Sessions.finish(it) }
             // A Continue this build cannot load the dump of goes on again from the checkpoint or the presses instead.
             finished.firstOrNull { Sessions.dumpRefused(it) }?.let { refused ->
-                val from = File(home, "sessions/${Sessions.read(refused).getString("continues")}")
+                val record = Sessions.read(refused)
+                val from = File(home, "sessions/${record.getString("continues")}")
                 refused.deleteRecursively()
-                runOnUiThread { play(from, useDump = false) }
+                runOnUiThread { play(from, useDump = false, save = record.optString("save").ifEmpty { null }) }
                 return@execute
             }
+            // Save files… in the game's menu ends the run there, and the save files open once it is sent
+            val toSaves = finished.any { File(it, "after.txt").takeIf { f -> f.exists() }?.readText()?.trim() == "saves" }
             val ended = finished.size
             if (code.isEmpty()) {
                 if (ended > 0) say("Session kept on this phone.")
+                if (toSaves) runOnUiThread { chooseSession() }
                 return@execute
             }
             val left = Sessions.sendUnsent(info.getString("endpoint"), code, home)
+            if (toSaves) runOnUiThread { chooseSession() }
             when {
                 left > 0 && ended > 0 -> say("Could not send the session. The app tries again next time it opens.")
                 left > 0 -> say("$left earlier sessions are still waiting to be sent.")
@@ -161,6 +160,13 @@ class LauncherActivity : Activity() {
     @Deprecated("startActivityForResult is all a plain Activity has")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == SAVES && resultCode == RESULT_OK && data != null) {
+            val line = data.getStringExtra(SavesActivity.EXTRA_LINE)
+            if (line != null) play(branch = Sessions.Branch(line, data.getStringExtra(SavesActivity.EXTRA_CLOCK)?.ifEmpty { null }
+                ?: LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")), JSONObject(data.getStringExtra(SavesActivity.EXTRA_PARENT) ?: "{}")))
+            else data.getStringExtra(SavesActivity.EXTRA_FROM)?.let { play(File(it), save = data.getStringExtra(SavesActivity.EXTRA_SAVE)) }
+            return
+        }
         if (requestCode != PICK || resultCode != RESULT_OK || data == null) return
         val uris = data.clipData?.let { clip -> (0 until clip.itemCount).map { clip.getItemAt(it).uri } } ?: listOfNotNull(data.data)
         if (uris.isNotEmpty()) start { import(uris) }
@@ -180,85 +186,11 @@ class LauncherActivity : Activity() {
             .show()
     }
 
-    // Sessions from this phone, or any tester's from the Worker, chosen by name. A session's directory is named for
-    // when it started; its clock can be an earlier session's.
     private fun chooseSession() {
-        start {
-            val remote = Sessions.remote(info.getString("endpoint"), info.getString("product"))
-            runOnUiThread { showSessions(remote ?: emptyList(), offline = remote == null) }
-        }
+        startActivityForResult(Intent(this, SavesActivity::class.java), SAVES)
     }
 
-    private fun showSessions(remote: List<JSONObject>, offline: Boolean) {
-        val local = Sessions.continuable(home).take(30)
-        val testers = remote.map { it.optString("tester") }.filter { it.isNotEmpty() }.distinct().sorted()
-        val sources = listOf(THIS_PHONE) + testers
-        val day = DateTimeFormatter.ofPattern("EEE d MMM, HH:mm")
-        val pad = (16 * resources.displayMetrics.density).toInt()
-        val picker = Spinner(this).apply {
-            adapter = ArrayAdapter(this@LauncherActivity, android.R.layout.simple_spinner_dropdown_item, sources)
-            setSelection(sources.indexOf(settings.optString("continue_from")).coerceAtLeast(0))
-        }
-        val list = ListView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (360 * resources.displayMetrics.density).toInt())
-        }
-        val note = TextView(this).apply { setPadding(0, pad / 2, 0, 0) }
-        val view = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(pad, pad / 2, pad, 0)
-            addView(picker)
-            addView(note)
-            addView(list)
-        }
-        val dialog = AlertDialog.Builder(this)
-            .setTitle("Continue from where a session ended")
-            .setView(view)
-            .setNegativeButton("Cancel", null)
-            .create()
-        var choices: List<() -> Unit> = emptyList()
-        fun show(source: String) {
-            settings.put("continue_from", source)
-            saveSettings()
-            val labels: List<String>
-            if (source == THIS_PHONE) {
-                labels = local.map {
-                    val started = LocalDateTime.parse(it.name.take(15), DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))
-                    "${started.format(day)}: ${Sessions.vblanks(it) / 3600} min in"
-                }
-                choices = local.map { f -> { play(f) } }
-                note.text = if (local.isEmpty()) "No session on this phone yet." else if (offline) "The server can't be reached, so only this phone's sessions are here." else ""
-            } else {
-                val theirs = remote.filter { it.optString("tester") == source }.take(50)
-                labels = theirs.map {
-                    val started = try { OffsetDateTime.parse(it.getString("started_at")).atZoneSameInstant(ZoneId.systemDefault()).format(day) } catch (_: Exception) { it.optString("started_at") }
-                    "$started: ${it.optLong("vblanks") / 3600} min in" + if (it.optString("status") == "playing") " (still playing?)" else ""
-                }
-                choices = theirs.map { entry -> { continueRemote(entry) } }
-                note.text = "$source's sessions from every phone they played on."
-            }
-            list.adapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, labels)
-        }
-        picker.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>?, v: View?, position: Int, id: Long) = show(sources[position])
-            override fun onNothingSelected(parent: AdapterView<*>?) {}
-        }
-        list.setOnItemClickListener { _, _, position, _ ->
-            dialog.dismiss()
-            choices[position]()
-        }
-        show(sources[picker.selectedItemPosition.coerceAtLeast(0)])
-        dialog.show()
-    }
-
-    private fun continueRemote(entry: JSONObject) {
-        say("Downloading the session…")
-        start {
-            val session = Sessions.fetch(info.getString("endpoint"), info.getString("product"), entry, home)
-            runOnUiThread { play(session) }
-        }
-    }
-
-    private fun play(from: File? = null, useDump: Boolean = true) {
+    private fun play(from: File? = null, useDump: Boolean = true, branch: Sessions.Branch? = null, save: String? = null) {
         val cue = settings.optString("cue")
         if (cue.isEmpty()) {
             say("Choose your disc first.")
@@ -267,9 +199,10 @@ class LauncherActivity : Activity() {
         val code = token.text.toString().trim()
         settings.put("token", code)
         saveSettings()
-        val (session, args) = Sessions.start(home, info, File(cue), send = code.isNotEmpty(), from = from, useDump = useDump)
+        val (session, args) = Sessions.start(home, info, File(cue), send = code.isNotEmpty(), from = from, useDump = useDump, branch = branch, save = save)
         val record = Sessions.read(session)
         say((when {
+            branch != null -> "The game goes back to that stage start, then the controller is yours. "
             record.has("rebuilds") -> "This build can't load where that session ended, so it starts you at the beginning of the stage you were on. "
             from != null -> "The game plays your presses again to get back there, then the controller is yours. "
             else -> ""
@@ -393,7 +326,7 @@ class LauncherActivity : Activity() {
 
     companion object {
         private const val PICK = 1
+        private const val SAVES = 2
         private const val BOX_ART = "boxart"
-        private const val THIS_PHONE = "This phone"
     }
 }

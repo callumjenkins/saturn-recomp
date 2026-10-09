@@ -70,6 +70,7 @@ struct SaturnConfig {
     std::string state_at;           // ... at the first safe moment from this VBlank on
     std::string progress;           // a file the --progress-keep ranges are added to, a line each time the first changes
     std::string progress_keep;      // "ADDR:BYTES,...": the ranges
+    std::string after;              // with it, the menu has Save files, which writes "saves" here and quits
 };
 extern SaturnConfig g_cfg;
 extern SH2Context g_master, g_slave;

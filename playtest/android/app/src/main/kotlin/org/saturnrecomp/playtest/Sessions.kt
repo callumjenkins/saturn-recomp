@@ -35,28 +35,37 @@ object Sessions {
     private const val DUMP = "state.bin"                    // the run's latest dump of the machine
     private const val PROGRESS = "progress.txt"             // the runtime's --progress: the starts Continue can rebuild
 
+    /** Where a new session starts: a save file's start, rebuilt from its progress line, as a save file of its own. */
+    class Branch(val line: String, val clock: String, val parent: JSONObject)
+
     /**
      * A new session's directory under `home`/sessions, and the runtime's arguments for it; with `send`, it is sent once it has ended.
      * With `from`, the session goes on where that one ended: from its last dump, or from its start (its clock and saves)
      * without one, with its presses after that point played again before the controller takes over. With `useDump` false,
      * it goes on from the last start the game's checkpoint can rebuild (rebuild), and from its presses without one.
+     * With `branch`, it starts at that start instead, as a new save file. `save` names the save file a Continue carries on.
      */
-    fun start(home: File, info: JSONObject, cue: File, send: Boolean, from: File? = null, useDump: Boolean = true): Pair<File, List<String>> {
+    fun start(
+        home: File, info: JSONObject, cue: File, send: Boolean, from: File? = null, useDump: Boolean = true,
+        branch: Branch? = null, save: String? = null,
+    ): Pair<File, List<String>> {
         val started = LocalDateTime.now().truncatedTo(ChronoUnit.SECONDS)
         val out = File(home, "sessions/${started.format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))}-${UUID.randomUUID().toString().replace("-", "").take(8)}")
         out.mkdirs()
-        val clock = if (from != null) read(from).getString("clock") else started.format(LOCAL)
+        val clock = branch?.clock ?: if (from != null) read(from).getString("clock") else started.format(LOCAL)
         File(out, "clock.txt").writeText(clock + "\n")
-        val save = File(home, "backup.bin")
+        val saves = File(home, "backup.bin")
         val dump = from?.takeIf { useDump }?.let { File(it, DUMP) }?.takeIf { it.exists() }
-        val rebuilt = from?.takeIf { dump == null }?.let { f -> info.optJSONObject("checkpoint")?.let { rebuild(it, f) } }
+        val checkpoint = info.optJSONObject("checkpoint")
+        val rebuilt = if (branch != null) checkpoint?.let { rebuild(it, branch.line) }
+            else from?.takeIf { dump == null }?.let { f -> checkpoint?.let { rebuild(it, f) } }
         from?.let { File(it, PROGRESS) }?.takeIf { it.exists() }?.copyTo(File(out, PROGRESS))
         if (from != null && dump == null && rebuilt == null) {
-            save.delete()
-            File(from, "backup-at-start.bin").takeIf { it.exists() }?.copyTo(save)
+            saves.delete()
+            File(from, "backup-at-start.bin").takeIf { it.exists() }?.copyTo(saves)
         }
         dump?.copyTo(File(out, "state-at-start.bin"))
-        if (save.exists()) save.copyTo(File(out, "backup-at-start.bin"))
+        if (saves.exists()) saves.copyTo(File(out, "backup-at-start.bin"))
         val extra = JSONArray(info.optJSONArray("args")?.let { a -> (0 until a.length()).map { a.getString(it) } } ?: emptyList<String>())
         rebuilt?.second?.forEach { extra.put("--write").put(it) }
         val record = JSONObject()
@@ -66,6 +75,9 @@ object Sessions {
             .put("platform", "Android ${Build.VERSION.RELEASE} ${Build.SUPPORTED_ABIS.firstOrNull() ?: ""} ${Build.MANUFACTURER} ${Build.MODEL}")
         if (from != null) record.put("continues", from.name)
         if (rebuilt != null) record.put("rebuilds", rebuilt.first)
+        save?.let { record.put("save", it) }
+        if (branch != null) record.put("save", out.name).put("parent", branch.parent).put("starts_at", branch.line)
+            .put("resume", checkpoint?.optLong("resume") ?: 0)
         write(out, record)
         if (send) File(out, UNSENT).createNewFile()
         val resume = if (rebuilt != null) {
@@ -79,10 +91,11 @@ object Sessions {
         } ?: emptyList()
         val start = if (dump != null) listOf("--state-in", File(out, "state-at-start.bin").path) else emptyList()
         val args = listOf(
-            "--cue", cue.path, "--out", out.path, "--clock", clock, "--save", save.path,
+            "--cue", cue.path, "--out", out.path, "--clock", clock, "--save", saves.path,
             "--record-input", File(out, "input.txt").path, "--coverage", File(out, "coverage.txt").path,
             "--checkpoint", CHECKPOINT.toString(), "--log", File(out, "log.txt").path,
             "--state-out", File(out, DUMP).path, "--state-every", DUMP_EVERY.toString(),
+            "--after", File(out, "after.txt").path,
         ) + (info.optJSONObject("checkpoint")?.let { listOf("--progress", File(out, PROGRESS).path, "--progress-keep", it.getString("keep")) } ?: emptyList()) +
             start + resume + (0 until extra.length()).map { extra.getString(it) }
         return out to args
@@ -94,6 +107,10 @@ object Sessions {
      */
     private fun rebuild(checkpoint: JSONObject, session: File): Pair<Long, List<String>>? {
         val line = File(session, PROGRESS).takeIf { it.exists() }?.readLines()?.lastOrNull { it.isNotBlank() } ?: return null
+        return rebuild(checkpoint, line)
+    }
+
+    private fun rebuild(checkpoint: JSONObject, line: String): Pair<Long, List<String>>? {
         val fields = line.trim().split(" ")
         val kept = fields.drop(1).map { f -> f.chunked(2).map { it.toInt(16) } }
         val accept = checkpoint.getJSONArray("accept")
@@ -194,6 +211,10 @@ object Sessions {
             c.setRequestProperty("x-playtest-build", info.getString("build"))
             c.setRequestProperty("x-playtest-started", info.getString("started"))
             c.setRequestProperty("x-playtest-vblanks", vblanks(session).toString())
+            c.setRequestProperty("x-playtest-meta", Saves.meta(session).toString())
+            File(session, PROGRESS).takeIf { it.exists() }?.let { f ->
+                c.setRequestProperty("x-playtest-progress", f.readLines().filter { it.isNotBlank() }.joinToString(";"))
+            }
             if (ended) {
                 c.setRequestProperty("x-playtest-ended", "1")
                 c.setRequestProperty("x-playtest-exit", info.optString("exit"))

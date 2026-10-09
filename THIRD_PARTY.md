@@ -49,6 +49,17 @@ choice of public domain or MIT No Attribution, both at its end. Its assembly
 context switches are taken from Mike Pall's LuaCoco, under the MIT licence
 quoted beside them in the file.
 
+## stb_truetype (the menu's text) — MIT or public domain
+
+`runtime/third_party/stb/stb_truetype.h`: stb_truetype 1.26 by Sean Barrett, as released. Its
+licence is at the end of the file, a choice of MIT or the Unlicense (public domain).
+
+## Inter (the menu's font) — SIL Open Font License 1.1
+
+`runtime/third_party/inter/`: Inter 4.1's Regular and SemiBold by the Inter Project Authors
+(https://github.com/rsms/inter), cut down with fontTools' pyftsubset to ASCII and the few other
+characters the menu writes. The licence, which has no reserved font name, is `LICENSE.txt` there.
+
 ## MAME's SCSP (the envelope, the LFOs, FM, the DSP) — BSD-3-Clause
 
 `runtime/scsp.cpp` is saturn-recomp's own code, but its envelope times and key

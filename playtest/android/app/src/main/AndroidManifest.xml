@@ -26,6 +26,11 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity
+            android:name=".SavesActivity"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|density|keyboard|keyboardHidden|navigation" />
         <!-- A process of its own: SDL and the runtime keep their state in globals, so each play starts a new one.
              GameActivity takes Back as a key event, which predictive back would replace. -->
         <activity

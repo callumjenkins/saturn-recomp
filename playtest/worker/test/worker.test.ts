@@ -19,7 +19,7 @@ const invite = async (name: string) => {
 	return (await r.json<{ token: string }>()).token
 }
 
-const upload = (token: string, id: string, ended: boolean, body = 'PK zip bytes') =>
+const upload = (token: string, id: string, ended: boolean, body = 'PK zip bytes', extra: Record<string, string> = {}) =>
 	call(`/api/sessions/${id}`, {
 		method: 'PUT',
 		token,
@@ -31,6 +31,7 @@ const upload = (token: string, id: string, ended: boolean, body = 'PK zip bytes'
 			'x-playtest-started': '2026-10-07T10:00:00Z',
 			'x-playtest-vblanks': '36000',
 			...(ended ? { 'x-playtest-ended': '1', 'x-playtest-exit': 'FATAL call to 0607A1B0' } : {}),
+			...extra,
 		},
 	})
 
@@ -82,6 +83,16 @@ describe("a game's sessions", () => {
 		expect(await bytesAsText(await call(`/api/games/${PRODUCT}/sessions/session-e/bundle`))).toBe('PK session e')
 		expect((await call('/api/games/another-game/sessions/session-e/bundle')).status).toBe(404)
 		expect(await (await call('/api/games/another-game/sessions')).json()).toMatchObject({ sessions: [] })
+	})
+
+	it('carry the save file their launcher describes, and its progress lines', async () => {
+		const token = await invite('Mo')
+		const meta = JSON.stringify({ save: 'session-g', dump: 'latest' })
+		await upload(token, 'session-g', false, 'PK', { 'x-playtest-meta': meta, 'x-playtest-progress': '900 0001 03;1800 0002 03' })
+		await upload(token, 'session-g', true)              // an upload without them keeps the last
+		const listed = await (await call(`/api/games/${PRODUCT}/sessions`)).json<{ sessions: { id: string; meta: unknown; progress: string }[] }>()
+		expect(listed.sessions.find((s) => s.id === 'session-g')).toMatchObject({ meta: { save: 'session-g', dump: 'latest' }, progress: '900 0001 03\n1800 0002 03' })
+		expect((await upload(token, 'session-h', false, 'PK', { 'x-playtest-meta': 'not json' })).status).toBe(400)
 	})
 })
 

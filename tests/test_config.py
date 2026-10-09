@@ -71,6 +71,9 @@ accept = [[0x0001, 0x00FE], [0x0200, 0x0200]]
 presses = ["100:START", "110:"]
 writes = ["50:sj=hit", "60:sj+0x10", "60:lj&0F"]
 resume = 120
+fresh = [0x0000]
+show = [["Stage {}", "hit", "world-stage"], ["{} pts", "sj+0x10", "u16"], ["Speed +{}", "lj", "steps:E0:20?"],
+        ["{}", "lj", "bits:01=Kick,02=Glove?"], ["{} dino", "lj", "names:,,,,,,Pink?", "lj&04"]]
 """
 
 
@@ -85,3 +88,13 @@ def test_a_checkpoint_rebuilds_only_the_values_it_accepts(tmp_path):
     assert cp.rebuild("900 0000 ABCD 5A") is None
     assert cp.rebuild("900 00FF ABCD 5A") is None
     assert cp.rebuild("900 0200 ABCD 5A") is not None
+
+
+def test_a_checkpoint_shows_a_progress_line_in_words(tmp_path):
+    cp = load(tmp_path, TOML + CHECKPOINT).checkpoint
+    assert cp.fresh == [0]
+    assert cp.describe("900 0103 0AF0 E0") == ["Stage 2-4", "2,800 pts"]
+    assert cp.describe("900 0000 0001 03") == ["Stage 1-1", "1 pts", "Speed +1", "Kick, Glove"]
+    assert cp.describe("900 0000 0001 06") == ["Stage 1-1", "1 pts", "Speed +1", "Glove", "Pink dino"]
+    assert cp.describe("900 0000 0001 05") == ["Stage 1-1", "1 pts", "Speed +1", "Kick"]
+    assert cp.to_json()["show"][4] == ["{} dino", 2, "names:,,,,,,Pink?", [2, 4]]

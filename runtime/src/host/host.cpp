@@ -34,6 +34,7 @@
 #include "pad_slots.h"
 #include "settings.h"
 #include "touch_pad.h"
+#include "ui.h"
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <chrono>
@@ -101,6 +102,7 @@ bool host_open() {
         return false;
     }
     sat_note("SDL: drawing with %s", SDL_GetRendererName(g_ren));
+    ui_open(g_ren);
     // host_pace keeps real time; a present that waited for the display would stall the whole machine
     // whenever the compositor stops sending frames, as KWin does for a window that is out of sight
     SDL_SetRenderVSync(g_ren, 0);
@@ -370,10 +372,21 @@ static uint16_t touch_read() {
 
 // ---- the menu ---------------------------------------------------------------------------------
 // It pauses the game: virtual time stands still while it is open, and the host's clock is moved on
-// by as long as it was, so the run is the same run with or without it.
-enum MenuItem { M_RESUME, M_CONTROLS, M_SIZE, M_STYLE, M_MENU_BUTTON, M_QUIT, M_COUNT };
+// by as long as it was, so the run is the same run with or without it. A panel of two columns where
+// the screen is wide enough, the game's choices in one and the touch pad's in the other, each a row:
+// an action, a choice of a few, a slider, or a switch.
+enum MenuId { M_RESUME, M_SAVES, M_QUIT, M_PAD, M_SIZE, M_STYLE, M_MENU_BUTTON };
+enum class Control { Action, Choice, Slider, Switch };
+struct MenuRow { MenuId id; Control control; int column; SDL_FRect r; };
+struct MenuLayout { SDL_FRect panel; float u; float title_y; float section_y[2]; float column_x[2]; std::vector<MenuRow> rows; };
+
 static bool g_menu_open, g_quitting;
-static int g_menu_at;
+static int g_menu_at;                           // the focused row, by index into the layout's rows
+static SDL_FingerID g_slider_finger;            // the finger moving the size slider, or 0
+static const char* const kPadModes[] = {"auto", "on", "off"};
+static const char* const kPadModeNames[] = {"Auto", "On", "Off"};
+static const char* const kStyles[] = {"western", "japanese"};
+static const char* const kStyleNames[] = {"Western", "Japanese"};
 
 static void setting_change(const char* key, const char* value) {
     g_settings.set("touch", key, value);
@@ -384,88 +397,167 @@ static void setting_change(const char* key, const char* value) {
         sat_note("settings: cannot write %s", g_settings_path.c_str());
 }
 
-static std::string menu_label(int item) {
-    switch (item) {
-    case M_RESUME: return "Resume";
-    case M_CONTROLS: {
-        std::string m = g_settings.get("touch", "controls");
-        return "Touch controls: " + std::string(m == "on" ? "On" : m == "off" ? "Off" : "Auto");
-    }
-    case M_SIZE: return "Pad size: " + g_settings.get("touch", "size") + "%";
-    case M_STYLE: return g_settings.get("touch", "style") == "japanese" ? "Pad style: Japanese" : "Pad style: Western";
-    case M_MENU_BUTTON: return g_settings.flag("touch", "menu_button") ? "Menu button: On" : "Menu button: Off";
-    default: return "Quit";
-    }
+static int choice_count(MenuId id) { return id == M_PAD ? 3 : 2; }
+static const char* choice_name(MenuId id, int i) { return id == M_PAD ? kPadModeNames[i] : kStyleNames[i]; }
+
+static int choice_at(MenuId id) {
+    std::string v = g_settings.get("touch", id == M_PAD ? "controls" : "style");
+    for (int i = 0; i < choice_count(id); ++i)
+        if (v == (id == M_PAD ? kPadModes[i] : kStyles[i])) return i;
+    return 0;
 }
 
-static void menu_close() {
-    g_menu_open = false;
-    for (auto& h : g_held_over) h = 0xFFFF;
+static void choose(MenuId id, int i) {
+    i = (i + choice_count(id)) % choice_count(id);
+    setting_change(id == M_PAD ? "controls" : "style", id == M_PAD ? kPadModes[i] : kStyles[i]);
 }
 
-// The pad's size, a tenth at a time, from half to twice its default; at either end Enter goes round.
-static void pad_size_step(int dir, bool wrap) {
-    int size = g_settings.number("touch", "size") + 10 * dir;
-    if (size > 200) size = wrap ? 50 : 200;
-    if (size < 50) size = wrap ? 200 : 50;
+// The pad's size in percent, from half to twice its default, a tenth at a time.
+static void pad_size_set(int size) {
+    size = std::clamp((size + 5) / 10 * 10, 50, 200);
     setting_change("size", std::to_string(size).c_str());
 }
 
-static void menu_choose(int item) {
-    g_menu_at = item;
-    switch (item) {
+static const char* menu_label(MenuId id) {
+    switch (id) {
+    case M_RESUME: return "Resume";
+    case M_SAVES: return "Save files";
+    case M_QUIT: return "Quit";
+    case M_PAD: return "Show pad";
+    case M_SIZE: return "Size";
+    case M_STYLE: return "Style";
+    default: return "Menu button";
+    }
+}
+
+static MenuLayout menu_layout() {
+    const float pad = 20, title = 56, section = 30, row = 52, gap = 6, column = 340, between = 24;
+    std::vector<std::pair<MenuId, Control>> game = {{M_RESUME, Control::Action}};
+    if (!g_cfg.after.empty()) game.push_back({M_SAVES, Control::Action});
+    game.push_back({M_QUIT, Control::Action});
+    const std::vector<std::pair<MenuId, Control>> touch = {
+        {M_PAD, Control::Choice}, {M_SIZE, Control::Slider}, {M_STYLE, Control::Choice}, {M_MENU_BUTTON, Control::Switch}};
+    float tall = (float)std::max(game.size(), touch.size());
+    // two columns, or one, whichever is drawn bigger; never bigger than density-independent pixels make it
+    float dp = display_scale(), w = 0.94f * g_out_w, h = 0.94f * g_out_h;
+    float w2 = 2 * pad + 2 * column + between, h2 = 2 * pad + title + section + tall * (row + gap);
+    float w1 = 2 * pad + column, h1 = 2 * pad + title + 2 * section + (float)(game.size() + touch.size()) * (row + gap) + gap;
+    float k2 = std::min({dp, w / w2, h / h2}), k1 = std::min({dp, w / w1, h / h1});
+    bool two = k2 >= k1;
+    float u = two ? k2 : k1;
+    MenuLayout l;
+    l.u = u;
+    float pw = (two ? w2 : w1) * u, ph = (two ? h2 : h1) * u;
+    l.panel = {(g_out_w - pw) / 2, (g_out_h - ph) / 2, pw, ph};
+    l.title_y = l.panel.y + (pad + title / 2) * u;
+    float top = l.panel.y + (pad + title) * u;
+    for (int c = 0; c < 2; ++c) {
+        auto& items = c == 0 ? game : touch;
+        float x = l.panel.x + (pad + (two ? c * (column + between) : 0)) * u;
+        float y = two || c == 0 ? top : top + (section + (float)game.size() * (row + gap) + gap) * u;
+        l.column_x[c] = x;
+        l.section_y[c] = y + section / 2 * u;
+        y += section * u;
+        for (auto& [id, control] : items) {
+            l.rows.push_back({id, control, c, {x, y, column * u, row * u}});
+            y += (row + gap) * u;
+        }
+    }
+    return l;
+}
+
+// The parts of a row's control: a choice's segments, or a slider's minus, track and plus.
+static SDL_FRect control_area(const MenuLayout& l, const MenuRow& r) {
+    float w = r.control == Control::Switch ? 52 * l.u : 0.58f * r.r.w;
+    return {r.r.x + r.r.w - w - 10 * l.u, r.r.y + 9 * l.u, w, r.r.h - 18 * l.u};
+}
+
+static SDL_FRect segment(const MenuLayout& l, const MenuRow& r, int i) {
+    SDL_FRect a = control_area(l, r);
+    float w = a.w / choice_count(r.id);
+    return {a.x + i * w, a.y, w, a.h};
+}
+
+static SDL_FRect slider_track(const MenuLayout& l, const MenuRow& r) {
+    SDL_FRect a = control_area(l, r);
+    return {a.x + a.h + 10 * l.u, a.y, a.w - 2 * (a.h + 10 * l.u), a.h};
+}
+
+static bool inside(const SDL_FRect& r, float x, float y) { return x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h; }
+
+static void menu_close() {
+    g_menu_open = false;
+    g_slider_finger = 0;
+    for (auto& h : g_held_over) h = 0xFFFF;
+}
+
+static void menu_quit(bool to_saves) {
+    if (to_saves) {
+        if (FILE* f = std::fopen(g_cfg.after.c_str(), "w")) {
+            std::fputs("saves\n", f);
+            std::fclose(f);
+        }
+    }
+    menu_close();
+    g_quitting = true;
+    state_stop(to_saves ? "Save files was chosen in the menu" : "Quit was chosen in the menu");
+}
+
+// Enter, A, or a tap on the row's label: an action acts, and the rest move on a step.
+static void menu_activate(MenuId id) {
+    switch (id) {
     case M_RESUME: menu_close(); break;
-    case M_CONTROLS: {
-        std::string m = g_settings.get("touch", "controls");
-        setting_change("controls", m == "auto" ? "on" : m == "on" ? "off" : "auto");
+    case M_SAVES: menu_quit(true); break;
+    case M_QUIT: menu_quit(false); break;
+    case M_PAD: case M_STYLE: choose(id, choice_at(id) + 1); break;
+    case M_SIZE: {
+        int size = g_settings.number("touch", "size") + 10;
+        pad_size_set(size > 200 ? 50 : size);
         break;
     }
-    case M_SIZE: pad_size_step(1, true); break;
-    case M_STYLE:
-        setting_change("style", g_settings.get("touch", "style") == "japanese" ? "western" : "japanese");
-        break;
     case M_MENU_BUTTON: setting_change("menu_button", g_settings.flag("touch", "menu_button") ? "false" : "true"); break;
-    case M_QUIT:
-        menu_close();
-        g_quitting = true;
-        state_stop("Quit was chosen in the menu");
-        break;
     }
 }
 
-// The menu's rows, centred, each tall enough for a thumb.
-static SDL_FRect menu_row(int item) {
-    float u = (float)std::min(g_out_w, g_out_h), h = std::max(40.0f, std::min(0.11f * u, 52 * display_scale()));
-    float w = std::min(0.9f * g_out_w, 8.5f * h);
-    float top = g_out_h / 2.0f - ((float)M_COUNT * h * 1.2f) / 2 + h * 0.5f;
-    return {(g_out_w - w) / 2, top + item * h * 1.2f, w, h};
+// Left and right: a step along a choice or the slider, a switch set off or on.
+static void menu_adjust(MenuId id, int dir) {
+    if (id == M_PAD || id == M_STYLE) choose(id, choice_at(id) + dir);
+    else if (id == M_SIZE) pad_size_set(g_settings.number("touch", "size") + 10 * dir);
+    else if (id == M_MENU_BUTTON) setting_change("menu_button", dir > 0 ? "true" : "false");
 }
 
-static int menu_row_at(float x, float y);
-
-// A tap on the size row's left half makes the pad smaller, and on its right half bigger.
-static void menu_tap(float x, float y) {
-    int i = menu_row_at(x, y);
-    if (i < 0) return;
-    SDL_FRect r = menu_row(i);
-    if (i == M_SIZE) {
-        g_menu_at = i;
-        pad_size_step(x < r.x + r.w / 2 ? -1 : 1, false);
-    } else menu_choose(i);
+static void slide(const MenuLayout& l, const MenuRow& r, float x) {
+    SDL_FRect t = slider_track(l, r);
+    pad_size_set(50 + (int)std::lround(std::clamp((x - t.x) / t.w, 0.0f, 1.0f) * 150));
 }
 
-static int menu_row_at(float x, float y) {
-    for (int i = 0; i < M_COUNT; ++i) {
-        SDL_FRect r = menu_row(i);
-        if (x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h) return i;
+// A tap or click at (x, y), from `finger` (0 for the mouse).
+static void menu_tap(float x, float y, SDL_FingerID finger) {
+    MenuLayout l = menu_layout();
+    for (size_t i = 0; i < l.rows.size(); ++i) {
+        const MenuRow& r = l.rows[i];
+        if (!inside(r.r, x, y)) continue;
+        g_menu_at = (int)i;
+        SDL_FRect a = control_area(l, r);
+        if (r.control == Control::Choice && inside(a, x, y)) {
+            for (int k = 0; k < choice_count(r.id); ++k)
+                if (inside(segment(l, r, k), x, y)) choose(r.id, k);
+        } else if (r.control == Control::Slider && inside(a, x, y)) {
+            if (x < a.x + a.h + 5 * l.u) menu_adjust(r.id, -1);
+            else if (x > a.x + a.w - a.h - 5 * l.u) menu_adjust(r.id, 1);
+            else {
+                slide(l, r, x);
+                g_slider_finger = finger;
+            }
+        } else menu_activate(r.id);
+        return;
     }
-    return -1;
 }
 
 static void menu_open() {
     if (g_menu_open || g_quitting) return;
     g_menu_open = true;
-    g_menu_at = M_RESUME;
+    g_menu_at = 0;
     g_fingers.clear();
 }
 
@@ -476,11 +568,19 @@ static bool escape_is_a_button() {
 }
 
 // ---- the events -------------------------------------------------------------------------------
-static void on_menu_key(int dy, bool choose, bool back, int dx) {
+// Up and down go through the rows, and left and right adjust one; on an action, they go to the other column.
+static void on_menu_key(int dy, bool activate, bool back, int dx) {
+    MenuLayout l = menu_layout();
+    int n = (int)l.rows.size();
+    g_menu_at = std::clamp(g_menu_at, 0, n - 1);
+    const MenuRow& r = l.rows[g_menu_at];
     if (back) menu_close();
-    else if (dx && g_menu_at == M_SIZE) pad_size_step(dx, false);
-    else if (choose) menu_choose(g_menu_at);
-    else g_menu_at = (g_menu_at + dy + M_COUNT) % M_COUNT;
+    else if (activate) menu_activate(r.id);
+    else if (dx && r.control != Control::Action) menu_adjust(r.id, dx);
+    else if (dx) {
+        for (int i = 0; i < n; ++i)
+            if (l.rows[i].column != r.column) { g_menu_at = i; break; }
+    } else if (dy) g_menu_at = (g_menu_at + dy + n) % n;
 }
 
 static void on_event(const SDL_Event& e) {
@@ -528,7 +628,7 @@ static void on_event(const SDL_Event& e) {
         if (g_menu_open && e.button.which != SDL_TOUCH_MOUSEID) {
             float x = e.button.x, y = e.button.y;
             SDL_RenderCoordinatesFromWindow(g_ren, e.button.x, e.button.y, &x, &y);
-            menu_tap(x, y);
+            menu_tap(x, y, 0);
         }
         break;
     case SDL_EVENT_FINGER_DOWN:
@@ -536,8 +636,12 @@ static void on_event(const SDL_Event& e) {
         g_touchscreen = true;
         float x = e.tfinger.x * g_out_w, y = e.tfinger.y * g_out_h;
         if (g_menu_open) {
-            if (e.type == SDL_EVENT_FINGER_DOWN)
-                menu_tap(x, y);
+            if (e.type == SDL_EVENT_FINGER_DOWN) menu_tap(x, y, e.tfinger.fingerID);
+            else if (g_slider_finger && e.tfinger.fingerID == g_slider_finger) {
+                MenuLayout l = menu_layout();
+                for (auto& r : l.rows)
+                    if (r.id == M_SIZE) slide(l, r, x);
+            }
             break;
         }
         TouchLayout l = pad_layout();
@@ -557,6 +661,7 @@ static void on_event(const SDL_Event& e) {
     case SDL_EVENT_FINGER_UP:
     case SDL_EVENT_FINGER_CANCELED:
         g_fingers.erase(e.tfinger.fingerID);
+        if (e.tfinger.fingerID == g_slider_finger) g_slider_finger = 0;
         break;
     }
 }
@@ -572,37 +677,9 @@ static void events() {
 // ---- drawing ----------------------------------------------------------------------------------
 static SDL_FColor rgba(float r, float g, float b, float a) { return {r, g, b, a}; }
 
-// A rectangle with rounded corners, as a fan of triangles from its centre; a circle is one whose
-// corners' radius is half its side.
-static void fill_rounded(SDL_FRect r, float rad, SDL_FColor c) {
-    const int kArc = 8;
-    rad = std::min(rad, std::min(r.w, r.h) / 2);
-    std::vector<SDL_Vertex> v;
-    v.push_back({{r.x + r.w / 2, r.y + r.h / 2}, c, {}});
-    const float cx[] = {r.x + r.w - rad, r.x + rad, r.x + rad, r.x + r.w - rad};
-    const float cy[] = {r.y + r.h - rad, r.y + r.h - rad, r.y + rad, r.y + rad};
-    for (int q = 0; q < 4; ++q)
-        for (int i = 0; i <= kArc; ++i) {
-            float a = (q + (float)i / kArc) * SDL_PI_F / 2;
-            v.push_back({{cx[q] + rad * std::cos(a), cy[q] + rad * std::sin(a)}, c, {}});
-        }
-    std::vector<int> idx;
-    for (int i = 1; i + 1 < (int)v.size(); ++i) idx.insert(idx.end(), {0, i, i + 1});
-    idx.insert(idx.end(), {0, (int)v.size() - 1, 1});
-    SDL_RenderGeometry(g_ren, nullptr, v.data(), (int)v.size(), idx.data(), (int)idx.size());
-}
-
-static void fill_circle(float x, float y, float r, SDL_FColor c) { fill_rounded({x - r, y - r, 2 * r, 2 * r}, r, c); }
-
-// Text centred on (x, y), `size` pixels tall, in SDL's own 8x8 font.
-static void draw_text(float x, float y, float size, const std::string& s, SDL_FColor c) {
-    float k = size / SDL_DEBUG_TEXT_FONT_CHARACTER_SIZE;
-    SDL_SetRenderScale(g_ren, k, k);
-    SDL_SetRenderDrawColorFloat(g_ren, c.r, c.g, c.b, c.a);
-    float w = (float)s.size() * SDL_DEBUG_TEXT_FONT_CHARACTER_SIZE * k;
-    SDL_RenderDebugText(g_ren, (x - w / 2) / k, (y - size / 2) / k, s.c_str());
-    SDL_SetRenderScale(g_ren, 1, 1);
-}
+static void fill_rounded(SDL_FRect r, float rad, SDL_FColor c) { ui_fill_rounded(r, rad, c); }
+static void fill_circle(float x, float y, float r, SDL_FColor c) { ui_fill_circle(x, y, r, c); }
+static void draw_text(float x, float y, float size, const std::string& s, SDL_FColor c) { ui_text(x, y, size, s, c, true); }
 
 // The pads' colours: the black pad sold in the West, or the white Japanese one.
 struct ButtonLook { SDL_FColor fill, label; };
@@ -672,18 +749,65 @@ static void draw_menu_button() {
 }
 
 static void draw_menu() {
+    const SDL_FColor panel = rgba(0.09f, 0.1f, 0.13f, 0.97f), row = rgba(0.15f, 0.16f, 0.2f, 1), well = rgba(0.1f, 0.11f, 0.14f, 1);
+    const SDL_FColor accent = rgba(0.27f, 0.47f, 0.95f, 1), ring = rgba(0.6f, 0.74f, 1, 1), text = rgba(0.95f, 0.96f, 0.98f, 1);
+    const SDL_FColor muted = rgba(0.6f, 0.63f, 0.69f, 1), knob = rgba(0.97f, 0.97f, 0.99f, 1), off = rgba(0.3f, 0.31f, 0.36f, 1);
     SDL_FRect all = {0, 0, (float)g_out_w, (float)g_out_h};
-    SDL_SetRenderDrawColorFloat(g_ren, 0, 0, 0, 0.6f);
+    SDL_SetRenderDrawColorFloat(g_ren, 0, 0, 0, 0.55f);
     SDL_RenderFillRect(g_ren, &all);
-    SDL_FRect first = menu_row(0);
-    draw_text(g_out_w / 2.0f, first.y - 0.8f * first.h, 0.45f * first.h, "Paused", rgba(1, 1, 1, 0.9f));
-    for (int i = 0; i < M_COUNT; ++i) {
-        SDL_FRect r = menu_row(i);
-        fill_rounded(r, 0.2f * r.h, i == g_menu_at ? rgba(0.25f, 0.45f, 0.85f, 0.95f) : rgba(0.16f, 0.16f, 0.19f, 0.95f));
-        draw_text(r.x + r.w / 2, r.y + r.h / 2, 0.36f * r.h, menu_label(i), rgba(1, 1, 1, 1));
-        if (i == M_SIZE) {
-            draw_text(r.x + 0.6f * r.h, r.y + r.h / 2, 0.5f * r.h, "-", rgba(1, 1, 1, 0.8f));
-            draw_text(r.x + r.w - 0.6f * r.h, r.y + r.h / 2, 0.5f * r.h, "+", rgba(1, 1, 1, 0.8f));
+    MenuLayout l = menu_layout();
+    float u = l.u;
+    ui_fill_rounded(l.panel, 22 * u, panel);
+    ui_text(l.panel.x + 20 * u, l.title_y, 26 * u, "Paused", text, true, UiAlign::Left);
+    ui_text(l.panel.x + l.panel.w - 20 * u, l.title_y, 13 * u, "Back to resume", muted, false, UiAlign::Right);
+    for (int c = 0; c < 2; ++c)
+        ui_text(l.column_x[c], l.section_y[c], 12 * u, c == 0 ? "GAME" : "TOUCH CONTROLS", muted, true, UiAlign::Left);
+    g_menu_at = std::clamp(g_menu_at, 0, (int)l.rows.size() - 1);
+    for (size_t i = 0; i < l.rows.size(); ++i) {
+        const MenuRow& r = l.rows[i];
+        float cy = r.r.y + r.r.h / 2;
+        if ((int)i == g_menu_at) ui_fill_rounded({r.r.x - 2 * u, r.r.y - 2 * u, r.r.w + 4 * u, r.r.h + 4 * u}, 14 * u, ring);
+        ui_fill_rounded(r.r, 12 * u, r.id == M_RESUME ? accent : row);
+        SDL_FColor label = r.id == M_QUIT ? rgba(1, 0.52f, 0.5f, 1) : text;
+        ui_text(r.r.x + 16 * u, cy, 16 * u, menu_label(r.id), label, true, UiAlign::Left);
+        SDL_FRect a = control_area(l, r);
+        switch (r.control) {
+        case Control::Action:
+            if (r.id == M_SAVES) ui_text(r.r.x + r.r.w - 16 * u, cy, 24 * u, "›", muted, false, UiAlign::Right);
+            break;
+        case Control::Choice: {
+            ui_fill_rounded(a, a.h / 2, well);
+            int at = choice_at(r.id);
+            for (int k = 0; k < choice_count(r.id); ++k) {
+                SDL_FRect s = segment(l, r, k);
+                if (k == at) ui_fill_rounded({s.x + 3 * u, s.y + 3 * u, s.w - 6 * u, s.h - 6 * u}, (s.h - 6 * u) / 2, accent);
+                ui_text(s.x + s.w / 2, cy, 14 * u, choice_name(r.id, k), k == at ? text : muted, k == at);
+            }
+            break;
+        }
+        case Control::Slider: {
+            int size = g_settings.number("touch", "size");
+            float label_w = ui_text_width(16 * u, menu_label(r.id), true);
+            ui_text(r.r.x + 16 * u + label_w + 10 * u, cy, 14 * u, std::to_string(size) + "%", muted, false, UiAlign::Left);
+            float b = a.h / 2;
+            ui_fill_circle(a.x + b, cy, b, well);
+            ui_fill_circle(a.x + a.w - b, cy, b, well);
+            ui_text(a.x + b, cy, 18 * u, "−", text, true);
+            ui_text(a.x + a.w - b, cy, 18 * u, "+", text, true);
+            SDL_FRect t = slider_track(l, r);
+            float f = (size - 50) / 150.0f, x = t.x + f * t.w;
+            ui_fill_rounded({t.x, cy - 3 * u, t.w, 6 * u}, 3 * u, off);
+            ui_fill_rounded({t.x, cy - 3 * u, x - t.x, 6 * u}, 3 * u, accent);
+            ui_fill_circle(x, cy, 10 * u, knob);
+            break;
+        }
+        case Control::Switch: {
+            bool on = g_settings.flag("touch", "menu_button");
+            SDL_FRect p = {a.x, cy - 14 * u, a.w, 28 * u};
+            ui_fill_rounded(p, 14 * u, on ? accent : off);
+            ui_fill_circle(on ? p.x + p.w - 14 * u : p.x + 14 * u, cy, 11 * u, knob);
+            break;
+        }
         }
     }
 }
@@ -708,8 +832,9 @@ static void draw() {
         if (menu_button_shown()) draw_menu_button();
     }
     if (g_quitting) {
-        float u = (float)std::min(g_out_w, g_out_h);
-        draw_text(g_out_w / 2.0f, 0.12f * u, 0.05f * u, "Saving...", rgba(1, 1, 1, 0.9f));
+        float u = display_scale();
+        ui_fill_rounded({g_out_w / 2.0f - 70 * u, 24 * u, 140 * u, 40 * u}, 20 * u, rgba(0.09f, 0.1f, 0.13f, 0.9f));
+        ui_text(g_out_w / 2.0f, 44 * u, 17 * u, "Saving…", rgba(1, 1, 1, 0.95f), true);
     }
     SDL_SetRenderDrawBlendMode(g_ren, SDL_BLENDMODE_NONE);
     HostCall in("SDL_RenderPresent");

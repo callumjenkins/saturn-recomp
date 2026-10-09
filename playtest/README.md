@@ -94,11 +94,29 @@ new session from an earlier one's last dump, kept as its `state-at-start.bin` an
 without a dump continues from its clock and saves, all its presses played again. `replay` starts
 from `state-at-start.bin` when a session has one.
 
-Continue also lists every tester's sessions from the Worker, picked by the tester's name: the
-Worker's `GET /api/games/PRODUCT/sessions` and `.../sessions/ID/bundle` answer without a token,
-since a session holds only presses, saves and dumps. The app downloads the chosen one into its own
-sessions, marked ended and never sent from there, and continues it as one played on the phone.
-Uploads carry the latest `state.bin`; a session sent before they did goes on from its starting dump.
+### Save files
+
+"Save files…" in the launcher, and in the game's menu (the runtime's `--after`), shows a game's
+playthroughs, built from its sessions by `Saves.kt`. A save file starts at a session's first
+stage start, or at a line whose first range is one of the checkpoint's `fresh` values, a new game.
+Sessions that continue it carry it on, so it spans sessions, phones and testers. Each of its stage
+starts is a restore point, shown in words by the checkpoint's `show`, and the screen labels each
+way back in:
+
+- Exact: where the save file's last session ended, from its latest dump (`state.bin`), with at
+  most a minute of presses played again.
+- Replay: where it ended, from the dump the session started from, or from power-on, with every
+  press since played again.
+- Rebuilt: a stage start, from power-on through the checkpoint's presses and writes. Going back to
+  one begins a new save file, its record's `parent` naming the point it branched from and its
+  `starts_at` the line, and leaves the old one as it was.
+
+The list holds every tester's save files, picked by the tester's name. The Worker answers
+`GET /api/games/PRODUCT/sessions` and `.../sessions/ID/bundle` without a token, since a session
+holds only presses, saves and dumps. Each upload also sends the session's record (its save file,
+parent and dump) and its progress lines as headers, so the list needs no downloads; a session is
+downloaded only to go on from where it ended. Downloaded sessions are marked ended and never sent
+from the phone that downloaded them.
 
 A game's `[checkpoint]` in its game.toml names memory the runs note in the session's `progress.txt`
 whenever the first range changes (the runtime's `--progress`), such as a stage number with what the
@@ -106,7 +124,8 @@ player carries into the stage. When the runtime refuses a dump, as a build with 
 does, the launcher drops that attempt and continues again from the last line it can rebuild: the
 checkpoint's presses from power-on, its writes filled in from the line, and the controller taken
 over at its `resume`. The writes go in the new session's arguments, so `replay` plays it the same
-way. Without such a line, the presses are played again from the start. `app/build.gradle.kts` lists the properties the workflow builds it with.
+way. Without such a line, the presses are played again from the start. The same rebuild starts a
+save file's earlier stage start. `app/build.gradle.kts` lists the properties the workflow builds it with.
 
 `DiscTest` checks the Kotlin disc check against a real disc. It runs only when `SATURN_CUE` and
 `SATURN_DISC_JSON` name the disc and the game's `disc.json`, with `gradle testDebugUnitTest` and the

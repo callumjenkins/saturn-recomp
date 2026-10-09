@@ -40,6 +40,16 @@
     presses = ["1900:START", "1910:"]   # from power-on to where the writes go in
     writes = ["4250:stage=stage_2", "4600:score", "4600:objects+0x5E&08"]   # AT:TARGET[=KEPT][&MASK]
     resume = 4610                   # the player's pads take over here
+    fresh = [0x0000]                # the first's values a new game starts at: a save file starts there
+    show = [["Stage {}", "stage_2", "world-stage"], ["{} pts", "score", "u32"],
+            ["Speed +{}", "objects+0x3A", "steps:E0:20?"], ["{}", "objects+0x70", "bits:01=Kick,02=Glove"],
+            ["{} dino", "dino_colours", "names:,Pink,Blue", "objects+0x5E&08"]]
+
+A restore point shows each of `show` it can, as TEMPLATE, KEPT, FORMAT and optionally a condition, a
+kept range whose first byte must have a bit of the mask. The formats read the range's first bytes,
+big-endian: u8, u16, u32; world-stage, a byte each, numbered from 1; steps:BASE:STEP, how many STEPs
+the byte is above BASE, wrapping at 256; names:A,B,... the byte's name, from 0; bits:MASK=NAME,...
+the names of the first byte's bits. A trailing "?" leaves out a 0 (or no name).
 
 An address is a number, a name from [symbols], or either plus an offset ("objects+0x5E"). Paths are
 relative to the file.
@@ -96,6 +106,8 @@ class Checkpoint:
     presses: list[str]
     writes: list[tuple[int, int, int, bytes | None]]   # (VBlank, address, index into keep, mask)
     resume: int
+    fresh: list[int] = field(default_factory=list)
+    show: list[tuple[str, int, str, tuple[int, int] | None]] = field(default_factory=list)   # (template, kept, format, (kept, mask))
 
     @property
     def keep_arg(self):
@@ -114,9 +126,44 @@ class Checkpoint:
             out.append(f"{at}:{addr:08X}={data.hex().upper()}")
         return out
 
+    def describe(self, line):
+        """What a --progress line shows of the game, by `show`: a phrase each, as the launcher shows them."""
+        kept = [bytes.fromhex(f) for f in line.split()[1:]]
+        if len(kept) != len(self.keep):
+            return []
+        out = []
+        for template, k, fmt, cond in self.show:
+            if cond and not kept[cond[0]][0] & cond[1]:
+                continue
+            value = show_value(fmt.rstrip("?"), kept[k])
+            if fmt.endswith("?") and value in ("", "0"):
+                continue
+            out.append(template.replace("{}", value))
+        return out
+
     def to_json(self):
         return {"keep": self.keep_arg, "accept": [list(a) for a in self.accept], "presses": ",".join(self.presses), "resume": self.resume,
-                "writes": [[at, f"{addr:08X}", k, mask.hex() if mask else None] for at, addr, k, mask in self.writes]}
+                "writes": [[at, f"{addr:08X}", k, mask.hex() if mask else None] for at, addr, k, mask in self.writes],
+                "fresh": self.fresh, "show": [[t, k, f, list(c) if c else None] for t, k, f, c in self.show]}
+
+
+def show_value(fmt, data):
+    """A kept range as one of [checkpoint] show's formats gives it; the launcher's Kotlin does the same."""
+    kind, _, arg = fmt.partition(":")
+    if kind in ("u8", "u16", "u32"):
+        n = int(kind[1:]) // 8
+        return f"{int.from_bytes(data[:n], 'big'):,}"
+    if kind == "world-stage":
+        return f"{data[0] + 1}-{data[1] + 1}"
+    if kind == "steps":
+        base, step = (int(x, 16) for x in arg.split(":"))
+        return str(((data[0] - base) & 0xFF) // step)
+    if kind == "names":
+        names = arg.split(",")
+        return names[data[0]] if data[0] < len(names) else ""
+    if kind == "bits":
+        return ", ".join(name for bit, name in (b.split("=", 1) for b in arg.split(",")) if data[0] & int(bit, 16))
+    raise SystemExit(f"[checkpoint] show: no format {fmt}")
 
 
 def _checkpoint(c, symbols):
@@ -135,7 +182,20 @@ def _checkpoint(c, symbols):
         if mask is not None and len(mask) != keep[k][1]:
             raise SystemExit(f"[checkpoint]: the write {w} has a mask of another length than {kept}")
         writes.append((int(at), _addr(target, symbols), k, mask))
-    return Checkpoint(keep, [tuple(a) for a in c["accept"]], list(c["presses"]), writes, c["resume"])
+    def kept(name, why):
+        if name not in names:
+            raise SystemExit(f"[checkpoint]: {why} names {name}, which keep does not")
+        return names.index(name)
+    show = []
+    for s in c.get("show", []):
+        template, name, fmt, *cond = s
+        show_value(fmt.rstrip("?"), bytes(4))                # a format it doesn't know stops here
+        when = None
+        if cond:
+            what, _, mask = cond[0].partition("&")
+            when = (kept(what, f"show {template}"), int(mask or "FF", 16))
+        show.append((template, kept(name, f"show {template}"), fmt, when))
+    return Checkpoint(keep, [tuple(a) for a in c["accept"]], list(c["presses"]), writes, c["resume"], list(c.get("fresh", [])), show)
 
 
 @dataclass

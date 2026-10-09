@@ -22,6 +22,8 @@ export type Session = {
 }
 
 const BUNDLE_LIMIT = 64 * 1024 * 1024
+const META_LIMIT = 4096
+const PROGRESS_LIMIT = 16384
 
 /** A playing session not heard from for this long is ready for review: its launcher was killed with it. */
 const STALE_MINUTES = 30
@@ -62,13 +64,13 @@ export const mySessions = async (env: Env, tester: Tester) => {
  */
 export const gameSessions = async (env: Env, product: string) => {
 	const { results } = await env.DB.prepare(
-		`SELECT s.id, t.name AS tester, s.build, s.started_at, s.updated_at, s.ended_at, s.exit, s.vblanks, s.status
+		`SELECT s.id, t.name AS tester, s.build, s.started_at, s.updated_at, s.ended_at, s.exit, s.vblanks, s.status, s.meta, s.progress
 		 FROM sessions s JOIN testers t ON t.id = s.tester_id
 		 WHERE s.product = ? AND s.vblanks > 0 ORDER BY s.started_at DESC LIMIT 500`,
 	)
 		.bind(product)
-		.all()
-	return json({ sessions: results })
+		.all<{ meta: string | null; progress: string | null }>()
+	return json({ sessions: results.map((s) => ({ ...s, meta: s.meta ? JSON.parse(s.meta) : null })) })
 }
 
 /** The session's last upload, if it is one of `product`'s when that is given. */
@@ -109,6 +111,17 @@ export const uploadSession = async (env: Env, request: Request, tester: Tester, 
 	const exit = request.headers.get('x-playtest-exit')?.slice(0, 200) ?? null
 	const vblanks = Number(request.headers.get('x-playtest-vblanks') ?? 0)
 	if (!Number.isSafeInteger(vblanks) || vblanks < 0) throw new HttpError(400, 'X-Playtest-VBlanks must be a count')
+	const meta = request.headers.get('x-playtest-meta')
+	if (meta !== null) {
+		if (meta.length > META_LIMIT) throw new HttpError(400, `X-Playtest-Meta is over ${META_LIMIT} characters`)
+		try {
+			if (typeof JSON.parse(meta) !== 'object') throw new Error()
+		} catch {
+			throw new HttpError(400, 'X-Playtest-Meta must be a JSON object')
+		}
+	}
+	// Progress lines, ';' between them, as a header can't hold a newline
+	const progress = request.headers.get('x-playtest-progress')?.slice(0, PROGRESS_LIMIT).replaceAll(';', '\n') ?? null
 
 	const known = await env.DB.prepare('SELECT tester_id, product, status FROM sessions WHERE id = ?')
 		.bind(id)
@@ -119,14 +132,15 @@ export const uploadSession = async (env: Env, request: Request, tester: Tester, 
 	const { body, length } = requireLength(request, BUNDLE_LIMIT)
 	await env.BUCKET.put(bundleKey(product, id), body, { httpMetadata: { contentType: 'application/zip' } })
 	await env.DB.prepare(
-		`INSERT INTO sessions (id, tester_id, product, build, started_at, updated_at, ended_at, exit, vblanks, uploads, bytes, status)
+		`INSERT INTO sessions (id, tester_id, product, build, started_at, updated_at, ended_at, exit, vblanks, uploads, bytes, status, meta, progress)
 		 VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'), CASE WHEN ?6 THEN datetime('now') END, ?7, ?8, 1, ?9,
-		         CASE WHEN ?6 THEN 'ended' ELSE 'playing' END)
+		         CASE WHEN ?6 THEN 'ended' ELSE 'playing' END, ?10, ?11)
 		 ON CONFLICT (id) DO UPDATE SET updated_at = datetime('now'), exit = ?7, vblanks = ?8, uploads = uploads + 1, bytes = ?9,
 		   ended_at = CASE WHEN ?6 THEN datetime('now') ELSE ended_at END,
-		   status = CASE WHEN ?6 THEN 'ended' ELSE status END`,
+		   status = CASE WHEN ?6 THEN 'ended' ELSE status END,
+		   meta = coalesce(?10, meta), progress = coalesce(?11, progress)`,
 	)
-		.bind(id, tester.id, product, build, started, ended ? 1 : 0, exit, vblanks, length)
+		.bind(id, tester.id, product, build, started, ended ? 1 : 0, exit, vblanks, length, meta, progress)
 		.run()
 	return json({ id, status: ended ? 'ended' : 'playing', page: new URL('/', request.url).toString() })
 }

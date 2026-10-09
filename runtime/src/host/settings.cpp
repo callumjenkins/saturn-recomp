@@ -1,6 +1,8 @@
 // saturn-recomp runtime — the player's settings (settings.h).
 #include "settings.h"
+#include <algorithm>
 #include <cstdio>
+#include <iterator>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -58,7 +60,18 @@ r = righttrigger
 stick = 50
 ; a trigger presses its button once pulled this far, in percent
 trigger = 50
+
+; A Saturn pad on the screen for player 1, and the menu's button (the menu also changes these).
+[touch]
+; auto shows it on a touchscreen while no gamepad is connected; on, or off
+controls = auto
+; western: the black pad; japanese: the white pad, its A B C green, yellow and blue
+style = western
 )";
+
+// The values a word may take, by key.
+static const struct { const char* key; const char* values[3]; } kChoices[] = {
+    {"controls", {"auto", "on", "off"}}, {"style", {"western", "japanese"}}};
 
 // The range a number may take, by key.
 static const struct { const char* key; int lo, hi; } kRanges[] = {
@@ -113,6 +126,12 @@ void Settings::read(const std::string& text, std::vector<std::string>& problems)
         if (def->second == "true" || def->second == "false") {
             if (value != "true" && value != "false") { problems.push_back(at + key + " is true or false"); return; }
         }
+        for (auto& c : kChoices)
+            if (key == c.key && std::none_of(std::begin(c.values), std::end(c.values),
+                                             [&](const char* v) { return v && value == v; })) {
+                problems.push_back(at + "no " + key + " " + value);
+                return;
+            }
         for (auto& r : kRanges)
             if (key == r.key) {
                 char* end = nullptr;
@@ -138,6 +157,10 @@ std::string Settings::get(const std::string& section, const std::string& key) co
     return v == s->second.end() ? "" : v->second;
 }
 
+void Settings::set(const std::string& section, const std::string& key, const std::string& value) {
+    values_[section][key] = value;
+}
+
 bool Settings::flag(const std::string& section, const std::string& key) const { return get(section, key) == "true"; }
 int Settings::number(const std::string& section, const std::string& key) const { return std::atoi(get(section, key).c_str()); }
 bool Settings::has_section(const std::string& section) const { return values_.count(section) != 0; }
@@ -154,6 +177,31 @@ std::string settings_load(const std::string& path, bool& found) {
     std::stringstream ss;
     if (f) ss << f.rdbuf();
     return ss.str();
+}
+
+std::string settings_with(const std::string& text, const std::string& section, const std::string& key,
+                          const std::string& value) {
+    std::string out, line;
+    std::istringstream in(text);
+    bool done = false, in_section = false;
+    auto add = [&] { out += key + " = " + value + "\n"; done = true; };
+    while (std::getline(in, line)) {
+        std::string t = trim(line);
+        if (!t.empty() && t[0] == '[') {
+            if (in_section && !done) add();
+            in_section = trim(t.substr(1, t.find(']') - 1)) == section;
+        } else if (in_section && !done && !t.empty() && t[0] != ';' && t[0] != '#' &&
+                   trim(t.substr(0, t.find('='))) == key) {
+            add();
+            continue;
+        }
+        out += line + "\n";
+    }
+    if (!done) {
+        if (!in_section) out += "\n[" + section + "]\n";
+        add();
+    }
+    return out;
 }
 
 bool settings_store(const std::string& path, const std::string& text) {

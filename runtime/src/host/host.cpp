@@ -16,8 +16,10 @@
 //             player 1 beside the keyboard: d-pad or left stick, Start, south A,
 //             east B, right shoulder C, west X, north Y, left shoulder Z, triggers L and R
 // unless the settings (settings.h) bind them otherwise.
-// F12 saves the picture (out/shot-VBLANK.png); F11 or Alt+Enter switches
-// fullscreen. Closing the window, or Android's Back, ends the run. Until --resume's VBlank the run
+// The touchscreen has a Saturn pad of its own for player 1 (touch_pad.h). Android's Back, Escape, a
+// gamepad's Back or Guide, or the touch pad's menu button opens a menu that pauses the game, sets
+// the touch pad, and quits. F12 saves the picture (out/shot-VBLANK.png); F11 or Alt+Enter switches
+// fullscreen. Closing the window, or Quit in the menu, ends the run. Until --resume's VBlank the run
 // goes as fast as it can, without sound, every 30th picture shown with a bar for how far it has got.
 //
 // Sound (sound.cpp) comes as it is made, in virtual time, into an SDL audio
@@ -31,10 +33,12 @@
 #include "host.h"
 #include "pad_slots.h"
 #include "settings.h"
+#include "touch_pad.h"
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <map>
 
 static SDL_Window* g_win;
 static PadSlots g_slots(kHostSlots);
@@ -52,15 +56,18 @@ uint16_t host_pad(int slot) { return g_buttons[slot]; }
 bool host_pad_connected(int slot) { return g_win && (slot == 0 || g_slots.taken(slot)); }
 
 static void virtual_open();
+static bool g_touchscreen;                      // a touchscreen is there, or a finger has been seen
 
 // ---- the settings (settings.h) -----------------------------------------------------------------
 static Settings g_settings;
+static std::string g_settings_path;
 static void bind_keyboard();
 
 static void load_settings() {
     std::string path = g_cfg.settings;
     if (path == "-") path.clear();
     else if (path.empty() && !sat_data_dir().empty()) path = sat_data_dir() + "/saturn-recomp/settings.ini";
+    g_settings_path = path;
     if (!path.empty()) {
         bool found = false;
         std::string text = settings_load(path, found);
@@ -98,6 +105,16 @@ bool host_open() {
     // whenever the compositor stops sending frames, as KWin does for a window that is out of sight
     SDL_SetRenderVSync(g_ren, 0);
     if (!g_cfg.virtual_input.empty()) virtual_open();
+    // Android stops SDL's event pump inside SDL_PollEvent while the app is in the background, before
+    // the events reach the run, so a watch sees them as they are sent
+    SDL_AddEventWatch([](void*, SDL_Event* e) {
+        if (e->type == SDL_EVENT_DID_ENTER_BACKGROUND) ++g_host_paused;
+        if (e->type == SDL_EVENT_WILL_ENTER_FOREGROUND) --g_host_paused;
+        return true;
+    }, nullptr);
+    int touch_devices = 0;
+    SDL_free(SDL_GetTouchDevices(&touch_devices));
+    g_touchscreen = touch_devices > 0;
     g_base = Clock::now();
     g_paced = !g_cfg.realtime;
     return true;
@@ -144,11 +161,6 @@ void host_audio_report() {
 }
 
 // ---- the pad ----------------------------------------------------------------------------------
-enum : uint16_t {
-    B_RIGHT = 0x8000, B_LEFT = 0x4000, B_DOWN = 0x2000, B_UP = 0x1000, B_START = 0x0800, B_A = 0x0400,
-    B_C = 0x0200, B_B = 0x0100, B_R = 0x0080, B_X = 0x0040, B_Y = 0x0020, B_Z = 0x0010, B_L = 0x0008,
-};
-
 // The Saturn's buttons by the settings' names for them.
 static const struct { const char* name; uint16_t bit; } kSaturn[] = {
     {"up", B_UP}, {"down", B_DOWN}, {"left", B_LEFT}, {"right", B_RIGHT}, {"start", B_START}, {"a", B_A},
@@ -224,8 +236,12 @@ static uint16_t gamepad_buttons(SDL_Gamepad* pad, const PadMap& m) {
     return b;
 }
 
+static uint16_t g_held_over[kHostSlots];        // held as the menu closed: ignored until let go
+static uint16_t touch_read();
+
 static void read_pads() {
     uint16_t b[kHostSlots] = {};
+    b[0] |= touch_read();
     const bool* k = SDL_GetKeyboardState(nullptr);
     bool alt = SDL_GetModState() & SDL_KMOD_ALT;
     for (auto& [key, bit] : g_keys)
@@ -237,7 +253,8 @@ static void read_pads() {
     for (int s = 0; s < kHostSlots; ++s) {
         if ((b[s] & (B_LEFT | B_RIGHT)) == (B_LEFT | B_RIGHT)) b[s] &= (uint16_t)~(B_LEFT | B_RIGHT);   // not on a real pad
         if ((b[s] & (B_UP | B_DOWN)) == (B_UP | B_DOWN)) b[s] &= (uint16_t)~(B_UP | B_DOWN);
-        g_buttons[s] = b[s];
+        g_held_over[s] &= b[s];
+        g_buttons[s] = b[s] & (uint16_t)~g_held_over[s];
     }
 }
 
@@ -318,29 +335,350 @@ static void virtual_press() {
     }
 }
 
+// ---- the touchscreen's pad (touch_pad.h) ------------------------------------------------------
+static std::map<SDL_FingerID, TouchFinger> g_fingers;
+static uint16_t g_touch_held;
+
+static int g_out_w, g_out_h;                    // the window's size in pixels, as last drawn
+
+static bool touch_shown() {
+    std::string mode = g_settings.get("touch", "controls");
+    if (mode == "on") return true;
+    if (mode == "off") return false;
+    return g_touchscreen && g_pads.empty();
+}
+
+static uint16_t touch_read() {
+    if (!touch_shown() || g_fingers.empty()) return g_touch_held = 0;
+    std::vector<TouchFinger> fingers;
+    for (auto& [id, f] : g_fingers) fingers.push_back(f);
+    return g_touch_held = touch_buttons(touch_layout(g_out_w, g_out_h), fingers);
+}
+
+// ---- the menu ---------------------------------------------------------------------------------
+// It pauses the game: virtual time stands still while it is open, and the host's clock is moved on
+// by as long as it was, so the run is the same run with or without it.
+enum MenuItem { M_RESUME, M_CONTROLS, M_STYLE, M_QUIT, M_COUNT };
+static bool g_menu_open, g_quitting;
+static int g_menu_at;
+
+static void setting_change(const char* key, const char* value) {
+    g_settings.set("touch", key, value);
+    if (g_settings_path.empty()) return;
+    bool found = false;
+    std::string text = settings_load(g_settings_path, found);
+    if (!settings_store(g_settings_path, settings_with(found ? text : Settings::default_text(), "touch", key, value)))
+        sat_note("settings: cannot write %s", g_settings_path.c_str());
+}
+
+static std::string menu_label(int item) {
+    switch (item) {
+    case M_RESUME: return "Resume";
+    case M_CONTROLS: {
+        std::string m = g_settings.get("touch", "controls");
+        return "Touch controls: " + std::string(m == "on" ? "On" : m == "off" ? "Off" : "Auto");
+    }
+    case M_STYLE: return g_settings.get("touch", "style") == "japanese" ? "Pad style: Japanese" : "Pad style: Western";
+    default: return "Quit";
+    }
+}
+
+static void menu_close() {
+    g_menu_open = false;
+    for (auto& h : g_held_over) h = 0xFFFF;
+}
+
+static void menu_choose(int item) {
+    g_menu_at = item;
+    switch (item) {
+    case M_RESUME: menu_close(); break;
+    case M_CONTROLS: {
+        std::string m = g_settings.get("touch", "controls");
+        setting_change("controls", m == "auto" ? "on" : m == "on" ? "off" : "auto");
+        break;
+    }
+    case M_STYLE:
+        setting_change("style", g_settings.get("touch", "style") == "japanese" ? "western" : "japanese");
+        break;
+    case M_QUIT:
+        menu_close();
+        g_quitting = true;
+        state_stop("Quit was chosen in the menu");
+        break;
+    }
+}
+
+// The menu's rows, centred, each tall enough for a thumb.
+static SDL_FRect menu_row(int item) {
+    float u = (float)std::min(g_out_w, g_out_h), h = std::max(48.0f, 0.13f * u), w = std::min(0.9f * g_out_w, 7.5f * h);
+    float top = g_out_h / 2.0f - ((float)M_COUNT * h * 1.2f) / 2 + h * 0.5f;
+    return {(g_out_w - w) / 2, top + item * h * 1.2f, w, h};
+}
+
+static int menu_row_at(float x, float y) {
+    for (int i = 0; i < M_COUNT; ++i) {
+        SDL_FRect r = menu_row(i);
+        if (x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h) return i;
+    }
+    return -1;
+}
+
+static void menu_open() {
+    if (g_menu_open || g_quitting) return;
+    g_menu_open = true;
+    g_menu_at = M_RESUME;
+    g_fingers.clear();
+}
+
+static bool escape_is_a_button() {
+    for (auto& [key, bit] : g_keys)
+        if (key == SDL_SCANCODE_ESCAPE) return true;
+    return false;
+}
+
+// ---- the events -------------------------------------------------------------------------------
+static void on_menu_key(int dy, bool choose, bool back) {
+    if (back) menu_close();
+    else if (choose) menu_choose(g_menu_at);
+    else g_menu_at = (g_menu_at + dy + M_COUNT) % M_COUNT;
+}
+
+static void on_event(const SDL_Event& e) {
+    switch (e.type) {
+    case SDL_EVENT_QUIT:
+        menu_close();
+        state_stop("the window was closed");
+        break;
+    case SDL_EVENT_GAMEPAD_ADDED:
+        pad_added(e.gdevice.which);
+        break;
+    case SDL_EVENT_GAMEPAD_REMOVED:
+        pad_removed(e.gdevice.which);
+        break;
+    case SDL_EVENT_KEY_DOWN: {
+        SDL_Scancode k = e.key.scancode;
+        if (k == SDL_SCANCODE_F12 && !e.key.repeat) save_shot();
+        if ((k == SDL_SCANCODE_F11 || (k == SDL_SCANCODE_RETURN && (e.key.mod & SDL_KMOD_ALT))) && !e.key.repeat) {
+            SDL_SetWindowFullscreen(g_win, !(SDL_GetWindowFlags(g_win) & SDL_WINDOW_FULLSCREEN));
+            break;
+        }
+        bool back = k == SDL_SCANCODE_AC_BACK || (k == SDL_SCANCODE_ESCAPE && !escape_is_a_button());
+        if (!g_menu_open) {
+            if (back && !e.key.repeat) menu_open();
+            break;
+        }
+        on_menu_key(k == SDL_SCANCODE_UP ? -1 : k == SDL_SCANCODE_DOWN ? 1 : 0,
+                    !e.key.repeat && (k == SDL_SCANCODE_RETURN || k == SDL_SCANCODE_SPACE), back && !e.key.repeat);
+        break;
+    }
+    case SDL_EVENT_GAMEPAD_BUTTON_DOWN: {
+        int b = e.gbutton.button;
+        if (!g_menu_open) {
+            if (b == SDL_GAMEPAD_BUTTON_BACK || b == SDL_GAMEPAD_BUTTON_GUIDE) menu_open();
+            break;
+        }
+        on_menu_key(b == SDL_GAMEPAD_BUTTON_DPAD_UP ? -1 : b == SDL_GAMEPAD_BUTTON_DPAD_DOWN ? 1 : 0,
+                    b == SDL_GAMEPAD_BUTTON_SOUTH || b == SDL_GAMEPAD_BUTTON_START,
+                    b == SDL_GAMEPAD_BUTTON_EAST || b == SDL_GAMEPAD_BUTTON_BACK || b == SDL_GAMEPAD_BUTTON_GUIDE);
+        break;
+    }
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+        if (g_menu_open && e.button.which != SDL_TOUCH_MOUSEID) {
+            float x = e.button.x, y = e.button.y;
+            SDL_RenderCoordinatesFromWindow(g_ren, e.button.x, e.button.y, &x, &y);
+            if (int i = menu_row_at(x, y); i >= 0) menu_choose(i);
+        }
+        break;
+    case SDL_EVENT_FINGER_DOWN:
+    case SDL_EVENT_FINGER_MOTION: {
+        g_touchscreen = true;
+        float x = e.tfinger.x * g_out_w, y = e.tfinger.y * g_out_h;
+        if (g_menu_open) {
+            if (e.type == SDL_EVENT_FINGER_DOWN)
+                if (int i = menu_row_at(x, y); i >= 0) menu_choose(i);
+            break;
+        }
+        if (!touch_shown()) break;
+        TouchLayout l = touch_layout(g_out_w, g_out_h);
+        if (e.type == SDL_EVENT_FINGER_DOWN) {
+            if (touch_on_menu(l, x, y)) { menu_open(); break; }
+            g_fingers[e.tfinger.fingerID] = {x, y, touch_on_dpad(l, x, y)};
+        } else if (auto f = g_fingers.find(e.tfinger.fingerID); f != g_fingers.end()) {
+            f->second.x = x;
+            f->second.y = y;
+        }
+        break;
+    }
+    case SDL_EVENT_FINGER_UP:
+    case SDL_EVENT_FINGER_CANCELED:
+        g_fingers.erase(e.tfinger.fingerID);
+        break;
+    }
+}
+
 static void events() {
     if (!g_virtual.empty()) virtual_press();
     SDL_Event e;
     HostCall in("SDL_PollEvent");
-    while (SDL_PollEvent(&e)) {
-        switch (e.type) {
-        case SDL_EVENT_QUIT:
-            state_stop("the window was closed");
-        case SDL_EVENT_GAMEPAD_ADDED:
-            pad_added(e.gdevice.which);
-            break;
-        case SDL_EVENT_GAMEPAD_REMOVED:
-            pad_removed(e.gdevice.which);
-            break;
-        case SDL_EVENT_KEY_DOWN:
-            if (e.key.repeat) break;
-            if (e.key.scancode == SDL_SCANCODE_AC_BACK) state_stop("Back was pressed");     // Android's Back
-            if (e.key.scancode == SDL_SCANCODE_F12) save_shot();
-            if (e.key.scancode == SDL_SCANCODE_F11 || (e.key.scancode == SDL_SCANCODE_RETURN && (e.key.mod & SDL_KMOD_ALT)))
-                SDL_SetWindowFullscreen(g_win, !(SDL_GetWindowFlags(g_win) & SDL_WINDOW_FULLSCREEN));
-            break;
+    while (SDL_PollEvent(&e)) on_event(e);
+    read_pads();
+}
+
+// ---- drawing ----------------------------------------------------------------------------------
+static SDL_FColor rgba(float r, float g, float b, float a) { return {r, g, b, a}; }
+
+// A rectangle with rounded corners, as a fan of triangles from its centre; a circle is one whose
+// corners' radius is half its side.
+static void fill_rounded(SDL_FRect r, float rad, SDL_FColor c) {
+    const int kArc = 8;
+    rad = std::min(rad, std::min(r.w, r.h) / 2);
+    std::vector<SDL_Vertex> v;
+    v.push_back({{r.x + r.w / 2, r.y + r.h / 2}, c, {}});
+    const float cx[] = {r.x + r.w - rad, r.x + rad, r.x + rad, r.x + r.w - rad};
+    const float cy[] = {r.y + r.h - rad, r.y + r.h - rad, r.y + rad, r.y + rad};
+    for (int q = 0; q < 4; ++q)
+        for (int i = 0; i <= kArc; ++i) {
+            float a = (q + (float)i / kArc) * SDL_PI_F / 2;
+            v.push_back({{cx[q] + rad * std::cos(a), cy[q] + rad * std::sin(a)}, c, {}});
+        }
+    std::vector<int> idx;
+    for (int i = 1; i + 1 < (int)v.size(); ++i) idx.insert(idx.end(), {0, i, i + 1});
+    idx.insert(idx.end(), {0, (int)v.size() - 1, 1});
+    SDL_RenderGeometry(g_ren, nullptr, v.data(), (int)v.size(), idx.data(), (int)idx.size());
+}
+
+static void fill_circle(float x, float y, float r, SDL_FColor c) { fill_rounded({x - r, y - r, 2 * r, 2 * r}, r, c); }
+
+// Text centred on (x, y), `size` pixels tall, in SDL's own 8x8 font.
+static void draw_text(float x, float y, float size, const std::string& s, SDL_FColor c) {
+    float k = size / SDL_DEBUG_TEXT_FONT_CHARACTER_SIZE;
+    SDL_SetRenderScale(g_ren, k, k);
+    SDL_SetRenderDrawColorFloat(g_ren, c.r, c.g, c.b, c.a);
+    float w = (float)s.size() * SDL_DEBUG_TEXT_FONT_CHARACTER_SIZE * k;
+    SDL_RenderDebugText(g_ren, (x - w / 2) / k, (y - size / 2) / k, s.c_str());
+    SDL_SetRenderScale(g_ren, 1, 1);
+}
+
+// The pads' colours: the black pad sold in the West, or the white Japanese one.
+struct ButtonLook { SDL_FColor fill, label; };
+static ButtonLook look_of(uint16_t bit, bool japanese) {
+    const SDL_FColor light = rgba(0.92f, 0.92f, 0.94f, 1), dark = rgba(0.22f, 0.22f, 0.25f, 1);
+    if (!japanese) {
+        if (bit & (B_L | B_R)) return {rgba(0.36f, 0.36f, 0.39f, 1), light};
+        if (bit == B_START) return {rgba(0.27f, 0.27f, 0.3f, 1), light};
+        return {rgba(0.13f, 0.13f, 0.15f, 1), light};
+    }
+    switch (bit) {
+    case B_A: return {rgba(0.2f, 0.66f, 0.45f, 1), light};
+    case B_B: return {rgba(0.93f, 0.77f, 0.18f, 1), dark};
+    case B_C: return {rgba(0.2f, 0.45f, 0.82f, 1), light};
+    case B_X: case B_Y: case B_Z: return {rgba(0.8f, 0.8f, 0.83f, 1), dark};
+    default: return {rgba(0.9f, 0.42f, 0.63f, 1), light};     // START, L and R
+    }
+}
+
+static SDL_FColor faded(SDL_FColor c, bool held) {
+    if (held) return {std::min(1.0f, c.r * 1.3f + 0.15f), std::min(1.0f, c.g * 1.3f + 0.15f), std::min(1.0f, c.b * 1.3f + 0.15f), 0.85f};
+    return {c.r, c.g, c.b, 0.55f};
+}
+
+static void draw_touch_pad() {
+    bool jp = g_settings.get("touch", "style") == "japanese";
+    TouchLayout l = touch_layout(g_out_w, g_out_h);
+    const SDL_FColor shade = rgba(0, 0, 0, 0.3f);
+
+    // the d-pad: a cross, each arm lit while held
+    float r = l.dpad_r, arm = 0.62f * r;
+    SDL_FColor pad = jp ? rgba(0.42f, 0.42f, 0.45f, 1) : rgba(0.13f, 0.13f, 0.15f, 1);
+    fill_circle(l.dpad_x, l.dpad_y, 1.08f * r, shade);
+    fill_rounded({l.dpad_x - r, l.dpad_y - arm / 2, 2 * r, arm}, 0.15f * arm, faded(pad, false));
+    fill_rounded({l.dpad_x - arm / 2, l.dpad_y - r, arm, 2 * r}, 0.15f * arm, faded(pad, false));
+    const struct { uint16_t bit; float dx, dy; } arms[] = {{B_UP, 0, -1}, {B_DOWN, 0, 1}, {B_LEFT, -1, 0}, {B_RIGHT, 1, 0}};
+    for (auto& a : arms) {
+        float cx = l.dpad_x + a.dx * 0.62f * r, cy = l.dpad_y + a.dy * 0.62f * r;
+        if (g_touch_held & a.bit) fill_rounded({cx - arm / 2, cy - arm / 2, arm, arm}, 0.15f * arm, faded(pad, true));
+        fill_circle(cx + a.dx * 0.12f * r, cy + a.dy * 0.12f * r, 0.09f * r, rgba(1, 1, 1, 0.35f));
+    }
+
+    for (auto& b : l.buttons) {
+        ButtonLook k = look_of(b.bit, jp);
+        bool held = g_touch_held & b.bit;
+        SDL_FColor label = {k.label.r, k.label.g, k.label.b, held ? 1.0f : 0.8f};
+        if (b.shape == TouchButton::Round) {
+            fill_circle(b.x, b.y, 1.1f * b.w, shade);
+            fill_circle(b.x, b.y, b.w, faded(k.fill, held));
+            draw_text(b.x, b.y, 0.8f * b.w, b.label, label);
+        } else {
+            float rad = b.shape == TouchButton::Pill ? b.h / 2 : 0.3f * b.h;
+            fill_rounded({b.x - b.w / 2 - 4, b.y - b.h / 2 - 4, b.w + 8, b.h + 8}, rad + 4, shade);
+            fill_rounded({b.x - b.w / 2, b.y - b.h / 2, b.w, b.h}, rad, faded(k.fill, held));
+            draw_text(b.x, b.y, (b.shape == TouchButton::Pill ? 0.42f : 0.5f) * b.h, b.label, label);
         }
     }
+
+    // the menu's button: three bars
+    fill_circle(l.menu_x, l.menu_y, l.menu_r, rgba(0.13f, 0.13f, 0.15f, 0.55f));
+    for (int i = -1; i <= 1; ++i)
+        fill_rounded({l.menu_x - 0.5f * l.menu_r, l.menu_y + i * 0.32f * l.menu_r - 0.07f * l.menu_r, l.menu_r, 0.14f * l.menu_r},
+                     0.07f * l.menu_r, rgba(1, 1, 1, 0.8f));
+}
+
+static void draw_menu() {
+    SDL_FRect all = {0, 0, (float)g_out_w, (float)g_out_h};
+    SDL_SetRenderDrawColorFloat(g_ren, 0, 0, 0, 0.6f);
+    SDL_RenderFillRect(g_ren, &all);
+    SDL_FRect first = menu_row(0);
+    draw_text(g_out_w / 2.0f, first.y - 0.8f * first.h, 0.45f * first.h, "Paused", rgba(1, 1, 1, 0.9f));
+    for (int i = 0; i < M_COUNT; ++i) {
+        SDL_FRect r = menu_row(i);
+        fill_rounded(r, 0.2f * r.h, i == g_menu_at ? rgba(0.25f, 0.45f, 0.85f, 0.95f) : rgba(0.16f, 0.16f, 0.19f, 0.95f));
+        draw_text(r.x + r.w / 2, r.y + r.h / 2, 0.36f * r.h, menu_label(i), rgba(1, 1, 1, 1));
+    }
+}
+
+static SDL_FRect g_dst;                         // where the picture goes
+
+// The last picture and what goes over it.
+static void draw() {
+    SDL_GetCurrentRenderOutputSize(g_ren, &g_out_w, &g_out_h);
+    SDL_SetRenderDrawColor(g_ren, 0, 0, 0, 255);
+    SDL_RenderClear(g_ren);
+    if (g_tex) SDL_RenderTexture(g_ren, g_tex, nullptr, &g_dst);
+    if (sat_resuming()) {                       // how far --resume has got
+        SDL_FRect bar = {g_dst.x, g_dst.y + g_dst.h - 8, g_dst.w * sat_vblanks() / g_cfg.resume, 8};
+        SDL_SetRenderDrawColor(g_ren, 255, 255, 255, 255);
+        SDL_RenderFillRect(g_ren, &bar);
+    }
+    SDL_SetRenderDrawBlendMode(g_ren, SDL_BLENDMODE_BLEND);
+    if (g_menu_open) draw_menu();
+    else if (touch_shown()) draw_touch_pad();
+    if (g_quitting) {
+        float u = (float)std::min(g_out_w, g_out_h);
+        draw_text(g_out_w / 2.0f, 0.12f * u, 0.05f * u, "Saving...", rgba(1, 1, 1, 0.9f));
+    }
+    SDL_SetRenderDrawBlendMode(g_ren, SDL_BLENDMODE_NONE);
+    HostCall in("SDL_RenderPresent");
+    SDL_RenderPresent(g_ren);
+}
+
+// The menu, open until it is closed; the game waits.
+static void menu_loop() {
+    if (g_audio) SDL_PauseAudioStreamDevice(g_audio);
+    ++g_host_paused;
+    Clock::time_point t = Clock::now();
+    while (g_menu_open) {
+        SDL_Event e;
+        {
+            HostCall in("SDL_PollEvent");
+            while (SDL_PollEvent(&e)) on_event(e);
+        }
+        draw();
+        HostCall in("SDL_Delay");
+        SDL_Delay(16);
+    }
+    g_base += Clock::now() - t;
+    --g_host_paused;
+    if (g_audio) SDL_ResumeAudioStreamDevice(g_audio);
     read_pads();
 }
 
@@ -348,6 +686,7 @@ static void present(const Frame& f) {
     g_last = &f;
     if (SDL_GetWindowFlags(g_win) & (SDL_WINDOW_MINIMIZED | SDL_WINDOW_OCCLUDED | SDL_WINDOW_HIDDEN)) {
         events();
+        if (g_menu_open) menu_loop();
         return;
     }
     if (f.w != g_tex_w || f.h != g_tex_h) {
@@ -361,26 +700,16 @@ static void present(const Frame& f) {
     SDL_UpdateTexture(g_tex, nullptr, f.px.data(), f.w * 4);
     int ww = 0, wh = 0;
     SDL_GetCurrentRenderOutputSize(g_ren, &ww, &wh);
-    SDL_SetRenderDrawColor(g_ren, 0, 0, 0, 255);
-    SDL_RenderClear(g_ren);
     // the TV's 4:3 screen, as large as the window allows, centred; a PAL TV
     // shows 256 lines, and a 224-line picture has a border above and below
     int sw = ww, sh = ww * 3 / 4;
     if (sh > wh) { sh = wh; sw = wh * 4 / 3; }
     int tv_lines = bios_pal() ? std::max(256, f.h) : f.h;
     int ph = sh * f.h / tv_lines;
-    SDL_FRect dst = {(float)((ww - sw) / 2), (float)((wh - ph) / 2), (float)sw, (float)ph};
-    SDL_RenderTexture(g_ren, g_tex, nullptr, &dst);
-    if (sat_resuming()) {                       // how far --resume has got
-        SDL_FRect bar = {dst.x, dst.y + dst.h - 8, dst.w * sat_vblanks() / g_cfg.resume, 8};
-        SDL_SetRenderDrawColor(g_ren, 255, 255, 255, 255);
-        SDL_RenderFillRect(g_ren, &bar);
-    }
-    {
-        HostCall in("SDL_RenderPresent");
-        SDL_RenderPresent(g_ren);
-    }
+    g_dst = {(float)((ww - sw) / 2), (float)((wh - ph) / 2), (float)sw, (float)ph};
+    draw();
     events();
+    if (g_menu_open) menu_loop();
 }
 
 void host_present(const Frame& f) {

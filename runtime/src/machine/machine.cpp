@@ -342,6 +342,7 @@ static void slave_main() {
 
 // ---- the stall report ---------------------------------------------------------------------------
 std::atomic<const char*> g_host_call{""};
+std::atomic<int> g_host_paused;
 static std::atomic<bool> g_run_over;           // the run has stopped: what follows (an encoder finishing) is no stall
 
 // Watches a run nothing else steps (no agent) from its own thread: when no VBlank has come for five
@@ -355,6 +356,10 @@ static void watch_for_stalls() {
     for (;;) {
         std::this_thread::sleep_for(milliseconds(250));
         if (g_run_over) return;
+        if (g_host_paused > 0) {
+            since = steady_clock::now();
+            continue;
+        }
         uint64_t now = sat_vblanks();
         double still = duration<double>(steady_clock::now() - since).count();
         if (now != seen) {

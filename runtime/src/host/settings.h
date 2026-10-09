@@ -19,6 +19,7 @@ public:
     // The defaults as a file, every key explained, for a player to edit.
     static const char* default_text();
 
+    void set(const std::string& section, const std::string& key, const std::string& value);
     std::string get(const std::string& section, const std::string& key) const;
     bool flag(const std::string& section, const std::string& key) const;   // true or false
     int number(const std::string& section, const std::string& key) const;
@@ -37,4 +38,8 @@ private:
 // The file's text, or "" when it cannot be read; written whole through a temporary file and a
 // rename, so a crash leaves the old file or the new one, never half of one.
 std::string settings_load(const std::string& path, bool& found);
+// The file's text with one setting changed in place, or added to its section, which is added at the
+// end if the file lacks it; the rest of the text, its comments included, stays as it was.
+std::string settings_with(const std::string& text, const std::string& section, const std::string& key,
+                          const std::string& value);
 bool settings_store(const std::string& path, const std::string& text);

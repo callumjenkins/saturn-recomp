@@ -21,12 +21,15 @@ On Android
 
 Install the .apk from the release. Android asks you to allow installs from your browser or file
 manager the first time. You need a phone with a 64-bit ARM chip, which nearly every phone from the
-last few years has, and a controller: Bluetooth or USB, as there are no on-screen buttons yet.
+last few years has. A Bluetooth or USB controller is best, but the screen has a Saturn pad of its
+own whenever no controller is connected.
 
 "Choose files" copies your disc into the app, so pick every file it is made of at once (the .cue
 and all its .bin files), or a single .iso, .bin or .zip. "From a URL" downloads it. Either way it
-takes about 600 MB on the phone. Press the phone's Back twice to quit the game and send the
-session. A controller's buttons never quit it.
+takes about 600 MB on the phone. The phone's Back, the button at the top of the screen, or a
+controller's Back or Select button pauses the game and opens a menu. From there you can turn the
+on-screen pad on or off, switch it between the black Western pad and the white Japanese one, and
+Quit, which saves and sends the session.
 
 If a game ends before you meant it to, "Continue a session" picks it up where it stopped. The app
 saves the whole game every minute and when you quit, so it starts from there and plays the last

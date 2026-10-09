@@ -64,3 +64,27 @@ TEST(settings_are_written_whole_and_read_back) {
     CHECK_EQ(found, false);
     fs::remove_all(dir);
 }
+
+TEST(the_touch_settings_take_only_their_words) {
+    Settings s;
+    std::vector<std::string> problems;
+    s.read("[touch]\ncontrols = on\nstyle = purple\n", problems);
+    CHECK_EQ(problems.size(), 1);
+    CHECK_EQ(s.get("touch", "controls") == "on", true);
+    CHECK_EQ(s.get("touch", "style") == "western", true);
+}
+
+TEST(one_setting_changes_in_place_and_the_comments_stay) {
+    std::string text = "; mine\n[display]\nscale = 2\n[touch]\n; a note\ncontrols = auto\n[audio]\nvolume = 50\n";
+    CHECK_EQ(settings_with(text, "touch", "controls", "off") ==
+                 "; mine\n[display]\nscale = 2\n[touch]\n; a note\ncontrols = off\n[audio]\nvolume = 50\n", true);
+    CHECK_EQ(settings_with(text, "touch", "style", "japanese") ==
+                 "; mine\n[display]\nscale = 2\n[touch]\n; a note\ncontrols = auto\nstyle = japanese\n[audio]\nvolume = 50\n", true);
+    CHECK_EQ(settings_with("[display]\nscale = 2\n", "touch", "style", "japanese") ==
+                 "[display]\nscale = 2\n\n[touch]\nstyle = japanese\n", true);
+    Settings s;
+    std::vector<std::string> problems;
+    s.read(settings_with(Settings::default_text(), "touch", "controls", "on"), problems);
+    CHECK_EQ(problems.size(), 0);
+    CHECK_EQ(s.get("touch", "controls") == "on", true);
+}

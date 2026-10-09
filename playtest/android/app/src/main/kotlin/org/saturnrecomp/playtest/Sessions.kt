@@ -80,14 +80,22 @@ object Sessions {
             .put("resume", checkpoint?.optLong("resume") ?: 0)
         write(out, record)
         if (send) File(out, UNSENT).createNewFile()
+        // what the window says while it catches up: the stage a rebuild gets to, or where a session ended
+        val stage = (branch?.line ?: from?.let { File(it, PROGRESS) }?.takeIf { it.exists() }?.readLines()?.lastOrNull { it.isNotBlank() })
+            ?.let { Saves.describe(checkpoint, it).firstOrNull() }
+        val label = when {
+            branch != null -> "Going back to ${stage ?: "that stage"}"
+            rebuilt != null -> "Rebuilding the start of ${stage ?: "the stage you were on"}"
+            else -> "Catching up to where you left off"
+        }
         val resume = if (rebuilt != null) {
             val presses = File(out, "resume.txt")
             presses.writeText(info.getJSONObject("checkpoint").getString("presses"))
-            listOf("--input", "@${presses.path}", "--resume", info.getJSONObject("checkpoint").getLong("resume").toString())
+            listOf("--input", "@${presses.path}", "--resume", info.getJSONObject("checkpoint").getLong("resume").toString(), "--resume-label", label)
         } else from?.let { File(it, "input.txt") }?.takeIf { it.exists() && it.length() > 0 }?.let {
             val presses = File(out, "resume.txt")
             it.copyTo(presses)
-            listOf("--input", "@${presses.path}", "--resume", vblanks(from).toString())
+            listOf("--input", "@${presses.path}", "--resume", vblanks(from).toString(), "--resume-label", label)
         } ?: emptyList()
         val start = if (dump != null) listOf("--state-in", File(out, "state-at-start.bin").path) else emptyList()
         val args = listOf(
@@ -112,9 +120,8 @@ object Sessions {
 
     private fun rebuild(checkpoint: JSONObject, line: String): Pair<Long, List<String>>? {
         val fields = line.trim().split(" ")
-        val kept = fields.drop(1).map { f -> f.chunked(2).map { it.toInt(16) } }
+        val kept = Saves.kept(checkpoint, line) ?: return null
         val accept = checkpoint.getJSONArray("accept")
-        if (kept.size != checkpoint.getString("keep").split(",").size) return null
         val first = kept[0].fold(0L) { v, b -> v * 256 + b }
         if ((0 until accept.length()).none { accept.getJSONArray(it).let { r -> first in r.getLong(0)..r.getLong(1) } }) return null
         val writes = checkpoint.getJSONArray("writes")
@@ -204,7 +211,8 @@ object Sessions {
             c.connectTimeout = 30_000
             c.readTimeout = 60_000
             c.setFixedLengthStreamingMode(body.size)
-            c.setRequestProperty("authorization", "Bearer $token")
+            if (token.startsWith("tester:")) c.setRequestProperty("x-playtest-tester", token.removePrefix("tester:"))
+            else c.setRequestProperty("authorization", "Bearer $token")
             c.setRequestProperty("content-type", "application/zip")
             c.setRequestProperty("user-agent", USER_AGENT)
             c.setRequestProperty("x-playtest-product", info.getString("product"))
@@ -271,6 +279,18 @@ object Sessions {
         write(part, record.put("tester", entry.optString("tester")))
         if (!part.renameTo(out)) throw java.io.IOException("cannot move session $id into place")
         return out
+    }
+
+    /** The Worker's testers as (id, name), or null if it could not be asked. */
+    fun testers(endpoint: String): List<Pair<String, String>>? = try {
+        val c = URL("$endpoint/api/testers").openConnection() as HttpURLConnection
+        c.setRequestProperty("user-agent", USER_AGENT)
+        c.connectTimeout = 10_000
+        c.readTimeout = 10_000
+        val list = JSONObject(c.inputStream.use { it.readBytes().decodeToString() }).getJSONArray("testers")
+        (0 until list.length()).map { list.getJSONObject(it).let { t -> t.getString("id") to t.getString("name") } }
+    } catch (e: Exception) {
+        null
     }
 
     /** The latest build the Worker knows of, or null if it could not be asked. */

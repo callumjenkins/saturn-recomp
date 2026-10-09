@@ -24,7 +24,17 @@ export const requireMaintainer = async (env: Env, request: Request, allowed: rea
 	throw new HttpError(403, 'not a maintainer token')
 }
 
+/**
+ * The tester a request is from: by their token, or by the id a launcher sends as X-Playtest-Tester once the tester
+ * picked their name from the list (/api/testers), which is open, so anyone can send as any tester.
+ */
 export const requireTester = async (env: Env, request: Request): Promise<Tester> => {
+	const id = request.headers.get('x-playtest-tester')
+	if (id && !request.headers.has('authorization')) {
+		const tester = await env.DB.prepare('SELECT id, name FROM testers WHERE id = ? AND revoked_at IS NULL').bind(id).first<Tester>()
+		if (!tester) throw new HttpError(403, 'unknown or revoked tester')
+		return tester
+	}
 	const tester = await env.DB.prepare('SELECT id, name FROM testers WHERE token_hash = ? AND revoked_at IS NULL')
 		.bind(await hashToken(bearer(request)))
 		.first<Tester>()

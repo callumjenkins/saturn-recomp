@@ -12,6 +12,12 @@ export const inviteTester = async (env: Env, request: Request) => {
 	return json({ id, name: name.trim(), token }, 201)
 }
 
+/** Every tester who can still send sessions, for a launcher's list of names. */
+export const listTesters = async (env: Env) => {
+	const { results } = await env.DB.prepare('SELECT id, name FROM testers WHERE revoked_at IS NULL ORDER BY name').all()
+	return json({ testers: results })
+}
+
 export const revokeTester = async (env: Env, id: string) => {
 	const updated = await env.DB.prepare(`UPDATE testers SET revoked_at = datetime('now') WHERE id = ? AND revoked_at IS NULL`).bind(id).run()
 	if (!updated.meta.changes) throw new HttpError(404, `no active tester ${id}`)

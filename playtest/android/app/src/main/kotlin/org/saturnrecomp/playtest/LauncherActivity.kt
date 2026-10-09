@@ -12,11 +12,15 @@ import android.text.Editable
 import android.text.InputType
 import android.text.TextWatcher
 import android.view.View
+import android.view.ViewGroup
+import android.widget.AdapterView
+import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.Spinner
 import android.widget.TextView
 import org.json.JSONObject
 import java.io.File
@@ -25,7 +29,7 @@ import java.time.format.DateTimeFormatter
 import java.util.concurrent.Executors
 import kotlin.concurrent.thread
 
-/** The tester's disc, their tester code, and Play: the desktop launcher (saturnrecomp.playtest.launcher) for Android. */
+/** The tester's disc, who is playing, and Play: the desktop launcher (saturnrecomp.playtest.launcher) for Android. */
 class LauncherActivity : Activity() {
     private lateinit var info: JSONObject
     private lateinit var manifest: JSONObject
@@ -38,6 +42,7 @@ class LauncherActivity : Activity() {
     private lateinit var updateLink: TextView
     private lateinit var discLabel: TextView
     private lateinit var token: EditText
+    private lateinit var who: Spinner
     private lateinit var playButton: Button
     private lateinit var status: TextView
 
@@ -78,8 +83,12 @@ class LauncherActivity : Activity() {
         discLabel = text()
         button("Choose files…") { chooseFiles() }
         button("From a URL…") { chooseUrl() }
-        text("Tester code", bold = true).setPadding(0, pad, 0, 0)
+        text("Who's playing", bold = true).setPadding(0, pad, 0, 0)
+        who = Spinner(this, Spinner.MODE_DROPDOWN).apply { column.addView(this) }
+        showTesters(emptyList())
         token = EditText(this).apply {
+            hint = "Tester code"
+            visibility = if (settings.optString("token").isNotEmpty()) View.VISIBLE else View.GONE
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
             setText(settings.optString("token"))
             addTextChangedListener(object : TextWatcher {
@@ -104,6 +113,10 @@ class LauncherActivity : Activity() {
         showArtwork()
 
         thread(isDaemon = true) {
+            val testers = Sessions.testers(info.getString("endpoint")) ?: return@thread
+            runOnUiThread { showTesters(testers) }
+        }
+        thread(isDaemon = true) {
             val latest = Sessions.latest(info.getString("endpoint"), info.getString("product")) ?: return@thread
             val build = latest.optString("build")
             val url = latest.optString("release_url")
@@ -115,10 +128,49 @@ class LauncherActivity : Activity() {
         }
     }
 
+    /**
+     * The names to pick from: the Worker's testers, nobody, or someone with a tester code. Until the list arrives,
+     * the one picked last time.
+     */
+    private fun showTesters(testers: List<Pair<String, String>>) {
+        val known = testers.ifEmpty { settings.optString("tester_id").takeIf { it.isNotEmpty() }?.let { listOf(it to settings.optString("tester_name")) } ?: emptyList() }
+        val labels = known.map { it.second } + NOBODY + WITH_CODE
+        who.adapter = object : ArrayAdapter<String>(this, android.R.layout.simple_spinner_item, labels) {
+            override fun getView(position: Int, convertView: View?, parent: ViewGroup) = row(labels[position], 18f)
+            override fun getDropDownView(position: Int, convertView: View?, parent: ViewGroup) = row(labels[position], 18f)
+        }
+        val picked = when {
+            settings.optString("token").isNotEmpty() -> labels.size - 1
+            else -> known.indexOfFirst { it.first == settings.optString("tester_id") }.takeIf { it >= 0 } ?: known.size
+        }
+        who.onItemSelectedListener = null
+        who.setSelection(picked)
+        who.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, v: View?, position: Int, id: Long) {
+                if (position < known.size) settings.put("tester_id", known[position].first).put("tester_name", known[position].second).put("token", "")
+                else settings.put("tester_id", "").put("tester_name", "")
+                if (position < labels.size - 1) token.setText("")
+                token.visibility = if (position == labels.size - 1) View.VISIBLE else View.GONE
+                saveSettings()
+            }
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
+    }
+
+    private fun row(s: String, size: Float) = TextView(this).apply {
+        text = s
+        textSize = size
+        val p = (12 * resources.displayMetrics.density).toInt()
+        setPadding(p, p, p, p)
+    }
+
+    /** What the sessions are sent with: the tester code, or the picked tester's id ("tester:ID"); empty for nobody. */
+    private fun credential() = settings.optString("token").ifEmpty { settings.optString("tester_id").takeIf { it.isNotEmpty() }?.let { "tester:$it" } ?: "" }
+
     // A session the game left behind ended when its process did, so it is finished and sent here.
     override fun onResume() {
         super.onResume()
-        val code = settings.optString("token")
+        val code = credential()
         work.execute {
             val unfinished = Sessions.unfinished(home)
             if (unfinished.isNotEmpty()) Thread.sleep(2000)     // SDL gives the game a second to write its coverage once it is closed
@@ -196,9 +248,9 @@ class LauncherActivity : Activity() {
             say("Choose your disc first.")
             return
         }
-        val code = token.text.toString().trim()
-        settings.put("token", code)
+        settings.put("token", token.text.toString().trim())
         saveSettings()
+        val code = credential()
         val (session, args) = Sessions.start(home, info, File(cue), send = code.isNotEmpty(), from = from, useDump = useDump, branch = branch, save = save)
         val record = Sessions.read(session)
         say((when {
@@ -208,7 +260,7 @@ class LauncherActivity : Activity() {
             else -> ""
         }) +
             if (code.isNotEmpty()) "The session is sent every 10 minutes and when you quit."
-            else "Without a tester code this session stays on this phone.")
+            else "With nobody picked, this session stays on this phone.")
         val game = Intent(this, GameActivity::class.java)
             .putExtra(GameActivity.ARGS, args.toTypedArray())
             .putExtra(GameActivity.SESSION, session.path)
@@ -217,7 +269,9 @@ class LauncherActivity : Activity() {
     }
 
     private fun openSessions() {
-        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("${info.getString("endpoint")}/#token=${token.text.toString().trim()}")))
+        val code = credential()
+        val link = if (code.startsWith("tester:")) "tester=${code.removePrefix("tester:")}" else "token=$code"
+        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("${info.getString("endpoint")}/#$link")))
     }
 
     // Each choice of disc lands in disc/new, which replaces disc/current once it checks out.
@@ -327,6 +381,8 @@ class LauncherActivity : Activity() {
     companion object {
         private const val PICK = 1
         private const val SAVES = 2
+        private const val NOBODY = "Nobody: keep sessions on this phone"
+        private const val WITH_CODE = "Someone with a tester code…"
         private const val BOX_ART = "boxart"
     }
 }

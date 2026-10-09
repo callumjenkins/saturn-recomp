@@ -1,7 +1,7 @@
 // saturn-recomp runtime — a Saturn pad drawn on a touchscreen (host.cpp draws it and feeds it fingers).
 //
-// The d-pad sits bottom left, A B C with X Y Z above them bottom right, START between them, L and R
-// in the top corners, and the menu button top centre. The pad is `unit` pixels across its height, the
+// The d-pad sits bottom left, A B C with X Y Z above them bottom right, START between them, L above
+// the d-pad and R above X Y Z, within a thumb's reach, and the menu button top centre. The pad is `unit` pixels across its height, the
 // same size on every screen of the same density, and smaller where the screen is too small for it.
 #pragma once
 #include "host.h"
@@ -32,7 +32,7 @@ struct TouchFinger {
 };
 
 inline TouchLayout touch_layout(int w, int h, float unit) {
-    float u = std::min({unit, w / 1.1f, h / 0.5f}), m = 0.05f * u;
+    float u = std::min({unit, w / 1.1f, h / 0.56f}), m = 0.05f * u;
     TouchLayout l;
     l.dpad_r = 0.17f * u;
     l.dpad_x = m + l.dpad_r;
@@ -52,9 +52,12 @@ inline TouchLayout touch_layout(int w, int h, float unit) {
         l.buttons.push_back({high[i], high_bits[i], TouchButton::Round, x + 0.45f * r, y - 2.25f * r, 0.72f * r, 0.72f * r});
     }
     l.buttons.push_back({"START", B_START, TouchButton::Pill, w / 2.0f, h - m - 0.35f * r, 2.6f * r, 0.9f * r});
-    float sw = 0.3f * u, sh = 0.1f * u;
-    l.buttons.push_back({"L", B_L, TouchButton::Shoulder, m + sw / 2, m + sh / 2, sw, sh});
-    l.buttons.push_back({"R", B_R, TouchButton::Shoulder, w - m - sw / 2, m + sh / 2, sw, sh});
+    float sw = 0.3f * u, sh = 0.1f * u, above = 0.045f * u;
+    l.buttons.push_back({"L", B_L, TouchButton::Shoulder, l.dpad_x, l.dpad_y - l.dpad_r - above - sh / 2, sw, sh});
+    float top = (float)h;                         // the top of X Y Z
+    for (auto& b : l.buttons)
+        if (b.shape == TouchButton::Round) top = std::min(top, b.y - b.w);
+    l.buttons.push_back({"R", B_R, TouchButton::Shoulder, w - m - sw / 2, top - above - sh / 2, sw, sh});
     return l;
 }
 

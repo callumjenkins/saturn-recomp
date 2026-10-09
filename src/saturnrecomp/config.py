@@ -42,14 +42,15 @@
     resume = 4610                   # the player's pads take over here
     fresh = [0x0000]                # the first's values a new game starts at: a save file starts there
     show = [["Stage {}", "stage_2", "world-stage"], ["{} pts", "score", "u32"],
-            ["Speed +{}", "objects+0x3A", "steps:E0:20?"], ["{}", "objects+0x70", "bits:01=Kick,02=Glove"],
+            ["Skates {}", "objects+0x3A", "u8@3?"], ["{}", "objects+0x70", "bits:01=Kick,02=Glove"],
             ["{} dino", "dino_colours", "names:,Pink,Blue", "objects+0x5E&08"]]
 
 A restore point shows each of `show` it can, as TEMPLATE, KEPT, FORMAT and optionally a condition, a
 kept range whose first byte must have a bit of the mask. The formats read the range's first bytes,
 big-endian: u8, u16, u32; world-stage, a byte each, numbered from 1; steps:BASE:STEP, how many STEPs
-the byte is above BASE, wrapping at 256; names:A,B,... the byte's name, from 0; bits:MASK=NAME,...
-the names of the first byte's bits. A trailing "?" leaves out a 0 (or no name).
+the range is above or below BASE, signed ("+1", "-2"); names:A,B,... the byte's name, from 0; bits:MASK=NAME,...
+the names of the first byte's bits. "@N" reads from the range's Nth byte on, and a trailing "?" leaves
+out a 0 (or no name).
 
 An address is a number, a name from [symbols], or either plus an offset ("objects+0x5E"). Paths are
 relative to the file.
@@ -116,9 +117,8 @@ class Checkpoint:
     def rebuild(self, line):
         """The --write arguments that rebuild the start a --progress line names, or None when its first
         range is outside `accept`."""
-        fields = line.split()
-        kept = [bytes.fromhex(f) for f in fields[1:]]
-        if len(kept) != len(self.keep) or not any(lo <= int.from_bytes(kept[0], "big") <= hi for lo, hi in self.accept):
+        kept = self.kept(line)
+        if kept is None or not any(lo <= int.from_bytes(kept[0], "big") <= hi for lo, hi in self.accept):
             return None
         out = []
         for at, addr, k, mask in self.writes:
@@ -126,10 +126,17 @@ class Checkpoint:
             out.append(f"{at}:{addr:08X}={data.hex().upper()}")
         return out
 
+    def kept(self, line):
+        """A --progress line's ranges, or None when they are not keep's (a line from another build's keep)."""
+        kept = [bytes.fromhex(f) for f in line.split()[1:]]
+        if [len(k) for k in kept] != [n for _, n in self.keep]:
+            return None
+        return kept
+
     def describe(self, line):
         """What a --progress line shows of the game, by `show`: a phrase each, as the launcher shows them."""
-        kept = [bytes.fromhex(f) for f in line.split()[1:]]
-        if len(kept) != len(self.keep):
+        kept = self.kept(line)
+        if kept is None:
             return []
         out = []
         for template, k, fmt, cond in self.show:
@@ -149,6 +156,8 @@ class Checkpoint:
 
 def show_value(fmt, data):
     """A kept range as one of [checkpoint] show's formats gives it; the launcher's Kotlin does the same."""
+    fmt, _, at = fmt.partition("@")
+    data = data[int(at or 0):]
     kind, _, arg = fmt.partition(":")
     if kind in ("u8", "u16", "u32"):
         n = int(kind[1:]) // 8
@@ -157,7 +166,8 @@ def show_value(fmt, data):
         return f"{data[0] + 1}-{data[1] + 1}"
     if kind == "steps":
         base, step = (int(x, 16) for x in arg.split(":"))
-        return str(((data[0] - base) & 0xFF) // step)
+        n = (int.from_bytes(data, "big") - base) // step
+        return f"{n:+d}" if n else "0"
     if kind == "names":
         names = arg.split(",")
         return names[data[0]] if data[0] < len(names) else ""

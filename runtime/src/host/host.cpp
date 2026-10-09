@@ -20,7 +20,7 @@
 // gamepad's Back or Guide, or the menu button at the top of a touchscreen opens a menu that pauses
 // the game, sets the touch pad, and quits. F12 saves the picture (out/shot-VBLANK.png); F11 or Alt+Enter switches
 // fullscreen. Closing the window, or Quit in the menu, ends the run. Until --resume's VBlank the run
-// goes as fast as it can, without sound, every 30th picture shown with a bar for how far it has got.
+// goes as fast as it can, without sound, with a card in place of the picture for how far it has got.
 //
 // Sound (sound.cpp) comes as it is made, in virtual time, into an SDL audio
 // stream at 44 100 Hz: the window's pace keeps it level with the device.
@@ -339,6 +339,10 @@ static void virtual_press() {
 
 // ---- the touchscreen's pad (touch_pad.h) ------------------------------------------------------
 static std::map<SDL_FingerID, TouchFinger> g_fingers;
+// Fingers lifted before the pads were read since they went down: each holds its button for that one read,
+// so a tap quicker than a frame still presses it.
+static std::vector<SDL_FingerID> g_lifted;
+static std::map<SDL_FingerID, bool> g_unread;
 static uint16_t g_touch_held;
 
 static int g_out_w, g_out_h;                    // the window's size in pixels, as last drawn
@@ -364,9 +368,12 @@ static TouchLayout pad_layout() {
 }
 
 static uint16_t touch_read() {
-    if (!touch_shown() || g_fingers.empty()) return g_touch_held = 0;
     std::vector<TouchFinger> fingers;
     for (auto& [id, f] : g_fingers) fingers.push_back(f);
+    for (SDL_FingerID id : g_lifted) g_fingers.erase(id);
+    g_lifted.clear();
+    g_unread.clear();
+    if (!touch_shown() || fingers.empty()) return g_touch_held = 0;
     return g_touch_held = touch_buttons(pad_layout(), fingers);
 }
 
@@ -559,6 +566,8 @@ static void menu_open() {
     g_menu_open = true;
     g_menu_at = 0;
     g_fingers.clear();
+    g_lifted.clear();
+    g_unread.clear();
 }
 
 static bool escape_is_a_button() {
@@ -652,6 +661,7 @@ static void on_event(const SDL_Event& e) {
         if (!touch_shown()) break;
         if (e.type == SDL_EVENT_FINGER_DOWN) {
             g_fingers[e.tfinger.fingerID] = {x, y, touch_on_dpad(l, x, y)};
+            g_unread[e.tfinger.fingerID] = true;
         } else if (auto f = g_fingers.find(e.tfinger.fingerID); f != g_fingers.end()) {
             f->second.x = x;
             f->second.y = y;
@@ -660,7 +670,8 @@ static void on_event(const SDL_Event& e) {
     }
     case SDL_EVENT_FINGER_UP:
     case SDL_EVENT_FINGER_CANCELED:
-        g_fingers.erase(e.tfinger.fingerID);
+        if (e.type == SDL_EVENT_FINGER_UP && g_unread.count(e.tfinger.fingerID)) g_lifted.push_back(e.tfinger.fingerID);
+        else g_fingers.erase(e.tfinger.fingerID);
         if (e.tfinger.fingerID == g_slider_finger) g_slider_finger = 0;
         break;
     }
@@ -814,18 +825,29 @@ static void draw_menu() {
 
 static SDL_FRect g_dst;                         // where the picture goes
 
+// While --resume plays its presses: a card saying what the run is getting to, and how far it has got,
+// in place of the game going by at speed.
+static void draw_catching_up() {
+    static uint64_t from = sat_vblanks();
+    float u = display_scale(), w = std::min(0.86f * g_out_w, 420 * u), h = 120 * u;
+    SDL_FRect card = {(g_out_w - w) / 2, (g_out_h - h) / 2, w, h};
+    ui_fill_rounded(card, 20 * u, rgba(0.09f, 0.1f, 0.13f, 1));
+    std::string label = g_cfg.resume_label.empty() ? "Getting back to where you were" : g_cfg.resume_label;
+    ui_text(card.x + w / 2, card.y + 40 * u, 18 * u, label, rgba(0.95f, 0.96f, 0.98f, 1), true);
+    float done = g_cfg.resume > from ? (float)(sat_vblanks() - from) / (float)(g_cfg.resume - from) : 1;
+    SDL_FRect track = {card.x + 28 * u, card.y + 76 * u, w - 56 * u, 8 * u};
+    ui_fill_rounded(track, 4 * u, rgba(0.25f, 0.27f, 0.32f, 1));
+    ui_fill_rounded({track.x, track.y, std::max(track.h, track.w * std::clamp(done, 0.0f, 1.0f)), track.h}, 4 * u, rgba(0.27f, 0.47f, 0.95f, 1));
+}
+
 // The last picture and what goes over it.
 static void draw() {
     SDL_GetCurrentRenderOutputSize(g_ren, &g_out_w, &g_out_h);
     SDL_SetRenderDrawColor(g_ren, 0, 0, 0, 255);
     SDL_RenderClear(g_ren);
-    if (g_tex) SDL_RenderTexture(g_ren, g_tex, nullptr, &g_dst);
-    if (sat_resuming()) {                       // how far --resume has got
-        SDL_FRect bar = {g_dst.x, g_dst.y + g_dst.h - 8, g_dst.w * sat_vblanks() / g_cfg.resume, 8};
-        SDL_SetRenderDrawColor(g_ren, 255, 255, 255, 255);
-        SDL_RenderFillRect(g_ren, &bar);
-    }
     SDL_SetRenderDrawBlendMode(g_ren, SDL_BLENDMODE_BLEND);
+    if (sat_resuming()) draw_catching_up();
+    else if (g_tex) SDL_RenderTexture(g_ren, g_tex, nullptr, &g_dst);
     if (g_menu_open) draw_menu();
     else {
         if (touch_shown()) draw_touch_pad();

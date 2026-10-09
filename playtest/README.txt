@@ -19,7 +19,8 @@ Getting started
 
 On Android
 
-Install the .apk from the release. Android asks you to allow installs from your browser or file
+Install the .apk from the release. Under "Who's playing", pick your name, so your sessions are sent
+under it; "Nobody" keeps them on the phone. Android asks you to allow installs from your browser or file
 manager the first time. You need a phone with a 64-bit ARM chip, which nearly every phone from the
 last few years has. A Bluetooth or USB controller is best, but the screen has a Saturn pad of its
 own whenever no controller is connected.

@@ -66,7 +66,10 @@ class SavesActivity : Activity() {
             setOnClickListener { goBack() }
         })
         header.addView(text("Save files", 26f, TEXT, bold = true), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        picker = Spinner(this).apply { background = rounded(CARD, 12f) }
+        picker = Spinner(this, Spinner.MODE_DROPDOWN).apply {
+            background = rounded(CARD, 12f)
+            setPopupBackgroundDrawable(rounded(CARD, 12f))
+        }
         header.addView(picker)
         column.addView(header)
         status = text("Looking for save files…", 14f, MUTED).apply { setPadding(0, (8 * dp).toInt(), 0, (8 * dp).toInt()) }
@@ -99,8 +102,8 @@ class SavesActivity : Activity() {
             runOnUiThread {
                 library = built
                 sources = listOf(THIS_PHONE) + sessions.mapNotNull { it.tester?.ifEmpty { null } }.distinct().sorted()
-                picker.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, sources)
-                picker.setSelection(sources.indexOf(settings.optString("continue_from")).coerceAtLeast(0))
+                picker.adapter = names(sources)
+                picker.setSelection(sources.indexOf(settings.optString("continue_from").ifEmpty { settings.optString("tester_name") }).coerceAtLeast(0))
                 picker.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
                     override fun onItemSelected(parent: AdapterView<*>?, v: View?, position: Int, id: Long) {
                         settings.put("continue_from", sources[position])
@@ -146,7 +149,7 @@ class SavesActivity : Activity() {
         save.lastWords.drop(1).takeIf { it.isNotEmpty() }?.let { card.addView(text(it.joinToString(" · "), 15f, TEXT)) }
         val first = save.sessions.first()
         card.addView(text(
-            "Started ${started(first)} · ${save.sessions.last().vblanks / 3600} min in · ${save.starts.size} stage starts" + (save.tester?.let { " · $it" } ?: ""),
+            "Started ${started(first)} · ${save.sessions.last().vblanks / 3600} min in · ${save.starts.size} stage start${if (save.starts.size == 1) "" else "s"}" + (save.tester?.let { " · $it" } ?: ""),
             13f, MUTED).apply { setPadding(0, (6 * dp).toInt(), 0, 0) })
         card.setOnClickListener {
             opened = save
@@ -258,6 +261,22 @@ class SavesActivity : Activity() {
             try { return OffsetDateTime.parse(it).atZoneSameInstant(ZoneId.systemDefault()).format(day) } catch (_: Exception) {}
         }
         return try { LocalDateTime.parse(s.id.take(15), DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")).format(day) } catch (_: Exception) { s.id }
+    }
+
+    // The theme's spinner draws dark text on this screen's dark header, so the names are drawn here.
+    private fun names(list: List<String>) = object : ArrayAdapter<String>(this, android.R.layout.simple_spinner_item, list) {
+        override fun getView(position: Int, convertView: View?, parent: ViewGroup): View =
+            text("${list[position]}  ▾", 15f, TEXT, bold = true).apply {
+                val h = (14 * dp).toInt()
+                setPadding(h, (8 * dp).toInt(), h, (8 * dp).toInt())
+            }
+
+        override fun getDropDownView(position: Int, convertView: View?, parent: ViewGroup): View =
+            text(list[position], 16f, TEXT).apply {
+                val h = (16 * dp).toInt()
+                setPadding(h, (12 * dp).toInt(), h, (12 * dp).toInt())
+                setBackgroundColor(CARD)
+            }
     }
 
     private fun text(s: String, size: Float, colour: Int, bold: Boolean = false) = TextView(this).apply {

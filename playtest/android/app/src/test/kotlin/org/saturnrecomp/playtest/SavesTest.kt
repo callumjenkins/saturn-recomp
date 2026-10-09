@@ -8,9 +8,10 @@ import org.junit.Test
 /** Save files from sessions' records and progress lines, with a checkpoint shaped like Bomberman's. */
 class SavesTest {
     private val checkpoint = JSONObject()
+        .put("keep", "060C029C:2,060C063E:1,060D5F39:1")
         .put("accept", JSONArray("[[1, 6], [256, 264]]"))
         .put("fresh", JSONArray("[0]"))
-        .put("show", JSONArray("""[["Stage {}", 0, "world-stage"], ["Lives {}", 1, "u8"], ["Speed +{}", 2, "steps:E0:20?"],
+        .put("show", JSONArray("""[["Stage {}", 0, "world-stage"], ["Lives {}", 1, "u8"], ["Speed {}", 2, "steps:E0:20?"],
             ["{}", 2, "bits:01=Kick,02=Glove?"], ["{} dino", 1, "names:,Pink,Blue?", [2, 4]]]"""))
 
     private fun session(id: String, progress: List<String>, record: JSONObject = JSONObject(), vblanks: Long = 9000) =
@@ -19,7 +20,9 @@ class SavesTest {
     @Test
     fun aProgressLineIsShownByTheCheckpoint() {
         assertEquals(listOf("Stage 2-4", "Lives 3"), Saves.describe(checkpoint, "900 0103 03 E0"))
-        assertEquals(listOf("Stage 1-1", "Lives 1", "Speed +1", "Glove", "Pink dino"), Saves.describe(checkpoint, "900 0000 01 06"))
+        assertEquals(listOf("Stage 1-1", "Lives 1", "Speed -6", "Glove", "Pink dino"), Saves.describe(checkpoint, "900 0000 01 26"))
+        assertEquals(listOf("Stage 1-1", "Lives 1", "Speed -7"), Saves.describe(checkpoint, "900 0000 01 00"))
+        assertEquals(emptyList<String>(), Saves.describe(checkpoint, "900 0000 01 00E0"))     // another build's keep
     }
 
     @Test

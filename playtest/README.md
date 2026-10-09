@@ -118,6 +118,14 @@ parent and dump) and its progress lines as headers, so the list needs no downloa
 downloaded only to go on from where it ended. Downloaded sessions are marked ended and never sent
 from the phone that downloaded them.
 
+The Android launcher sends sessions as the tester picked from the Worker's open list of names
+(`GET /api/testers`): an upload or `/api/me` with `X-Playtest-Tester: ID` and no token is that
+tester's, so anyone with the Worker's address can send as any tester. A tester code still works,
+from "Someone with a tester code…", and the desktop launcher takes only codes.
+
+While a Continue or a rebuild plays its presses, the window shows a card saying what it is getting
+to (the runtime's `--resume-label`) in place of the game going by at speed.
+
 A game's `[checkpoint]` in its game.toml names memory the runs note in the session's `progress.txt`
 whenever the first range changes (the runtime's `--progress`), such as a stage number with what the
 player carries into the stage. When the runtime refuses a dump, as a build with another dump format

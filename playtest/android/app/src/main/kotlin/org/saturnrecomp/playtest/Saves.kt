@@ -100,7 +100,7 @@ object Saves {
                 val save = saves[current ?: continue]!!
                 seen.getOrPut(save.id) { mutableSetOf() }.add(line)
                 save.lastWords = describe(checkpoint, line)
-                if (accept.any { first in it }) save.starts.add(Point(Kind.STAGE, s, vblank, line, save.lastWords))
+                if (accept.any { first in it } && kept(checkpoint, line) != null) save.starts.add(Point(Kind.STAGE, s, vblank, line, save.lastWords))
             }
             current?.let { touched.add(it) }
             if (current == null) others.add(s)
@@ -115,11 +115,20 @@ object Saves {
     /** The first kept range of a progress line, big-endian. */
     private fun first(line: String): Long? = line.trim().split(" ").getOrNull(1)?.toLongOrNull(16)
 
+    /**
+     * A progress line's ranges, a list of bytes each, or null when they are not the checkpoint's `keep`: a line noted
+     * by a build that kept other ranges, which can be neither shown nor rebuilt.
+     */
+    fun kept(checkpoint: JSONObject?, line: String): List<List<Int>>? {
+        val lengths = checkpoint?.optString("keep")?.split(",")?.map { it.substringAfter(":").toIntOrNull() } ?: return null
+        val kept = line.trim().split(" ").drop(1).map { f -> f.chunked(2).map { it.toInt(16) } }
+        return kept.takeIf { k -> k.map { it.size } == lengths }
+    }
+
     /** A progress line as the checkpoint's `show` puts it, a phrase each; saturnrecomp.config's Checkpoint.describe does the same. */
     fun describe(checkpoint: JSONObject?, line: String): List<String> {
         val show = checkpoint?.optJSONArray("show") ?: return emptyList()
-        val kept = line.trim().split(" ").drop(1).map { f -> f.chunked(2).map { it.toInt(16) } }
-        if (kept.isEmpty()) return emptyList()
+        val kept = kept(checkpoint, line) ?: return emptyList()
         val out = mutableListOf<String>()
         for (i in 0 until show.length()) {
             val entry = show.getJSONArray(i)
@@ -134,13 +143,19 @@ object Saves {
         return out
     }
 
-    private fun value(format: String, data: List<Int>): String {
+    private fun value(given: String, whole: List<Int>): String {
+        val format = given.substringBefore("@")
+        val data = whole.drop(given.substringAfter("@", "0").toIntOrNull() ?: 0)
+        if (data.isEmpty()) return ""
         val kind = format.substringBefore(":")
         val arg = format.substringAfter(":", "")
         return when (kind) {
             "u8", "u16", "u32" -> "%,d".format(data.take(kind.drop(1).toInt() / 8).fold(0L) { v, b -> v * 256 + b })
             "world-stage" -> "${data[0] + 1}-${data[1] + 1}"
-            "steps" -> arg.split(":").map { it.toInt(16) }.let { (base, step) -> (((data[0] - base) and 0xFF) / step).toString() }
+            "steps" -> arg.split(":").map { it.toLong(16) }.let { (base, step) ->
+                val n = Math.floorDiv(data.fold(0L) { v, b -> v * 256 + b } - base, step)
+                if (n > 0) "+$n" else n.toString()
+            }
             "names" -> arg.split(",").getOrNull(data[0]) ?: ""
             "bits" -> arg.split(",").map { it.split("=", limit = 2) }.filter { data[0] and it[0].toInt(16) != 0 }.joinToString(", ") { it[1] }
             else -> ""

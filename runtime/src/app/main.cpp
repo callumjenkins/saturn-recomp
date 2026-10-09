@@ -22,7 +22,8 @@
 // keyboard and gamepads, a player each), sampled once a VBlank, as an --input
 // script: given back with --input @FILE, the run goes the same way again, and
 // takes nothing from the host's controllers. --resume N plays an --input script that far as fast as the host
-// can, showing every 30th picture without sound, then hands the pads to the host's controllers; with
+// can, without sound, a card saying how far it has got in place of the picture (--resume-label TEXT says
+// what it is getting to), then hands the pads to the host's controllers; with
 // --record-input, the script's presses are written too, so the file plays the whole run. --virtual-input SCRIPT, for tests, presses the
 // script's pads on SDL virtual gamepads instead, a player each, through the window's input. --interp draws the fields between the game's frames with
 // everything moved part of the way (vdp1.cpp), one frame behind. --tasks names
@@ -110,6 +111,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--input") && more) cfg.input = argv[++i];
         else if (!std::strcmp(a, "--record-input") && more) cfg.record_input = argv[++i];
         else if (!std::strcmp(a, "--resume") && more) cfg.resume = std::strtoull(argv[++i], nullptr, 10);
+        else if (!std::strcmp(a, "--resume-label") && more) cfg.resume_label = argv[++i];
         else if (!std::strcmp(a, "--state-in") && more) cfg.state_in = argv[++i];
         else if (!std::strcmp(a, "--state-out") && more) cfg.state_out = argv[++i];
         else if (!std::strcmp(a, "--state-every") && more) cfg.state_every = std::atoi(argv[++i]);

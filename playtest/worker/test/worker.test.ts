@@ -96,6 +96,23 @@ describe("a game's sessions", () => {
 	})
 })
 
+describe('testers picked by name', () => {
+	it('are listed, and send and see sessions by their id', async () => {
+		await invite('Pat')
+		const { testers } = await (await call('/api/testers')).json<{ testers: { id: string; name: string }[] }>()
+		const pat = testers.find((t) => t.name === 'Pat')!
+		const r = await call('/api/sessions/session-i', {
+			method: 'PUT',
+			body: 'PK',
+			headers: { 'x-playtest-tester': pat.id, 'content-length': '2', 'x-playtest-product': PRODUCT, 'x-playtest-build': 'b1', 'x-playtest-started': '2026-10-09T10:00:00Z' },
+		})
+		expect(r.status).toBe(200)
+		const me = await (await call('/api/me', { headers: { 'x-playtest-tester': pat.id } })).json<Listed & { tester: string }>()
+		expect(me).toMatchObject({ tester: 'Pat', sessions: [{ id: 'session-i' }] })
+		expect((await call('/api/me', { headers: { 'x-playtest-tester': 'nobody' } })).status).toBe(403)
+	})
+})
+
 describe('auth', () => {
 	it.each([
 		['no token', '/api/me', undefined, 401],

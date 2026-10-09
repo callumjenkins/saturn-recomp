@@ -1,6 +1,7 @@
 /**
- * A tester's sessions and their reviews. The launcher opens it as `/#token=TOKEN`; a fragment never
- * reaches the server, and the page keeps the token in the browser for later visits.
+ * A tester's sessions and their reviews. The launcher opens it as `/#token=TOKEN`, or `/#tester=ID` for a
+ * tester picked by name; a fragment never reaches the server, and the page keeps it in the browser for
+ * later visits.
  */
 export const PAGE = `<!doctype html>
 <html lang="en">
@@ -37,11 +38,12 @@ code { font-size: 13px; }
 </main>
 <script>
 const STATUS = { playing: 'Playing or uploading', ended: 'Waiting for review', reviewed: 'Reviewed' }
-const store = { get() { try { return localStorage.getItem('playtest-token') } catch { return null } },
-                set(v) { try { localStorage.setItem('playtest-token', v) } catch {} } }
-const fromHash = new URLSearchParams(location.hash.slice(1)).get('token')
-if (fromHash) { store.set(fromHash); history.replaceState(null, '', location.pathname) }
-const token = fromHash || store.get()
+const store = { get(k) { try { return localStorage.getItem(k) } catch { return null } },
+                set(k, v) { try { localStorage.setItem(k, v) } catch {} } }
+const hash = new URLSearchParams(location.hash.slice(1))
+for (const k of ['token', 'tester']) if (hash.get(k)) { store.set('playtest-' + k, hash.get(k)); store.set('playtest-' + (k === 'token' ? 'tester' : 'token'), '') }
+if (location.hash) history.replaceState(null, '', location.pathname)
+const token = store.get('playtest-token'), tester = store.get('playtest-tester')
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e }
 const minutes = (vblanks) => Math.round(vblanks / 3600)
 
@@ -65,8 +67,8 @@ function card(s) {
 
 async function load() {
   const who = document.getElementById('who'), list = document.getElementById('list')
-  if (!token) { who.textContent = 'Open this page from the launcher, which adds your tester link.'; return }
-  const r = await fetch('/api/me', { headers: { authorization: 'Bearer ' + token } })
+  if (!token && !tester) { who.textContent = 'Open this page from the launcher, which adds your tester link.'; return }
+  const r = await fetch('/api/me', { headers: token ? { authorization: 'Bearer ' + token } : { 'x-playtest-tester': tester } })
   if (!r.ok) { who.textContent = 'This tester link is not valid any more. Ask for a new one.'; who.className = 'error'; return }
   const me = await r.json()
   who.textContent = me.tester + ' · ' + me.sessions.length + (me.sessions.length === 1 ? ' session' : ' sessions')

@@ -3,10 +3,11 @@
 #   saturn_stub     no hardware: tests that only call the game's own code
 #   saturn_machine  the Saturn: machine, BIOS, SCU, SMPC, CD block, on-chip, VDP1, VDP2, the
 #                   SCSP and its 68000; no SDL
-#   saturn_host     the window, the pad, the pace and the audio stream (SDL3); without
+#   saturn_host     the launcher, the window, the pad, the pace and the audio stream (SDL3); without
 #                   SDL3, or with -DSATURN_NO_SDL=ON, a host for headless runs only
 #   saturn_m68k     Musashi, the 68000 (third_party/musashi, C)
-# The host's menu draws text in Inter (third_party/inter), with stb_truetype (third_party/stb).
+#   saturn_imgui    Dear ImGui, the launcher's menu (third_party/imgui), with SDL3 only
+# The in-game menu and the touch pad draw text in Inter (third_party/inter), with stb_truetype (third_party/stb).
 # A target links saturn_core, then saturn_stub or saturn_machine with saturn_host, then recomp.
 set(_rt ${CMAKE_CURRENT_LIST_DIR})
 set(_src ${_rt}/src)
@@ -29,6 +30,13 @@ if(NOT SATURN_NO_SDL)
   find_package(SDL3 CONFIG)
 endif()
 if(SDL3_FOUND)
+  set(_imgui ${_rt}/third_party/imgui)
+  add_library(saturn_imgui STATIC
+      ${_imgui}/imgui.cpp ${_imgui}/imgui_draw.cpp ${_imgui}/imgui_tables.cpp ${_imgui}/imgui_widgets.cpp
+      ${_imgui}/backends/imgui_impl_sdl3.cpp ${_imgui}/backends/imgui_impl_sdlrenderer3.cpp)
+  target_include_directories(saturn_imgui PUBLIC ${_imgui} ${_imgui}/backends)
+  target_link_libraries(saturn_imgui PUBLIC SDL3::SDL3)
+  target_compile_options(saturn_imgui PRIVATE -w)
   # the menu's font, compiled in
   set(_fonts ${CMAKE_CURRENT_BINARY_DIR}/saturn-fonts)
   foreach(weight Regular SemiBold)
@@ -39,9 +47,10 @@ if(SDL3_FOUND)
         DEPENDS ${_ttf} ${_rt}/embed.cmake VERBATIM)
     list(APPEND _font_headers ${_fonts}/inter_${f}.h)
   endforeach()
-  add_library(saturn_host OBJECT ${_src}/host/host.cpp ${_src}/host/settings.cpp ${_src}/host/ui.cpp ${_font_headers})
+  add_library(saturn_host OBJECT ${_src}/host/host.cpp ${_src}/host/launcher.cpp ${_src}/host/settings.cpp ${_src}/host/ui.cpp
+      ${_font_headers})
   target_include_directories(saturn_host PRIVATE ${_fonts} ${_rt}/third_party/stb)
-  target_link_libraries(saturn_host PUBLIC SDL3::SDL3)
+  target_link_libraries(saturn_host PUBLIC SDL3::SDL3 saturn_imgui)
 else()
   add_library(saturn_host OBJECT ${_src}/host/host_null.cpp ${_src}/host/settings.cpp)
 endif()

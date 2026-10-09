@@ -6,6 +6,8 @@
 #include <cstdint>
 #include "video.h"
 
+struct SaturnConfig;
+bool host_launch(SaturnConfig& cfg);                 // the launcher (launcher.cpp) fills in the disc and the players; false: closed
 bool host_open();                                    // the window (unless headless); false if it failed
 void host_present(const Frame& f);                   // show it, take the events
 void host_pace(uint64_t now);                        // wait until the host's clock has caught up

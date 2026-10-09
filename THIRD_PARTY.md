@@ -32,6 +32,12 @@ is at the top of `m68kcpu.c` and in `readme.txt`:
 > OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 > USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+## Dear ImGui (the launcher's menu) — MIT
+
+`runtime/third_party/imgui/`: Dear ImGui 1.92.9b by Omar Cornut and its contributors, the core and
+the SDL3 and SDL_Renderer3 backends, unchanged (`VERSION` there). Only the SDL host builds it. Its
+licence is `LICENSE.txt` there: the MIT licence above, copyright © 2014-2026 Omar Cornut.
+
 ## SoftFloat (inside Musashi) — SoftFloat 2b's own terms
 
 `runtime/third_party/musashi/softfloat/`: John R. Hauser's SoftFloat

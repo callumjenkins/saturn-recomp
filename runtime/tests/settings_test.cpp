@@ -46,6 +46,26 @@ TEST(one_models_gamepad_section_starts_from_the_gamepad_defaults) {
     CHECK_EQ(s.get("gamepad", "a") == "a", true);
 }
 
+TEST(changed_settings_are_written_over_the_players_file) {
+    Settings s;
+    std::vector<std::string> problems;
+    std::string file = "; mine\n[display]\nscale = 2\n\n[keyboard]\na = Space\n";
+    s.read(file, problems);
+    s.set("display", "scale", "4");
+    s.set("display", "fullscreen", "true");
+    s.set("launcher", "multitap", "2");
+    s.set("gamepad 0300abcd", "a", "b");
+    std::string out = s.write_over(file);
+    CHECK_EQ(out == "; mine\n[display]\nscale = 4\nfullscreen = true\n\n[keyboard]\na = Space\n"
+                    "\n[gamepad 0300abcd]\na = b\n\n[launcher]\nmultitap = 2\n", true);
+    Settings back;
+    back.read(out, problems);
+    CHECK_EQ(problems.size(), 0);
+    CHECK_EQ(back.number("display", "scale"), 4);
+    CHECK_EQ(back.get("gamepad 0300abcd", "c") == "rightshoulder", true);
+    CHECK_EQ(Settings().write_over(Settings::default_text()) == Settings::default_text(), true);
+}
+
 TEST(settings_are_written_whole_and_read_back) {
     namespace fs = std::filesystem;
     fs::path dir = fs::temp_directory_path() / "saturn-settings-test";
@@ -74,17 +94,23 @@ TEST(the_touch_settings_take_only_their_words) {
     CHECK_EQ(s.get("touch", "style") == "western", true);
 }
 
-TEST(one_setting_changes_in_place_and_the_comments_stay) {
+TEST(a_touch_setting_changes_in_place_and_the_comments_stay) {
+    auto with = [](const std::string& text, const char* key, const char* value) {
+        Settings s;
+        std::vector<std::string> problems;
+        s.read(text, problems);
+        s.set("touch", key, value);
+        return s.write_over(text);
+    };
     std::string text = "; mine\n[display]\nscale = 2\n[touch]\n; a note\ncontrols = auto\n[audio]\nvolume = 50\n";
-    CHECK_EQ(settings_with(text, "touch", "controls", "off") ==
+    CHECK_EQ(with(text, "controls", "off") ==
                  "; mine\n[display]\nscale = 2\n[touch]\n; a note\ncontrols = off\n[audio]\nvolume = 50\n", true);
-    CHECK_EQ(settings_with(text, "touch", "style", "japanese") ==
+    CHECK_EQ(with(text, "style", "japanese") ==
                  "; mine\n[display]\nscale = 2\n[touch]\n; a note\ncontrols = auto\nstyle = japanese\n[audio]\nvolume = 50\n", true);
-    CHECK_EQ(settings_with("[display]\nscale = 2\n", "touch", "style", "japanese") ==
-                 "[display]\nscale = 2\n\n[touch]\nstyle = japanese\n", true);
+    CHECK_EQ(with("[display]\nscale = 2\n", "style", "japanese") == "[display]\nscale = 2\n\n[touch]\nstyle = japanese\n", true);
     Settings s;
     std::vector<std::string> problems;
-    s.read(settings_with(Settings::default_text(), "touch", "controls", "on"), problems);
+    s.read(with(Settings::default_text(), "controls", "on"), problems);
     CHECK_EQ(problems.size(), 0);
     CHECK_EQ(s.get("touch", "controls") == "on", true);
 }

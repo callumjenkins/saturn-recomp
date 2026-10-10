@@ -78,6 +78,11 @@ static void load_settings(const std::string& named) {
             if (settings_store(path, Settings::default_text())) sat_note("settings: %s, written with the defaults", path.c_str());
             else sat_note("settings: cannot write %s (the defaults)", path.c_str());
         } else {
+            std::string upgraded = settings_upgrade(text);
+            if (upgraded != text) {
+                if (settings_store(path, upgraded)) sat_note("settings: %s, the gamepad's default layout updated", path.c_str());
+                text = upgraded;
+            }
             g_settings_text = text;
             std::vector<std::string> problems;
             g_settings.read(text, problems);
@@ -374,16 +379,16 @@ static void virtual_press() {
     static const struct { uint16_t bit; SDL_GamepadButton btn; } kButtons[] = {
         {B_RIGHT, SDL_GAMEPAD_BUTTON_DPAD_RIGHT}, {B_LEFT, SDL_GAMEPAD_BUTTON_DPAD_LEFT},
         {B_DOWN, SDL_GAMEPAD_BUTTON_DPAD_DOWN}, {B_UP, SDL_GAMEPAD_BUTTON_DPAD_UP},
-        {B_START, SDL_GAMEPAD_BUTTON_START}, {B_A, SDL_GAMEPAD_BUTTON_SOUTH}, {B_B, SDL_GAMEPAD_BUTTON_EAST},
-        {B_C, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER}, {B_X, SDL_GAMEPAD_BUTTON_WEST},
-        {B_Y, SDL_GAMEPAD_BUTTON_NORTH}, {B_Z, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER}};
+        {B_START, SDL_GAMEPAD_BUTTON_START}, {B_A, SDL_GAMEPAD_BUTTON_WEST}, {B_B, SDL_GAMEPAD_BUTTON_SOUTH},
+        {B_C, SDL_GAMEPAD_BUTTON_EAST}, {B_X, SDL_GAMEPAD_BUTTON_NORTH},
+        {B_L, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER}, {B_R, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER}};
     for (; g_virtual_pos < g_virtual_steps.size() && g_virtual_steps[g_virtual_pos].vblank <= sat_vblanks(); ++g_virtual_pos) {
         const PadStep& s = g_virtual_steps[g_virtual_pos];
         SDL_Joystick* j = g_virtual[s.pad];
         for (auto& m : kButtons) SDL_SetJoystickVirtualButton(j, m.btn, (s.pressed & m.bit) != 0);
         // a trigger at rest is the axis's minimum: 0 is half pulled
-        SDL_SetJoystickVirtualAxis(j, SDL_GAMEPAD_AXIS_LEFT_TRIGGER, s.pressed & B_L ? SDL_JOYSTICK_AXIS_MAX : SDL_JOYSTICK_AXIS_MIN);
-        SDL_SetJoystickVirtualAxis(j, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, s.pressed & B_R ? SDL_JOYSTICK_AXIS_MAX : SDL_JOYSTICK_AXIS_MIN);
+        SDL_SetJoystickVirtualAxis(j, SDL_GAMEPAD_AXIS_LEFT_TRIGGER, s.pressed & B_Y ? SDL_JOYSTICK_AXIS_MAX : SDL_JOYSTICK_AXIS_MIN);
+        SDL_SetJoystickVirtualAxis(j, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, s.pressed & B_Z ? SDL_JOYSTICK_AXIS_MAX : SDL_JOYSTICK_AXIS_MIN);
     }
 }
 

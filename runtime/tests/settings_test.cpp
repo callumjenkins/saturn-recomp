@@ -10,7 +10,8 @@ TEST(settings_default_to_the_documented_file) {
     CHECK_EQ(s.number("display", "scale"), 3);
     CHECK_EQ(s.flag("display", "fullscreen"), false);
     CHECK_EQ(s.get("keyboard", "start") == "Return", true);
-    CHECK_EQ(s.get("gamepad", "l") == "lefttrigger", true);
+    CHECK_EQ(s.get("gamepad", "l") == "leftshoulder", true);
+    CHECK_EQ(s.get("gamepad", "a") == "x", true);
     CHECK_EQ(s.keys("keyboard").size(), 13);
 }
 
@@ -41,9 +42,9 @@ TEST(one_models_gamepad_section_starts_from_the_gamepad_defaults) {
     CHECK_EQ(problems.size(), 0);
     CHECK_EQ(s.has_section("gamepad 0300abcd"), true);
     CHECK_EQ(s.get("gamepad 0300abcd", "a") == "b", true);
-    CHECK_EQ(s.get("gamepad 0300abcd", "c") == "rightshoulder", true);
+    CHECK_EQ(s.get("gamepad 0300abcd", "c") == "b", true);
     CHECK_EQ(s.number("gamepad 0300abcd", "stick"), 30);
-    CHECK_EQ(s.get("gamepad", "a") == "a", true);
+    CHECK_EQ(s.get("gamepad", "a") == "x", true);
 }
 
 TEST(changed_settings_are_written_over_the_players_file) {
@@ -62,8 +63,24 @@ TEST(changed_settings_are_written_over_the_players_file) {
     back.read(out, problems);
     CHECK_EQ(problems.size(), 0);
     CHECK_EQ(back.number("display", "scale"), 4);
-    CHECK_EQ(back.get("gamepad 0300abcd", "c") == "rightshoulder", true);
+    CHECK_EQ(back.get("gamepad 0300abcd", "c") == "b", true);
     CHECK_EQ(Settings().write_over(Settings::default_text()) == Settings::default_text(), true);
+}
+
+TEST(the_first_default_gamepad_layout_becomes_the_current_one) {
+    std::string first = "; mine\n[gamepad]\nup = dpup\ndown = dpdown\nleft = dpleft\nright = dpright\nstart = start\n"
+                        "a = a\nb = b\nc = rightshoulder\nx = x\ny = y\nz = leftshoulder\nl = lefttrigger\nr = righttrigger\n"
+                        "stick = 30\n";
+    Settings s;
+    std::vector<std::string> problems;
+    s.read(settings_upgrade(first), problems);
+    CHECK_EQ(problems.size(), 0);
+    for (const char* key : {"a", "b", "c", "x", "y", "z", "l", "r"})
+        CHECK_EQ(s.get("gamepad", key) == Settings().get("gamepad", key), true);
+    CHECK_EQ(s.number("gamepad", "stick"), 30);
+    std::string mine = "[gamepad]\na = a\nb = b\nc = rightshoulder\n";
+    CHECK_EQ(settings_upgrade(mine) == mine, true);
+    CHECK_EQ(settings_upgrade(Settings::default_text()) == Settings::default_text(), true);
 }
 
 TEST(settings_are_written_whole_and_read_back) {

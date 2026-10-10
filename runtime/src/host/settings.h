@@ -44,4 +44,7 @@ private:
 // The file's text, or "" when it cannot be read; written whole through a temporary file and a
 // rename, so a crash leaves the old file or the new one, never half of one.
 std::string settings_load(const std::string& path, bool& found);
+// The text with the first default gamepad layout, untouched as the defaults wrote it, swapped for the
+// current one; any other text as it is.
+std::string settings_upgrade(const std::string& text);
 bool settings_store(const std::string& path, const std::string& text);

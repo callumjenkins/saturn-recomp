@@ -41,21 +41,22 @@ r = W
 ; Every gamepad's buttons, each by its position on an Xbox-style pad: a b x y (bottom, right,
 ; left, top), leftshoulder, rightshoulder, lefttrigger, righttrigger, back, start, leftstick,
 ; rightstick, dpup, dpdown, dpleft, dpright. A section [gamepad GUID] holds one model's own,
-; the GUID the log gives when it connects; its keys stand in for these.
+; the GUID the log gives when it connects; its keys stand in for these. A, B and C are the left,
+; bottom and right face buttons, in the Saturn's order, and Y and Z the triggers, which few games use.
 [gamepad]
 up = dpup
 down = dpdown
 left = dpleft
 right = dpright
 start = start
-a = a
-b = b
-c = rightshoulder
-x = x
-y = y
-z = leftshoulder
-l = lefttrigger
-r = righttrigger
+a = x
+b = a
+c = b
+x = y
+y = lefttrigger
+z = righttrigger
+l = leftshoulder
+r = rightshoulder
 ; the left stick moves as the d-pad does once pushed this far, in percent
 stick = 50
 ; a trigger presses its button once pulled this far, in percent
@@ -234,6 +235,16 @@ std::string settings_load(const std::string& path, bool& found) {
     std::stringstream ss;
     if (f) ss << f.rdbuf();
     return ss.str();
+}
+
+std::string settings_upgrade(const std::string& text) {
+    static const char kOld[] = "[gamepad]\nup = dpup\ndown = dpdown\nleft = dpleft\nright = dpright\nstart = start\n"
+                               "a = a\nb = b\nc = rightshoulder\nx = x\ny = y\nz = leftshoulder\nl = lefttrigger\nr = righttrigger\n";
+    static const char kNew[] = "[gamepad]\nup = dpup\ndown = dpdown\nleft = dpleft\nright = dpright\nstart = start\n"
+                               "a = x\nb = a\nc = b\nx = y\ny = lefttrigger\nz = righttrigger\nl = leftshoulder\nr = rightshoulder\n";
+    size_t at = text.find(kOld);
+    if (at == std::string::npos) return text;
+    return text.substr(0, at) + kNew + text.substr(at + sizeof kOld - 1);
 }
 
 bool settings_store(const std::string& path, const std::string& text) {

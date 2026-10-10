@@ -180,7 +180,7 @@ class LauncherActivity : Activity() {
                 val record = Sessions.read(refused)
                 val from = File(home, "sessions/${record.getString("continues")}")
                 refused.deleteRecursively()
-                runOnUiThread { play(from, useDump = false, save = record.optString("save").ifEmpty { null }) }
+                runOnUiThread { play(from, useDump = false, save = record.optString("save").takeIf { it != refused.name }, parent = record.optJSONObject("parent")) }
                 return@execute
             }
             // Save files… in the game's menu ends the run there, and the save files open once it is sent
@@ -216,7 +216,9 @@ class LauncherActivity : Activity() {
             val line = data.getStringExtra(SavesActivity.EXTRA_LINE)
             if (line != null) play(branch = Sessions.Branch(line, data.getStringExtra(SavesActivity.EXTRA_CLOCK)?.ifEmpty { null }
                 ?: LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")), JSONObject(data.getStringExtra(SavesActivity.EXTRA_PARENT) ?: "{}")))
-            else data.getStringExtra(SavesActivity.EXTRA_FROM)?.let { play(File(it), save = data.getStringExtra(SavesActivity.EXTRA_SAVE)) }
+            else data.getStringExtra(SavesActivity.EXTRA_FROM)?.let {
+                play(File(it), save = data.getStringExtra(SavesActivity.EXTRA_SAVE), parent = data.getStringExtra(SavesActivity.EXTRA_PARENT)?.let { p -> JSONObject(p) })
+            }
             return
         }
         if (requestCode != PICK || resultCode != RESULT_OK || data == null) return
@@ -242,7 +244,7 @@ class LauncherActivity : Activity() {
         startActivityForResult(Intent(this, SavesActivity::class.java), SAVES)
     }
 
-    private fun play(from: File? = null, useDump: Boolean = true, branch: Sessions.Branch? = null, save: String? = null) {
+    private fun play(from: File? = null, useDump: Boolean = true, branch: Sessions.Branch? = null, save: String? = null, parent: JSONObject? = null) {
         val cue = settings.optString("cue")
         if (cue.isEmpty()) {
             say("Choose your disc first.")
@@ -251,7 +253,7 @@ class LauncherActivity : Activity() {
         settings.put("token", token.text.toString().trim())
         saveSettings()
         val code = credential()
-        val (session, args) = Sessions.start(home, info, File(cue), send = code.isNotEmpty(), from = from, useDump = useDump, branch = branch, save = save)
+        val (session, args) = Sessions.start(home, info, File(cue), send = code.isNotEmpty(), from = from, useDump = useDump, branch = branch, save = save, parent = parent)
         val record = Sessions.read(session)
         say((when {
             branch != null -> "The game goes back to that stage start, then the controller is yours. "

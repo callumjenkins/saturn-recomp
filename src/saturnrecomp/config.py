@@ -40,7 +40,6 @@
     presses = ["1900:START", "1910:"]   # from power-on to where the writes go in
     writes = ["4250:stage=stage_2", "4600:score", "4600:objects+0x5E&08"]   # AT:TARGET[=KEPT][&MASK]
     resume = 4610                   # the player's pads take over here
-    fresh = [0x0000]                # the first's values a new game starts at: a save file starts there
     show = [["Stage {}", "stage_2", "world-stage"], ["{} pts", "score", "u32"],
             ["Skates {}", "objects+0x3A", "u8@3?"], ["{}", "objects+0x70", "bits:01=Kick,02=Glove"],
             ["{} dino", "dino_colours", "names:,Pink,Blue", "objects+0x5E&08"]]
@@ -107,7 +106,6 @@ class Checkpoint:
     presses: list[str]
     writes: list[tuple[int, int, int, bytes | None]]   # (VBlank, address, index into keep, mask)
     resume: int
-    fresh: list[int] = field(default_factory=list)
     show: list[tuple[str, int, str, tuple[int, int] | None]] = field(default_factory=list)   # (template, kept, format, (kept, mask))
 
     @property
@@ -151,7 +149,7 @@ class Checkpoint:
     def to_json(self):
         return {"keep": self.keep_arg, "accept": [list(a) for a in self.accept], "presses": ",".join(self.presses), "resume": self.resume,
                 "writes": [[at, f"{addr:08X}", k, mask.hex() if mask else None] for at, addr, k, mask in self.writes],
-                "fresh": self.fresh, "show": [[t, k, f, list(c) if c else None] for t, k, f, c in self.show]}
+                "show": [[t, k, f, list(c) if c else None] for t, k, f, c in self.show]}
 
 
 def show_value(fmt, data):
@@ -205,7 +203,7 @@ def _checkpoint(c, symbols):
             what, _, mask = cond[0].partition("&")
             when = (kept(what, f"show {template}"), int(mask or "FF", 16))
         show.append((template, kept(name, f"show {template}"), fmt, when))
-    return Checkpoint(keep, [tuple(a) for a in c["accept"]], list(c["presses"]), writes, c["resume"], list(c.get("fresh", [])), show)
+    return Checkpoint(keep, [tuple(a) for a in c["accept"]], list(c["presses"]), writes, c["resume"], show)
 
 
 @dataclass

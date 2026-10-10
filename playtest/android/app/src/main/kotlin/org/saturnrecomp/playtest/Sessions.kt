@@ -43,11 +43,12 @@ object Sessions {
      * With `from`, the session goes on where that one ended: from its last dump, or from its start (its clock and saves)
      * without one, with its presses after that point played again before the controller takes over. With `useDump` false,
      * it goes on from the last start the game's checkpoint can rebuild (rebuild), and from its presses without one.
-     * With `branch`, it starts at that start instead, as a new save file. `save` names the save file a Continue carries on.
+     * With `branch`, it starts at that start instead, as a new save file. `save` names the save file a Continue carries on;
+     * without one, the session begins a save file of its own, branched from `parent` when that is given.
      */
     fun start(
         home: File, info: JSONObject, cue: File, send: Boolean, from: File? = null, useDump: Boolean = true,
-        branch: Branch? = null, save: String? = null,
+        branch: Branch? = null, save: String? = null, parent: JSONObject? = null,
     ): Pair<File, List<String>> {
         val started = LocalDateTime.now().truncatedTo(ChronoUnit.SECONDS)
         val out = File(home, "sessions/${started.format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))}-${UUID.randomUUID().toString().replace("-", "").take(8)}")
@@ -72,13 +73,13 @@ object Sessions {
             .put("id", out.name).put("product", info.getString("product")).put("build", info.getString("build"))
             .put("started", started.atZone(ZoneId.systemDefault()).withZoneSameInstant(ZoneOffset.UTC).format(UTC))
             .put("clock", clock).put("args", extra)
-            .put("platform", "Android ${Build.VERSION.RELEASE} ${Build.SUPPORTED_ABIS.firstOrNull() ?: ""} ${Build.MANUFACTURER} ${Build.MODEL}")
+            .put("platform", "Android ${Build.VERSION.RELEASE} ${Build.SUPPORTED_ABIS?.firstOrNull() ?: ""} ${Build.MANUFACTURER} ${Build.MODEL}")
         if (from != null) record.put("continues", from.name)
         if (rebuilt != null) record.put("rebuilds", rebuilt.first)
-        save?.let { record.put("save", it) }
+        record.put("save", save ?: out.name)
+        parent?.let { record.put("parent", it) }
         if (branch != null) record.put("save", out.name).put("parent", branch.parent).put("starts_at", branch.line)
             .put("resume", checkpoint?.optLong("resume") ?: 0)
-        write(out, record)
         if (send) File(out, UNSENT).createNewFile()
         // what the window says while it catches up: the stage a rebuild gets to, or where a session ended
         val stage = (branch?.line ?: from?.let { File(it, PROGRESS) }?.takeIf { it.exists() }?.readLines()?.lastOrNull { it.isNotBlank() })
@@ -88,15 +89,20 @@ object Sessions {
             rebuilt != null -> "Rebuilding the start of ${stage ?: "the stage you were on"}"
             else -> "Catching up to where you left off"
         }
-        val resume = if (rebuilt != null) {
+        val catchUp = when {
+            rebuilt != null -> info.getJSONObject("checkpoint").getLong("resume")
+            from != null && File(from, "input.txt").let { it.exists() && it.length() > 0 } -> vblanks(from)
+            else -> null
+        }
+        // A dump as soon as the presses have been played again: the next Continue loads it rather than playing them again.
+        val resume = catchUp?.let { vblank ->
             val presses = File(out, "resume.txt")
-            presses.writeText(info.getJSONObject("checkpoint").getString("presses"))
-            listOf("--input", "@${presses.path}", "--resume", info.getJSONObject("checkpoint").getLong("resume").toString(), "--resume-label", label)
-        } else from?.let { File(it, "input.txt") }?.takeIf { it.exists() && it.length() > 0 }?.let {
-            val presses = File(out, "resume.txt")
-            it.copyTo(presses)
-            listOf("--input", "@${presses.path}", "--resume", vblanks(from).toString(), "--resume-label", label)
+            if (rebuilt != null) presses.writeText(info.getJSONObject("checkpoint").getString("presses"))
+            else File(from!!, "input.txt").copyTo(presses)
+            record.put("catch_up", vblank)
+            listOf("--input", "@${presses.path}", "--resume", vblank.toString(), "--resume-label", label, "--state-at", vblank.toString())
         } ?: emptyList()
+        write(out, record)
         val start = if (dump != null) listOf("--state-in", File(out, "state-at-start.bin").path) else emptyList()
         val args = listOf(
             "--cue", cue.path, "--out", out.path, "--clock", clock, "--save", saves.path,
@@ -150,17 +156,16 @@ object Sessions {
     fun finish(session: File): Boolean {
         val record = read(session)
         if (record.has("ended")) return false
-        record.put("exit", exitReason(File(session, "log.txt")))
+        val log = File(session, "log.txt").takeIf { it.exists() }?.readText(Charsets.ISO_8859_1) ?: ""
+        record.put("exit", exitReason(log))
         record.put("ended", OffsetDateTime.now(ZoneOffset.UTC).format(UTC))
+        if (record.has("catch_up") && !log.contains("resumed at VBlank")) record.put("caught_up", false)
         write(session, record)
         return true
     }
 
     /** The first fatal error in the log; without one the run ended as the tester left it. */
-    private fun exitReason(log: File): String {
-        val text = if (log.exists()) log.readText(Charsets.ISO_8859_1) else ""
-        return Regex("""FATAL\] (.*)""").find(text)?.groupValues?.get(1)?.trim()?.take(200) ?: "quit"
-    }
+    private fun exitReason(log: String) = Regex("""FATAL\] (.*)""").find(log)?.groupValues?.get(1)?.trim()?.take(200) ?: "quit"
 
     fun unfinished(home: File): List<File> =
         File(home, "sessions").listFiles()?.filter { File(it, "session.json").exists() && !read(it).has("ended") }?.sorted() ?: emptyList()

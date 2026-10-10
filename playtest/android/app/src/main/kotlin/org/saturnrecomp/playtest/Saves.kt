@@ -4,14 +4,14 @@ import org.json.JSONObject
 import java.io.File
 
 /**
- * Save files: a game's playthroughs, put together from its sessions' records and progress lines (the runtime's
- * --progress, a line at each start the game's [checkpoint] names).
+ * Save files: a game's playthroughs, each the sessions that continue one another, put together from the sessions'
+ * records. A session's record names its save file (`save`); one played from the launcher's Play starts its own.
+ * Going on from a save file's latest session carries it on, and going on from an earlier session, or from a stage
+ * start (a progress line, the runtime's --progress at each start the game's [checkpoint] names), begins a save file
+ * of its own whose `parent` names where it came from.
  *
- * A save file starts where a session's first start is noted, or at a line whose first range is one of the
- * checkpoint's `fresh` values (a new game) once it has a start. A session that continues another (its record's
- * `save`, or `continues` before records had one) carries on the save file the other ended in. A session started
- * from one of a save file's starts begins a save file of its own, with that start (`starts_at`) as its first and
- * the save file it came from as its `parent`.
+ * Records from before save files were named this way have `continues` only, or a `save` with an "@": such a session
+ * carries on the save file of the session it continues while that one is the latest in it, and branches otherwise.
  */
 object Saves {
     /** One session, from this phone (`local`), the Worker, or both. */
@@ -32,6 +32,9 @@ object Saves {
                 local != null -> "none"
                 else -> remote?.optJSONObject("meta")?.optString("dump")?.ifEmpty { null } ?: "unknown"
             }
+
+        /** False for a session quit while it was still catching up, which ended short of the one it continued. */
+        val caughtUp: Boolean get() = record.optBoolean("caught_up", true)
     }
 
     enum class Kind {
@@ -42,74 +45,58 @@ object Saves {
 
     class Point(val kind: Kind, val session: Session, val vblank: Long, val line: String?, val words: List<String>)
 
-    class SaveFile(val id: String, val parent: JSONObject?) {
-        val sessions = mutableListOf<Session>()
+    class SaveFile(val id: String, val parent: JSONObject?, private val checkpoint: JSONObject?) {
+        val sessions = mutableListOf<Session>()     // oldest first
         val starts = mutableListOf<Point>()
-        var lastWords: List<String> = emptyList()
-        var replaced = false                    // a new game began in its last session, so where that ended is another's
+        var firstWords: List<String> = emptyList()  // a branch from a stage start: that start's, until a session notes its own
         val tester: String? get() = sessions.firstOrNull()?.tester
 
-        /** Where its last session ended, which a Continue goes on from; null once a new game replaced it. */
-        val end: Point?
-            get() {
-                if (replaced) return null
-                val s = sessions.last()
-                val kind = if (s.dump == "latest") Kind.EXACT else Kind.REPLAY
-                return Point(kind, s, s.vblanks, null, lastWords)
-            }
+        /** Where its latest session ended, which opening it goes on from. */
+        val end: Point get() = sessions.last().let { Point(endKind(it), it, it.vblanks, null, words(it)) }
+
+        /** Where `session` ended, in the words of the last stage start it noted. */
+        fun endOf(session: Session) = Point(endKind(session), session, session.vblanks, null, words(session))
+
+        val lastWords: List<String> get() = end.words
+
+        private fun words(s: Session) = s.progress.lastOrNull()?.let { describe(checkpoint, it) }?.ifEmpty { null } ?: firstWords
     }
 
-    class Library(val saves: List<SaveFile>, val others: List<Session>)
+    fun endKind(s: Session) = if (s.dump == "latest") Kind.EXACT else Kind.REPLAY
 
-    /** The save files `sessions` make, newest first, and the sessions in none. */
-    fun build(sessions: List<Session>, checkpoint: JSONObject?): Library {
+    /** The save files `sessions` make, the one played latest first. */
+    fun build(sessions: List<Session>, checkpoint: JSONObject?): List<SaveFile> {
         val accept = checkpoint?.optJSONArray("accept")?.let { a -> (0 until a.length()).map { a.getJSONArray(it).let { r -> r.getLong(0)..r.getLong(1) } } }
             ?: emptyList()
-        val fresh = checkpoint?.optJSONArray("fresh")?.let { a -> (0 until a.length()).map { a.getLong(it) }.toSet() } ?: emptySet()
         val saves = linkedMapOf<String, SaveFile>()
-        val seen = mutableMapOf<String, MutableSet<String>>()     // a save file's lines: a continuation copies the earlier ones
-        val endedIn = mutableMapOf<String, String>()
-        val others = mutableListOf<Session>()
-        for (s in sessions.sortedBy { it.id }) {
+        val saveOf = mutableMapOf<String, String>()
+        for (s in sessions.filter { it.caughtUp }.sortedBy { it.id }) {
             val r = s.record
-            val touched = linkedSetOf<String>()
-            var current: String? = when {
-                r.has("save") -> r.getString("save")
-                r.has("continues") -> endedIn[r.getString("continues")]
-                else -> null
-            }
-            if (current != null && current !in saves) {
-                val save = SaveFile(current, r.optJSONObject("parent"))
-                saves[current] = save
-                r.optString("starts_at").takeIf { it.isNotEmpty() }?.let { line ->
-                    save.starts.add(Point(Kind.STAGE, s, r.optLong("resume"), line, describe(checkpoint, line)))
-                    save.lastWords = describe(checkpoint, line)
+            val continues = r.optString("continues").ifEmpty { null }
+            val named = r.optString("save").takeIf { it.isNotEmpty() && '@' !in it }
+            val carried = continues?.let { saveOf[it] }?.takeIf { saves[it]!!.sessions.last().id == continues }
+            val id = named ?: carried ?: s.id
+            val save = saves.getOrPut(id) {
+                val parent = r.optJSONObject("parent")
+                    ?: continues?.let { c -> JSONObject().put("session", c).also { p -> saveOf[c]?.let { p.put("save", it) } } }
+                SaveFile(id, parent, checkpoint).apply {
+                    r.optString("starts_at").takeIf { it.isNotEmpty() }?.let { line ->
+                        firstWords = describe(checkpoint, line)
+                        starts.add(Point(Kind.STAGE, s, r.optLong("resume"), line, firstWords))
+                    }
                 }
             }
+            save.sessions.add(s)
+            saveOf[s.id] = id
+            // a session's progress.txt starts with the lines of the one it continues
             for (line in s.progress) {
                 val first = first(line) ?: continue
                 val vblank = line.substringBefore(" ").toLongOrNull() ?: continue
-                if (current != null && seen[current]?.contains(line) == true) continue
-                val started = current != null && saves[current]!!.starts.isNotEmpty()
-                if (first in fresh && (current == null || started) || (current == null && accept.any { first in it })) {
-                    current?.let { saves[it]!!.replaced = true }
-                    current = "${s.id}@$vblank"
-                    saves[current] = SaveFile(current, null)
-                }
-                touched.add(current ?: continue)
-                val save = saves[current ?: continue]!!
-                seen.getOrPut(save.id) { mutableSetOf() }.add(line)
-                save.lastWords = describe(checkpoint, line)
-                if (accept.any { first in it } && kept(checkpoint, line) != null) save.starts.add(Point(Kind.STAGE, s, vblank, line, save.lastWords))
+                if (save.starts.any { it.line == line } || accept.none { first in it } || kept(checkpoint, line) == null) continue
+                save.starts.add(Point(Kind.STAGE, s, vblank, line, describe(checkpoint, line)))
             }
-            current?.let { touched.add(it) }
-            if (current == null) others.add(s)
-            else endedIn[s.id] = current
-            for (id in touched) saves[id]!!.sessions.add(s)
         }
-        // newest first: by the last session played, then the save file begun latest in it
-        val list = saves.values.filter { it.sessions.isNotEmpty() }.reversed().sortedByDescending { it.sessions.last().id }
-        return Library(list, others.sortedByDescending { it.id })
+        return saves.values.sortedByDescending { it.sessions.last().id }
     }
 
     /** The first kept range of a progress line, big-endian. */
@@ -192,7 +179,7 @@ object Saves {
     fun meta(session: File): JSONObject {
         val record = Sessions.read(session)
         val out = JSONObject()
-        for (key in listOf("save", "parent", "starts_at", "resume", "continues", "clock", "rebuilds")) if (record.has(key)) out.put(key, record.get(key))
+        for (key in listOf("save", "parent", "starts_at", "resume", "continues", "clock", "rebuilds", "caught_up")) if (record.has(key)) out.put(key, record.get(key))
         out.put("dump", when {
             File(session, "state.bin").exists() -> "latest"
             File(session, "state-at-start.bin").exists() -> "start"

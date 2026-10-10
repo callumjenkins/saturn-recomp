@@ -26,9 +26,9 @@ import java.time.format.DateTimeFormatter
 import kotlin.concurrent.thread
 
 /**
- * The save files (Saves): every tester's, from this phone and the Worker, picked by the tester's name. Choosing where
- * one left off, or one of its stage starts, returns to the launcher with what to play (EXTRA_*), any session it needs
- * downloaded first.
+ * The save files (Saves): every tester's, from this phone and the Worker, picked by the tester's name. Choosing one
+ * goes on from its latest session; opening it lists its earlier sessions and stage starts to branch from. Either
+ * returns to the launcher with what to play (EXTRA_*), any session it needs downloaded first.
  */
 class SavesActivity : Activity() {
     private lateinit var info: JSONObject
@@ -37,7 +37,7 @@ class SavesActivity : Activity() {
     private lateinit var body: LinearLayout
     private lateinit var picker: Spinner
     private lateinit var status: TextView
-    private var library = Saves.Library(emptyList(), emptyList())
+    private var library = emptyList<Saves.SaveFile>()
     private var sources = listOf(THIS_PHONE)
     private var opened: Saves.SaveFile? = null
     private var busy = false
@@ -125,18 +125,11 @@ class SavesActivity : Activity() {
 
     private fun showList() {
         body.removeAllViews()
-        val saves = library.saves.filter { save -> save.sessions.any { mine(it) } }
-        val others = library.others.filter { mine(it) }
-        if (saves.isEmpty() && others.isEmpty()) body.addView(text(
+        val saves = library.filter { save -> save.sessions.any { mine(it) } }
+        if (saves.isEmpty()) body.addView(text(
             if (source() == THIS_PHONE) "Nothing played on this phone yet. Pick a tester's name above to carry on one of theirs."
             else "${source()} has no sessions yet.", 15f, MUTED))
         for (save in saves) body.addView(saveCard(save))
-        if (others.isNotEmpty()) {
-            body.addView(section("Other sessions", "Battles, Master Game, and play that never reached a stage start."))
-            for (s in others) body.addView(row(
-                started(s), "${s.vblanks / 3600} min in" + (s.tester?.let { " · $it" } ?: ""),
-                endKind(s), { choose("Continue this session?", "It goes on from where it ended.", s, null) }))
-        }
         body.addView(legend())
     }
 
@@ -145,33 +138,51 @@ class SavesActivity : Activity() {
         val top = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         top.addView(text(save.lastWords.firstOrNull() ?: "Save file", 20f, TEXT, bold = true), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         if (save.parent != null) top.addView(badge("Branch", PURPLE))
+        top.addView(kindBadge(save.end), LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            leftMargin = (6 * dp).toInt()
+        })
         card.addView(top)
         save.lastWords.drop(1).takeIf { it.isNotEmpty() }?.let { card.addView(text(it.joinToString(" · "), 15f, TEXT)) }
         val first = save.sessions.first()
+        val n = save.sessions.size
         card.addView(text(
-            "Started ${started(first)} · ${save.sessions.last().vblanks / 3600} min in · ${save.starts.size} stage start${if (save.starts.size == 1) "" else "s"}" + (save.tester?.let { " · $it" } ?: ""),
+            "Started ${started(first)} · ${save.end.vblank / 3600} min in · $n session${if (n == 1) "" else "s"}" + (save.tester?.let { " · $it" } ?: ""),
             13f, MUTED).apply { setPadding(0, (6 * dp).toInt(), 0, 0) })
         card.setOnClickListener {
-            opened = save
-            showSave(save)
+            val earlier = save.sessions.size > 1 || save.starts.isNotEmpty()
+            choose("Continue ${save.lastWords.firstOrNull() ?: "this save file"}?", explain(save.end), save.end.session, save,
+                if (earlier) ({ open(save) }) else null)
         }
+        card.setOnLongClickListener { open(save); true }
         return card
+    }
+
+    private fun open(save: Saves.SaveFile) {
+        opened = save
+        showSave(save)
     }
 
     private fun showSave(save: Saves.SaveFile) {
         body.removeAllViews()
         body.addView(text(save.lastWords.firstOrNull() ?: "Save file", 22f, TEXT, bold = true))
         save.parent?.let { p ->
-            val from = library.saves.firstOrNull { it.id == p.optString("save") }
+            val from = library.firstOrNull { it.id == p.optString("save") }
             body.addView(text("Branched from " + (from?.let { "the save file started ${started(it.sessions.first())}" } ?: "another save file") +
                 (p.optString("stage").takeIf { it.isNotEmpty() }?.let { ", at $it" } ?: ""), 14f, MUTED))
         }
 
-        val end = save.end
-        if (end == null) body.addView(text("A new game started after this one, so it goes on only from its stage starts.", 14f, MUTED).apply {
-            setPadding(0, (12 * dp).toInt(), 0, 0)
-        })
-        else body.addView(continueCard(save, end))
+        body.addView(continueCard(save, save.end))
+
+        if (save.sessions.size > 1) {
+            body.addView(section("Branch from an earlier session", "This starts a new save file from where that session ended. This one stays as it is."))
+            for (s in save.sessions.dropLast(1).asReversed()) {
+                val end = save.endOf(s)
+                body.addView(row(
+                    end.words.firstOrNull() ?: started(s),
+                    (if (end.words.isNotEmpty()) "${started(s)} · " else "") + "${s.vblanks / 3600} min in" + (s.tester?.let { " · $it" } ?: ""),
+                    kindBadge(end), { branchFrom(save, end) }))
+            }
+        }
 
         if (save.starts.isNotEmpty()) {
             body.addView(section("Go back to a stage start", "This starts a new save file from that stage. This one stays as it is."))
@@ -191,7 +202,7 @@ class SavesActivity : Activity() {
         if (end.words.isNotEmpty()) resume.addView(text(end.words.joinToString(" · "), 15f, TEXT))
         resume.addView(text("${end.vblank / 3600} min in, last played ${started(end.session)}" + (end.session.tester?.let { " by $it" } ?: ""), 13f, MUTED))
         resume.background = rounded(ACCENT_CARD, 16f)
-        resume.setOnClickListener { choose("Continue where you left off?", explain(end), end.session, save) }
+        resume.setOnClickListener { choose("Continue where you left off?", explain(end), end.session, save, null) }
         return resume
     }
 
@@ -200,12 +211,16 @@ class SavesActivity : Activity() {
         else -> badge("Replay", AMBER)
     }
 
-    private fun endKind(s: Saves.Session) = if (s.dump == "latest") badge("Exact", GREEN) else badge("Replay", AMBER)
-
     private fun explain(p: Saves.Point) = when {
         p.kind == Saves.Kind.EXACT -> "It loads the moment the game last saved itself, at most a minute before you stopped, and plays that minute's presses again."
-        p.session.dump == "start" -> "It loads where that session started and plays every press since, about ${p.vblank / 3600} minutes of them at full speed."
-        else -> "It plays every press since power-on again at full speed, about ${p.vblank / 3600} minutes of them, before you take over."
+        p.session.dump == "start" -> "It loads where that session started and plays every press since, about ${p.vblank / 3600} minutes of them at full speed. " + CONVERTS
+        else -> "It plays every press since power-on again at full speed, about ${p.vblank / 3600} minutes of them, before you take over. " + CONVERTS
+    }
+
+    private fun branchFrom(save: Saves.SaveFile, end: Saves.Point) {
+        val where = end.words.firstOrNull() ?: "where that session ended"
+        choose("Branch from $where?", explain(end) + "\n\nIt begins a new save file, and this one stays as it is.", end.session, null, null,
+            JSONObject().put("save", save.id).put("session", end.session.id).put("vblank", end.vblank).put("stage", where))
     }
 
     private fun branch(save: Saves.SaveFile, p: Saves.Point) {
@@ -224,16 +239,18 @@ class SavesActivity : Activity() {
             .show()
     }
 
-    private fun choose(title: String, message: String, session: Saves.Session, save: Saves.SaveFile?) {
+    /** Asks before playing on from `session`: in `save`, or as a new save file branched from `parent`. */
+    private fun choose(title: String, message: String, session: Saves.Session, save: Saves.SaveFile?, more: (() -> Unit)?, parent: JSONObject? = null) {
         AlertDialog.Builder(this)
             .setTitle(title)
             .setMessage(message)
-            .setPositiveButton("Play") { _, _ -> resume(session, save) }
+            .setPositiveButton("Play") { _, _ -> resume(session, save, parent) }
             .setNegativeButton("Cancel", null)
+            .apply { if (more != null) setNeutralButton("Go back…") { _, _ -> more() } }
             .show()
     }
 
-    private fun resume(session: Saves.Session, save: Saves.SaveFile?) {
+    private fun resume(session: Saves.Session, save: Saves.SaveFile?, parent: JSONObject?) {
         if (busy) return
         busy = true
         status.text = if (session.local == null) "Downloading the session…" else ""
@@ -241,7 +258,7 @@ class SavesActivity : Activity() {
             try {
                 val dir = session.local ?: Sessions.fetch(info.getString("endpoint"), info.getString("product"), session.remote!!, home)
                 runOnUiThread {
-                    setResult(RESULT_OK, Intent().putExtra(EXTRA_FROM, dir.path).putExtra(EXTRA_SAVE, save?.id))
+                    setResult(RESULT_OK, Intent().putExtra(EXTRA_FROM, dir.path).putExtra(EXTRA_SAVE, save?.id).putExtra(EXTRA_PARENT, parent?.toString()))
                     finish()
                 }
             } catch (e: Exception) {
@@ -332,7 +349,7 @@ class SavesActivity : Activity() {
         setPadding(0, (28 * dp).toInt(), 0, 0)
         for ((b, what) in listOf(
             badge("Exact", GREEN) to "The moment the game last saved itself, at most a minute before the session stopped.",
-            badge("Replay", AMBER) to "Every press played again from an earlier point, which takes as long as that stretch at full speed.",
+            badge("Replay", AMBER) to "Every press played again from an earlier point at full speed. Once it has caught up it is exact.",
             badge("Rebuilt", BLUE) to "The stage from its start, with the score, lives and power-ups carried into it. Enemies and items start fresh.",
         )) {
             val line = LinearLayout(this@SavesActivity).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, (6 * dp).toInt(), 0, 0) }
@@ -348,8 +365,9 @@ class SavesActivity : Activity() {
         const val EXTRA_SAVE = "save"           // the save file it carries on
         const val EXTRA_LINE = "line"           // a progress line to start at, as a new save file
         const val EXTRA_CLOCK = "clock"
-        const val EXTRA_PARENT = "parent"
+        const val EXTRA_PARENT = "parent"       // with EXTRA_LINE or EXTRA_FROM: the save file a new one branches from
         private const val THIS_PHONE = "This phone"
+        private const val CONVERTS = "Once it has caught up, the game saves itself there, so the next Continue is exact."
         private val BACKGROUND = Color.rgb(0x11, 0x13, 0x18)
         private val CARD = Color.rgb(0x1C, 0x1F, 0x27)
         private val ACCENT_CARD = Color.rgb(0x1E, 0x2A, 0x45)

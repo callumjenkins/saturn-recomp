@@ -32,21 +32,21 @@ controller's Back or Select button pauses the game and opens a menu. From there 
 on-screen pad on or off, make it bigger or smaller, switch it between the black Western pad and
 the white Japanese one, hide the menu button, and Quit, which saves and sends the session.
 
-"Save files…", in the launcher or the game's menu, lists your playthroughs. Each Normal Game you
-start is a save file, carried on by every session that continues it, on any phone. Open one to
-continue where you left off, or to go back to any stage you reached in it, shown with your score,
-lives and power-ups at the time. Going back starts a new save file from there, and the old one
-stays as it was. Each way back in has a label:
+"Save files…", in the launcher or the game's menu, lists your playthroughs. Play starts a new
+save file, and every session that continues it carries it on, on any phone. Tap one to continue
+where you left off. Choose "Go back…" (or hold the save file) to branch from an earlier session in
+it, or from any stage you reached, shown with your score, lives and power-ups at the time. Going
+back starts a new save file from there, and the old one stays as it was. Each way back in has a
+label:
 
   Exact    where you stopped, from the save the game makes every minute and when you quit, with
            at most the last minute's presses played again
   Replay   where you stopped, with every press since an earlier point played again at full speed,
-           which takes longer
+           which takes longer; once it has caught up the game saves there, so next time it's Exact
   Rebuilt  the stage from its start, with what you carried into it; enemies and items start fresh
 
 In Normal Game, if a newer build can't load where you stopped, it starts you at the beginning of
-the stage you were on instead. Battles and Master Game sit under "Other sessions" and continue
-where they ended. Pick a name from the drop-down at the top to see that tester's save files from
+the stage you were on instead. Pick a name from the drop-down at the top to see that tester's save files from
 every phone they played on, yours from another phone included.
 
 What is recorded

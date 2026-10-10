@@ -97,19 +97,21 @@ from `state-at-start.bin` when a session has one.
 ### Save files
 
 "Save files…" in the launcher, and in the game's menu (the runtime's `--after`), shows a game's
-playthroughs, built from its sessions by `Saves.kt`. A save file starts at a session's first
-stage start, or at a line whose first range is one of the checkpoint's `fresh` values, a new game.
-Sessions that continue it carry it on, so it spans sessions, phones and testers. Each of its stage
-starts is a restore point, shown in words by the checkpoint's `show`, and the screen labels each
-way back in:
+playthroughs, built from its sessions by `Saves.kt`. A save file is the sessions that continue one
+another, named by each record's `save`: Play starts one, and continuing its latest session carries
+it on, so it spans sessions, phones and testers. Tapping one continues its latest session. Opening
+it lists its earlier sessions and its stage starts (progress lines, shown in words by the
+checkpoint's `show`); going on from either begins a new save file whose record's `parent` names
+where it branched from. A session quit before it caught up (`caught_up` false) is left out, since
+it ended short of the one it continued. The screen labels each way back in:
 
 - Exact: where the save file's last session ended, from its latest dump (`state.bin`), with at
   most a minute of presses played again.
 - Replay: where it ended, from the dump the session started from, or from power-on, with every
-  press since played again.
-- Rebuilt: a stage start, from power-on through the checkpoint's presses and writes. Going back to
-  one begins a new save file, its record's `parent` naming the point it branched from and its
-  `starts_at` the line, and leaves the old one as it was.
+  press since played again. The new session dumps itself once it has caught up (`--state-at`), so
+  the next Continue is exact.
+- Rebuilt: a stage start, from power-on through the checkpoint's presses and writes, its record's
+  `starts_at` the line.
 
 The list holds every tester's save files, picked by the tester's name. The Worker answers
 `GET /api/games/PRODUCT/sessions` and `.../sessions/ID/bundle` without a token, since a session

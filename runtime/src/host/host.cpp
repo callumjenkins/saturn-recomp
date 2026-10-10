@@ -20,7 +20,7 @@
 // gamepad's Back or Guide, or the menu button at the top of a touchscreen opens a menu that pauses
 // the game, sets the touch pad, and quits. F12 saves the picture (out/shot-VBLANK.png); F11 or Alt+Enter switches
 // fullscreen. Closing the window, or Quit in the menu, ends the run. Until --resume's VBlank the run
-// goes as fast as it can, without sound, with a card in place of the picture for how far it has got.
+// goes as fast as it can, without sound, dimmed under a card saying how far it has got.
 //
 // Sound (sound.cpp) comes as it is made, in virtual time, into an SDL audio
 // stream at 44 100 Hz: the window's pace keeps it level with the device.
@@ -876,13 +876,14 @@ static void draw_menu() {
 
 static SDL_FRect g_dst;                         // where the picture goes
 
-// While --resume plays its presses: a card saying what the run is getting to, and how far it has got,
-// in place of the game going by at speed.
+// While --resume plays its presses: the game going by at speed, dimmed, under a card saying what the
+// run is getting to and how far it has got.
 static void draw_catching_up() {
     static uint64_t from = sat_vblanks();
+    ui_fill_rounded({0, 0, (float)g_out_w, (float)g_out_h}, 0, rgba(0, 0, 0, 0.45f));
     float u = display_scale(), w = std::min(0.86f * g_out_w, 420 * u), h = 120 * u;
-    SDL_FRect card = {(g_out_w - w) / 2, (g_out_h - h) / 2, w, h};
-    ui_fill_rounded(card, 20 * u, rgba(0.09f, 0.1f, 0.13f, 1));
+    SDL_FRect card = {(g_out_w - w) / 2, g_out_h - h - std::max(32 * u, 0.08f * g_out_h), w, h};
+    ui_fill_rounded(card, 20 * u, rgba(0.09f, 0.1f, 0.13f, 0.92f));
     std::string label = g_cfg.resume_label.empty() ? "Getting back to where you were" : g_cfg.resume_label;
     ui_text(card.x + w / 2, card.y + 40 * u, 18 * u, label, rgba(0.95f, 0.96f, 0.98f, 1), true);
     float done = g_cfg.resume > from ? (float)(sat_vblanks() - from) / (float)(g_cfg.resume - from) : 1;
@@ -897,8 +898,8 @@ static void draw() {
     SDL_SetRenderDrawColor(g_ren, 0, 0, 0, 255);
     SDL_RenderClear(g_ren);
     SDL_SetRenderDrawBlendMode(g_ren, SDL_BLENDMODE_BLEND);
+    if (g_tex) SDL_RenderTexture(g_ren, g_tex, nullptr, &g_dst);
     if (sat_resuming()) draw_catching_up();
-    else if (g_tex) SDL_RenderTexture(g_ren, g_tex, nullptr, &g_dst);
     if (g_menu_open) draw_menu();
     else {
         if (touch_shown()) draw_touch_pad();

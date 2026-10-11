@@ -10,7 +10,8 @@ written for Hitachi SHC's output (and GCC's, which is close):
 
 1. Seeds: the entry point, the caller's list, and every call target found
    on the way: `bsr` targets, and `jsr @rn` whose rn was loaded from the
-   literal pool in the same straight line (`mov.l @(disp,PC),rn`).
+   literal pool in the same straight line (`mov.l @(disp,PC),rn`), plus
+   handlers in recognised relative word tables used by `jsr`.
 2. A function is the code reachable from its entry: conditional branches
    (both ways), `bra`, and `jmp @rn` with a literal target (SHC's branch
    for distances beyond `bra`'s 4 KiB), switch tables, fall-through. A
@@ -65,6 +66,10 @@ from .. import sh2
 TERMINATORS = {"rts", "rte", "bra", "jmp", "braf"}
 
 
+_FLOW = ("bt", "bf", "bt/s", "bf/s", "bra", "bsr", "jmp", "jsr", "rts", "rte", "braf", "bsrf")
+_GBR_SIZE = {"mov.b": 1, "mov.w": 2, "mov.l": 4}
+
+
 def _writes(ins):
     """Registers an instruction writes (for the literal look-back)."""
     f = ins.fmt
@@ -115,7 +120,7 @@ class Function:
     def __init__(self, entry):
         self.entry = entry
         self.code = set()          # instruction addresses reached
-        self.calls = set()         # call targets (bsr, jsr with literal)
+        self.calls = set()         # call targets
         self.tails = set()         # tail calls to other entries
         self.unresolved = []       # (addr, what) indirect jumps not resolved
         self.bad = None            # first problem met, or None
@@ -136,6 +141,7 @@ class Program:
         self._pending = list(seeds) or [img.base]
         self._rejected = set()
         self._data_addrs, self._scanned = set(), set()   # _data_addresses, incrementally
+        self._indexed = None                              # _indexed_tables
         self._lits, self._lit_scanned = set(), set()     # _literal_values, likewise
         self.run()
 
@@ -346,6 +352,106 @@ class Program:
             return None
         span = len(entries) * size
         return entries, table & ~1, ((table + span + 1) & ~1) - (table & ~1)
+
+    def _jump_value(self, jump, window=16):
+        """The register `jump` goes through, evaluated over the straight line before it:
+        ("lit", v), ("mask", m) for a value and-ed with constant m, ("word", base, m)
+        for a signed word read at base plus r0 (m when r0 was masked), ("add", x, y),
+        or None. A word stored to GBR and loaded back keeps its value.
+        """
+        img = self.img
+        start = jump
+        while start > jump - 2 * window and img.contains(start - 2) \
+                and img.insn(start - 2).op not in _FLOW:
+            start -= 2
+        regs, gbr = {}, {}
+        for a in range(start, jump, 2):
+            ins = img.insn(a)
+            f = ins.fmt
+            if f in ("mov.l @T,Rn", "mov.w @T,Rn"):
+                v = img.literal(ins)
+                regs[ins.n] = ("lit", v) if v is not None else None
+            elif f == "mov #imm,Rn":
+                regs[ins.n] = ("lit", ins.imm & 0xFFFFFFFF)
+            elif f == "and #imm,r0":
+                regs[0] = ("mask", ins.imm)
+            elif f == "and Rm,Rn":
+                lit = next((x for x in (regs.get(ins.n), regs.get(ins.m)) if x and x[0] == "lit"), None)
+                regs[ins.n] = ("mask", lit[1]) if lit else None
+            elif f == "mov.w @(r0,Rm),Rn":
+                index = regs.get(0)
+                regs[ins.n] = ("word", regs.get(ins.m), index[1] if index and index[0] == "mask" else None)
+            elif f == "mov Rm,Rn":
+                regs[ins.n] = regs.get(ins.m)
+            elif f == "add Rm,Rn":
+                regs[ins.n] = ("add", regs.get(ins.n), regs.get(ins.m))
+            elif f.endswith("r0,@(disp,gbr)"):
+                size = _GBR_SIZE[ins.op]
+                at = ins.disp
+                gbr = {o: e for o, e in gbr.items() if o + e[0] <= at or at + size <= o}
+                gbr[at] = (size, regs.get(0))
+            elif f.startswith("mov.w @(disp,gbr)"):
+                stored = gbr.get(ins.disp)
+                # A word stored and loaded back is the same signed word.
+                value = stored[1] if stored and stored[0] == 2 else None
+                keeps = value and (value[0] == "word" or (value[0] == "mask" and value[1] < 0x8000))
+                regs[0] = value if keeps else None
+            else:
+                if f.endswith(",gbr") or ("@(r0,gbr)" in f and ins.op != "tst.b"):
+                    gbr = {}
+                for r in _writes(ins):
+                    regs[r] = None
+        return regs.get(img.insn(jump).n)
+
+    def _relative_word_switch(self, jump):
+        """Targets of `jmp`/`jsr` to T plus a signed word read from T, the classic
+        ports' translation of 68000 `move.w table(pc,d0.w),d1; jmp table(pc,d1.w)`.
+
+        The offset may be read from up to two bytes before T, for a routine counter
+        that starts at 2. Handlers follow the table, so it ends at the nearest one,
+        at the last index a mask allows, or at the first word that cannot be an entry.
+        """
+        img = self.img
+        target = self._jump_value(jump)
+        if not target or target[0] != "add":
+            return None
+        table = next((x[1] for x in target[1:] if x and x[0] == "lit"), None)
+        word = next((x for x in target[1:] if x and x[0] == "word" and x[1] and x[1][0] == "lit"), None)
+        if table is None or word is None or not 0 <= table - word[1][1] <= 2:
+            return None
+        span, k, targets = 2048, 0, []
+        if word[2] is not None:
+            span = word[2] + 2 - (table - word[1][1])
+        while k < span and img.contains(table + k, 2):
+            offset = img.u16(table + k)
+            t = table + offset
+            if offset & 0x8001 or offset <= k or not self.inside(t) or img.insn(t).fmt.startswith(".word"):
+                break
+            targets.append(t)
+            span = min(span, offset)
+            k += 2
+        if not targets or (k >= 2048 and table + k not in targets) or any(table <= t < table + k for t in targets):
+            return None
+        return targets, table, k
+
+    def _branch_table_switch(self, jump):
+        """Targets of `jmp` to T plus a computed index, where T starts a run of
+        `bra; nop` pairs: 68000 `jmp table(pc,d0.w)` into a list of `bra.w`.
+        The pairs are code, so the table marks no data.
+        """
+        target = self._jump_value(jump)
+        if not target or target[0] != "add":
+            return None
+        lits = [x for x in target[1:] if x and x[0] == "lit"]
+        if len(lits) != 1:
+            return None
+        table, targets = lits[0][1], []
+        while self.inside(table + 4 * len(targets)) and self.img.contains(table + 4 * len(targets), 4):
+            a = table + 4 * len(targets)
+            if self.img.insn(a).op != "bra" or self.img.u16(a + 2) != 0x0009:
+                break
+            targets.append(a)
+        return (targets, table, 0) if len(targets) >= 2 else None
 
     def _mova_base(self, jmp):
         """T for `mova T,r0; ... add rX,r0; jmp @r0` in the straight line before
@@ -692,6 +798,13 @@ class Program:
                     f.calls.add(r[1])
                 elif r and r[0] == "ptr":
                     self.ext_calls[r[1]] += 1
+                elif sw := self._relative_word_switch(a) or self._branch_table_switch(a):
+                    targets, table, size = sw
+                    switches[a] = targets
+                    f.calls.update(targets)
+                    for k in range(0, size, 2):
+                        data.add(table + k)
+                        f.tables.add(table + k)
                 else:
                     pending.append((a, "jsr"))
                 a += 4
@@ -726,7 +839,8 @@ class Program:
                     self.ext_calls[r[1]] += 1
                 else:
                     sw = self._abs_switch(a) or self._byte_switch(a) or self._byte_switch_offset(a) \
-                        or self._mova_switch(a) or self._record_switch(a)
+                        or self._mova_switch(a) or self._relative_word_switch(a) \
+                        or self._branch_table_switch(a) or self._record_switch(a)
                     if sw:
                         targets, table, size = sw
                         switches[a] = targets
@@ -829,8 +943,31 @@ class Program:
         self._scanned |= self.code
         return out
 
+    def _indexed_tables(self):
+        """Literal values loaded anywhere in the image and then used as the base
+        of an `@(r0,Rm)` access: tables, even before the code reading them is found."""
+        if self._indexed is None:
+            img, self._indexed = self.img, set()
+            for a, w in img.words():
+                if w >> 12 != 0xD:
+                    continue
+                v = img.literal(img.insn(a))
+                if v is None or not self.lo <= v < self.hi:
+                    continue
+                r = (w >> 8) & 15
+                for b in range(a + 2, min(a + 18, img.end - 1), 2):
+                    j = img.insn(b)
+                    if j.op in _FLOW:
+                        break
+                    if j.m == r and "@(r0,Rm)" in j.fmt:
+                        self._indexed.add(v)
+                        break
+                    if r in _writes(j):
+                        break
+        return self._indexed
+
     def _pointer_seeds(self):
-        data_addrs = self._data_addresses()
+        data_addrs = self._data_addresses() | self._indexed_tables()
         cands, tabled = set(), set()
         words = [a for a in self.data if not a & 3 and a + 2 in self.data]
         # and the unclassified words: pointer tables in the data section
@@ -952,7 +1089,7 @@ class Program:
         """
         added = 0
         for a in sorted(self.data - self.tables):
-            if a & 3 or a + 2 not in self.data:
+            if a & 3 or a + 2 not in self.data or not self.img.contains(a, 4):
                 continue
             v = self.img.u32(a)
             if v in self.code and v not in self.funcs and v not in self._rejected:

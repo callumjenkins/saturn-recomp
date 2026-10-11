@@ -90,6 +90,8 @@ static void vblank_in(uint64_t now) {
     host_pace(now);
 }
 
+int video_line() { return (int)(g_line_abs % kLines); }
+
 void video_tick(uint64_t now) {
     uint64_t target = now / (kFrameNs / kLines);
     while (g_line_abs < target) {

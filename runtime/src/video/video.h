@@ -31,6 +31,7 @@ struct Frame {
     std::vector<uint32_t> px;                       // 0x00RRGGBB, w*h, top row first
 };
 void vdp2_compose(Frame& out);                       // the picture of the field that has just ended
+int video_line();                                    // the raster line, 0 as VBlank ends
 int vdp2_lines();                                    // 224, 240 or 256 (TVMD VRESO)
 
 void write_png(const std::string& path, const Frame& f);   // png.cpp

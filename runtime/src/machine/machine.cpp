@@ -183,6 +183,43 @@ static void writes_due() {
     }
 }
 
+// --cheat MODULE:ADDR=HEX or MODULE:ADDR|=HEX,...: once a VBlank, while that module is active, the
+// bytes written, or or-ed into what is there, through the CPU's stores
+struct Cheat { const SH2Module* module; uint32_t addr; bool or_in; std::vector<uint8_t> bytes; };
+static std::vector<Cheat> g_cheats;
+static uint64_t g_cheat_vblank = ~0ull;
+
+static void parse_cheats(const std::string& spec) {
+    size_t i = 0;
+    while (i < spec.size()) {
+        size_t j = spec.find(',', i);
+        std::string item = spec.substr(i, j == std::string::npos ? std::string::npos : j - i);
+        i = j == std::string::npos ? spec.size() : j + 1;
+        char name[64], op[3], hex[1024];
+        unsigned addr;
+        if (std::sscanf(item.c_str(), "%63[^:]:%x%2[|=]%1023[0-9A-Fa-f]", name, &addr, op, hex) != 4 ||
+            (std::strcmp(op, "=") && std::strcmp(op, "|=")) || std::strlen(hex) % 2)
+            sat_fatal("--cheat: %s is not MODULE:ADDR=HEX or MODULE:ADDR|=HEX", item.c_str());
+        const SH2Module* m = sh2_module(name);
+        if (!m) sat_fatal("--cheat: no module %s in this build", name);
+        Cheat c{m, addr, op[0] == '|', {}};
+        for (size_t k = 0; hex[k]; k += 2) c.bytes.push_back((uint8_t)std::stoul(std::string(hex + k, 2), nullptr, 16));
+        g_cheats.push_back(c);
+    }
+}
+
+static void cheats_due() {
+    if (g_cheats.empty() || sat_vblanks() == g_cheat_vblank) return;
+    g_cheat_vblank = sat_vblanks();
+    for (const Cheat& c : g_cheats) {
+        bool active = false;
+        for (int i = 0; i < sh2_active_slots() && !active; ++i) active = sh2_active_slot(i) == c.module;
+        if (!active) continue;
+        for (size_t k = 0; k < c.bytes.size(); ++k)
+            st8(c.addr + (uint32_t)k, c.or_in ? (uint8_t)(ld8(c.addr + (uint32_t)k) | c.bytes[k]) : c.bytes[k]);
+    }
+}
+
 // --progress FILE: "VBLANK HEX HEX ...", the bytes of each --progress-keep range, added whenever the
 // first range changes. None while --resume's script plays, whose run left its own lines.
 struct Range { uint32_t addr, n; };
@@ -468,6 +505,7 @@ void master_poll_devices() {
     uint64_t now = sat_now();
     video_tick(now);
     writes_due();
+    cheats_due();
     agent_poll();
     cd_tick();
     smpc_tick();
@@ -492,12 +530,17 @@ void sh2_poll(SH2Context& c) {
     onchip_deliver(c);
 }
 
-static int g_int_depth;
+static int g_int_depth, g_int_vector = -1;
 
 bool sat_in_interrupt() { return g_int_depth > 0; }
+int sat_interrupt_vector() { return g_int_vector; }
 
 void sat_interrupt(SH2Context& c, uint32_t vec, uint32_t level) {
-    struct Depth { Depth() { ++g_int_depth; } ~Depth() { --g_int_depth; } } depth;
+    struct Depth {
+        int outer = g_int_vector;
+        explicit Depth(uint32_t vec) { ++g_int_depth; g_int_vector = (int)(vec & 0x7F); }
+        ~Depth() { --g_int_depth; g_int_vector = outer; }
+    } depth(vec);
     ++g_ints[vec & 0x7F];
     SH2Context saved = c;
     uint32_t target = ld32(c.vbr + vec * 4);
@@ -575,6 +618,7 @@ int saturn_main(const SaturnConfig& cfg) {
     }
     smpc_input_script(cfg.input);
     parse_writes(cfg.writes);
+    parse_cheats(cfg.cheats);
     parse_keep(cfg.progress_keep);
     if (!cdrom_open(cfg.cue)) { std::fprintf(stderr, "cannot open the disc %s\n", cfg.cue.c_str()); return 2; }
     g_master = SH2Context{};

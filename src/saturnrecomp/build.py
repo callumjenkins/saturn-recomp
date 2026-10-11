@@ -75,7 +75,10 @@ def recompile(game, log=print):
         specs.append((m.name, m.file, m.base, sorted(seeds)))
     tasks = (game.tasks.setjmp, game.tasks.longjmp) if game.tasks else None
     out = os.path.join(game.build, "recomp")
-    generate(specs, out, log=log, hooks=game.hooks, tasks=tasks)
+    generate(specs, out, log=log, hooks=game.hooks, tasks=tasks,
+             runtime_literals={m.name for m in game.modules if m.runtime_literals},
+             callable_entries={m.name for m in game.modules if m.callable_entry},
+             unwind_returns={m.name for m in game.modules if m.unwind_returns})
     build_dir = os.path.join(game.build, "recomp-build")
     # options left out of game.toml must not survive in CMake's cache
     if os.path.exists(os.path.join(build_dir, "CMakeCache.txt")):

@@ -28,14 +28,17 @@ def run(game, args, out, timeout=900):
 
 
 def owner(game, addr, log):
-    """The module whose image holds `addr`. Where images overlap, the one the log last saw running."""
+    """For overlapping images, use the poll summary, then the latest program start."""
     hits = [m.name for m in game.modules if m.base <= addr < m.base + os.path.getsize(m.file)]
     if len(hits) == 1:
         return hits[0]
-    polls = re.search(r"last polls in: (.*)", log)
-    for name in re.findall(r"(\w+):[0-9A-F]{8}", polls.group(1) if polls else ""):
+    polls = re.findall(r"last polls in: (.*)", log)
+    for name in re.findall(r"(?:^|\s)(.+?):[0-9A-F]{8} x\d+(?=\s|$)", polls[-1] if polls else ""):
         if name in hits:
             return name
+    starts = re.findall(r"program start \d+: (.+?) at [0-9A-F]{8}", log)
+    if starts and starts[-1] in hits:
+        return starts[-1]
     return None
 
 

@@ -110,9 +110,13 @@ def volatile_literals(prog):
 
 
 class Module:
-    def __init__(self, name, path, base, seeds=(), hooks=()):
+    def __init__(self, name, path, base, seeds=(), hooks=(), runtime_literals=False, callable_entry=False,
+                 unwind_returns=False):
         self.name, self.path, self.base = name, path, base
         self.hooks = frozenset(hooks)
+        self.runtime_literals = runtime_literals
+        self.callable_entry = callable_entry
+        self.unwind_returns = unwind_returns
         self.ns = "p_" + name.lower()
         self.data = open(path, "rb").read()
         self.crc = zlib.crc32(self.data)
@@ -125,6 +129,9 @@ class Module:
     def generate(self, out, per_file, comments, log):
         prog, entries = self.prog, set(self.entries)
         volatile = volatile_literals(prog)
+        if self.runtime_literals:
+            volatile.update(ins.target for a in prog.code
+                            if (ins := self.img.insn(a)).op in ("mov.w", "mov.l") and ins.size)
         self.volatile = len(volatile)
         buf, count, idx = [], 0, 0
 
@@ -142,7 +149,7 @@ class Module:
 
         for i, e in enumerate(self.entries):
             fn = prog.funcs[e]
-            body = E.Body(prog, fn, entries, volatile, comments, self.hooks & set(fn.code))
+            body = E.Body(prog, fn, entries, volatile, comments, self.hooks & set(fn.code), self.unwind_returns)
             lines = body.emit()
             lines.insert(1, "    ran[%d] = 1;" % i)              # for --coverage: this function has run
             buf.append("\n".join(lines))
@@ -170,8 +177,9 @@ class Module:
             f.write("uint8_t ran[%d];\n" % len(self.entries))
             f.write("static const uint16_t sizes[] = {%s};\n\n"
                     % ", ".join(str(len(prog.funcs[e].code)) for e in self.entries))
-            f.write('extern const SH2Module module = {"%s", 0x%08Xu, %du, 0x%08Xu, funcs, %d, ran, sizes};\n'
-                    % (self.name, self.base, len(self.data), self.crc, len(self.entries)))
+            f.write('extern const SH2Module module = {"%s", 0x%08Xu, %du, 0x%08Xu, funcs, %d, ran, sizes, %s};\n'
+                    % (self.name, self.base, len(self.data), self.crc, len(self.entries),
+                       "true" if self.callable_entry else "false"))
             f.write("\n}  // namespace %s\n" % self.ns)
         self.files.append(self.ns + "_table.cpp")
 
@@ -233,9 +241,13 @@ endif()
 """
 
 
-def generate(specs, out, per_file=8000, comments=True, optest=False, log=print, hooks=None, tasks=None):
+def generate(specs, out, per_file=8000, comments=True, optest=False, log=print, hooks=None, tasks=None,
+             runtime_literals=None, callable_entries=None, unwind_returns=None):
     """hooks: {program name: [address, ...]}, see --hook. tasks: (setjmp, longjmp), see --tasks."""
     hooks = hooks or {}
+    runtime_literals = runtime_literals or set()
+    callable_entries = callable_entries or set()
+    unwind_returns = unwind_returns or set()
     t0 = time.time()
     os.makedirs(out, exist_ok=True)
     if optest:
@@ -245,7 +257,8 @@ def generate(specs, out, per_file=8000, comments=True, optest=False, log=print, 
     modules = []
     for name, path, base, seeds in specs:
         t = time.time()
-        m = Module(name, path, base, seeds, hooks.get(name, ()))
+        m = Module(name, path, base, seeds, hooks.get(name, ()), name in runtime_literals,
+                   name in callable_entries, name in unwind_returns)
         m.generate(out, per_file, comments, log)
         missing = m.hooks - {a for f in m.prog.funcs.values() for a in f.code}
         if missing:

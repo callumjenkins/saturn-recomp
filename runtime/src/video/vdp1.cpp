@@ -18,7 +18,7 @@
 // shadow, half-luminance, half-transparency, each with Gouraud shading. The
 // framebuffer is 16 bits a pixel, 512x256 (TVMR 0), or 8 bits a pixel,
 // 1024x256 in the same memory (TVMR 1), where a pixel keeps the low byte of
-// its colour and only replace is done; rotation is not done. With FBCR.DIE
+// its colour and only replace is done; VDP2 rotates the 16-bit framebuffer. With FBCR.DIE
 // (double-density interlace) a draw's lines of the field FBCR.DIL names go to
 // the framebuffer, a line each in turn, and every line goes to a full-height
 // copy (1024x512, a dot a word) that VDP2 shows both fields from at once.
@@ -51,6 +51,7 @@ static int g_draw_fb;                           // the other one is shown
 static uint16_t g_reg[0x10];                    // TVMR FBCR PTMR EWDR EWLR EWRR ENDR - EDSR LOPR COPR MODR
 enum { TVMR, FBCR, PTMR, EWDR, EWLR, EWRR, ENDR, EDSR = 8, LOPR, COPR, MODR };
 static bool g_change_pending, g_erase_pending, g_erase_field;
+static const int kLateChangeLines = 16;          // a VBlank-OUT handler taken this late is not in time
 static bool g_drawing;
 static uint64_t g_draw_end, g_frame_changes, g_draws;
 
@@ -291,6 +292,7 @@ static std::vector<uint64_t> g_next_keys;       // vdp1_next_draw_keys: by comma
 void vdp1_next_draw_keys(std::vector<uint64_t> keys) { g_next_keys = std::move(keys); }
 
 uint16_t vdp1_dot(int x, int y, bool dd) {
+    if (x < 0 || y < 0) return 0;
     if (g_show_ifb) return x < 512 && y < 256 ? g_ifb[y * 512 + x] : 0;
     int shown = g_draw_fb ^ 1;
     bool fb8 = g_reg[TVMR] & 1;
@@ -308,7 +310,7 @@ uint16_t vdp1_dot(int x, int y, bool dd) {
 
 static void draw() {
     g_reg[EDSR] = (uint16_t)(g_reg[EDSR] >> 1 & 1);   // BEF <- CEF, CEF <- 0
-    if (g_reg[TVMR] & 2) sat_fatal("VDP1: TVMR %04X (rotation) is not done", g_reg[TVMR]);
+    if ((g_reg[TVMR] & 3) == 3) sat_fatal("VDP1: TVMR %04X (8-bit rotation) is not done", g_reg[TVMR]);
     g_fb8 = g_reg[TVMR] & 1;
     g_target = g_fb[g_draw_fb];
     g_hi_on[g_draw_fb] = g_reg[FBCR] & 8;
@@ -602,6 +604,22 @@ static void erase(int which) {
             g_hi[which][y * 1024 + x] = fb8 ? (x & 1 ? g_reg[EWDR] & 0xFF : g_reg[EWDR] >> 8) : g_reg[EWDR];
 }
 
+static void change_frame() {
+    g_draw_fb ^= 1;
+    ++g_frame_changes;
+    if (g_cfg.interp) {
+        g_rec_prev = std::move(g_rec_last);
+        g_rec_last = std::move(g_rec_cur);
+        g_rec_cur = RecFrame{};
+        g_rec_last.field = g_fields;
+        g_rec_last.ewdr = g_reg[EWDR]; g_rec_last.ewlr = g_reg[EWLR]; g_rec_last.ewrr = g_reg[EWRR];
+        std::copy(g_vdp2_regs + 0x70, g_vdp2_regs + 0xA0, g_rec_last.scroll);
+        g_rec_last.vram.assign(g_vdp1_vram, g_vdp1_vram + sizeof g_vdp1_vram);
+    }
+    sat_trace("VDP1 frame change %llu", (unsigned long long)g_frame_changes);
+    if ((g_reg[PTMR] & 3) == 2) draw();
+}
+
 void vdp1_vblank_out() {
     // the field that has just been shown erased the framebuffer shown, if it had to
     if (g_erase_field) { erase(g_draw_fb ^ 1); g_erase_field = false; }
@@ -609,20 +627,8 @@ void vdp1_vblank_out() {
     if (g_erase_pending) { g_erase_field = true; g_erase_pending = false; }
     if (one_cycle || g_change_pending) {
         g_change_pending = false;
-        g_draw_fb ^= 1;
-        ++g_frame_changes;
-        if (g_cfg.interp) {
-            g_rec_prev = std::move(g_rec_last);
-            g_rec_last = std::move(g_rec_cur);
-            g_rec_cur = RecFrame{};
-            g_rec_last.field = g_fields;
-            g_rec_last.ewdr = g_reg[EWDR]; g_rec_last.ewlr = g_reg[EWLR]; g_rec_last.ewrr = g_reg[EWRR];
-            std::copy(g_vdp2_regs + 0x70, g_vdp2_regs + 0xA0, g_rec_last.scroll);
-            g_rec_last.vram.assign(g_vdp1_vram, g_vdp1_vram + sizeof g_vdp1_vram);
-        }
         if (one_cycle) g_erase_field = true;
-        sat_trace("VDP1 frame change %llu", (unsigned long long)g_frame_changes);
-        if ((g_reg[PTMR] & 3) == 2) draw();
+        change_frame();
     }
 }
 
@@ -640,7 +646,9 @@ static void reg_write(uint32_t off, uint16_t v) {
     g_reg[r] = v;
     switch (r) {
     case FBCR:
-        if ((v & 3) == 3) g_change_pending = true;
+        // A change the VBlank-OUT handler asks for is in time for that blanking's change.
+        if ((v & 3) == 3 && sat_interrupt_vector() == 0x41 && video_line() < kLateChangeLines) change_frame();
+        else if ((v & 3) == 3) g_change_pending = true;
         if ((v & 3) == 2) g_erase_pending = true;
         break;
     case PTMR:

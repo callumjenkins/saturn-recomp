@@ -5,7 +5,7 @@
 // (1x1 or 2x2 cells, 1- or 2-word pattern names with the supplement, plane
 // sizes, map offsets, 16/256/2048 colours and RGB) and NBG0/NBG1 in bitmap
 // mode; NBG0/NBG1's fractional scroll and coordinate increments (zoom);
-// the sprite layer from VDP1's framebuffer, every sprite type, palette and
+// the sprite layer from VDP1's framebuffer, including rotation parameter A, every sprite type, palette and
 // RGB mixed (SPCLMD), with its priorities and colour-calculation ratios;
 // priorities with the chip's order for ties (sprite, NBG0, NBG1, NBG2,
 // NBG3); special priority and special colour calculation by screen or by
@@ -37,6 +37,27 @@ uint8_t g_vdp2_vram[0x80000], g_vdp2_cram[0x1000], g_vdp2_regs[0x200];
 static uint16_t reg(uint32_t off) { return (uint16_t)(g_vdp2_regs[off] << 8 | g_vdp2_regs[off + 1]); }
 static uint8_t vb(uint32_t a) { return g_vdp2_vram[a & 0x7FFFF]; }
 static uint16_t vw(uint32_t a) { a &= 0x7FFFE; return (uint16_t)(g_vdp2_vram[a] << 8 | g_vdp2_vram[a + 1]); }
+
+static int32_t signed_bits(uint32_t value, int bits) {
+    uint32_t sign = 1u << (bits - 1);
+    return (int32_t)((value & (sign * 2 - 1)) ^ sign) - (int32_t)sign;
+}
+
+static uint16_t sprite_dot(int x, int y, bool dd) {
+    if (!(vdp1_reg_read(0, 2) & 2)) return vdp1_dot(x, y, dd);
+    uint32_t table = (((uint32_t)(reg(0xBC) & 7) << 16 | reg(0xBE)) & ~0x41u) * 2;
+    auto parameter = [&](uint32_t off, int bits, int shift) {
+        return signed_bits(((uint32_t)vw(table + off) << 16 | vw(table + off + 2)) >> shift, bits);
+    };
+    int32_t sx = parameter(0, 23, 6), sy = parameter(4, 23, 6);
+    int32_t vx = parameter(12, 13, 6), vy = parameter(16, 13, 6);
+    int32_t dx = parameter(20, 12, 7), dy = parameter(24, 12, 7);
+    if (!(reg(0xB2) & 1)) sx += y * vx;
+    if (!(reg(0xB2) & 2)) sy += y * vy;
+    sx = signed_bits((uint32_t)(sx >> 1), 20);
+    sy = signed_bits((uint32_t)(sy >> 1), 20);
+    return vdp1_dot((sx + x * dx) >> 9, (sy + x * dy) >> 9, false);
+}
 
 int vdp2_lines() {
     switch (reg(0x00) >> 4 & 3) {
@@ -420,7 +441,7 @@ void vdp2_compose(Frame& f) {
             uint32_t prev[2] = {0, 0};
             for (int x = 0; x < f.w; ++x) {
                 Pix p{};
-                bool drawn = grad == L_SPRITE ? sprite_pixel(vdp1_dot(x, y, dd), p) == S_DOT
+                bool drawn = grad == L_SPRITE ? sprite_pixel(sprite_dot(x, y, dd), p) == S_DOT
                                               : nbg[grad - L_NBG0].on && nbg_pixel(nbg[grad - L_NBG0], x, y, p);
                 uint32_t here = drawn ? p.rgb : 0;
                 if (x == 0) prev[0] = prev[1] = here;
@@ -441,7 +462,7 @@ void vdp2_compose(Frame& f) {
             l[L_SPRITE] = {};
             uint8_t shadow = 0;                  // the priority of a shadow dot here
             if (!windowed(wctl[L_SPRITE], win, x)) {
-                switch (sprite_pixel(vdp1_dot(x, y, dd), l[L_SPRITE])) {
+                switch (sprite_pixel(sprite_dot(x, y, dd), l[L_SPRITE])) {
                 case S_DOT: consider(L_SPRITE); break;
                 case S_SHADOW: shadow = l[L_SPRITE].prio; l[L_SPRITE] = {}; break;
                 case S_NONE: break;

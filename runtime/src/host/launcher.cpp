@@ -1,8 +1,8 @@
 // saturn-recomp runtime — the launcher (saturn --launcher): a menu in the window before the run
-// starts, for the players, the controls, the display and the volume (Dear ImGui). A mouse, the
-// keyboard or any gamepad drives it. What it sets is saved to the settings file at once
-// (settings.h); Start hands the multitaps to the run, which opens in the same window. The disc is
-// the caller's (--cue).
+// starts, for the game's start options, the players, the controls, the display and the volume (Dear ImGui).
+// A mouse, the keyboard or any gamepad drives it.
+// What it sets is saved to the settings file at once (settings.h); Start hands the multitaps and the start
+// options' arguments to the run, which opens in the same window. The disc is the caller's (--cue).
 // F12 saves the menu's picture (OUT/launcher.png). With SATURN_LAUNCHER_SHOT=FILE, its first frames
 // go there and it closes, for a check without a display.
 #include "host.h"
@@ -13,6 +13,8 @@
 #include "imgui_impl_sdlrenderer3.h"
 #include <algorithm>
 #include <cstring>
+#include <fstream>
+#include <sstream>
 
 namespace {
 
@@ -39,6 +41,47 @@ void save_picture(SDL_Renderer* ren, const std::string& path) {
     SDL_DestroySurface(got);
 }
 
+// A game's start option (--options FILE): a list to choose one item from, or a checkbox. The file has
+// a line each, its fields separated by tabs: "choice NAME", then "item LABEL ARGS" for each of its
+// items, the first the default; or "toggle LABEL ARGS". ARGS are saturn's own, separated by spaces.
+// The choices last made are kept in FILE.chosen.
+struct StartOption {
+    std::string name;
+    bool toggle = false;
+    std::vector<std::pair<std::string, std::string>> items;     // label, arguments
+    int chosen = 0;                                              // the item; for a toggle, 1 when on
+};
+
+std::vector<std::string> fields(const std::string& line) {
+    std::vector<std::string> out;
+    std::stringstream in(line);
+    for (std::string f; std::getline(in, f, '\t');) out.push_back(f);
+    return out;
+}
+
+std::vector<StartOption> read_options(const std::string& path) {
+    std::vector<StartOption> out;
+    std::ifstream in(path);
+    for (std::string line; std::getline(in, line);) {
+        auto f = fields(line);
+        if (f.size() >= 2 && f[0] == "choice") out.push_back({f[1]});
+        else if (f.size() >= 2 && f[0] == "item" && !out.empty() && !out.back().toggle)
+            out.back().items.push_back({f[1], f.size() > 2 ? f[2] : ""});
+        else if (f.size() >= 2 && f[0] == "toggle") out.push_back({f[1], true, {{f[1], f.size() > 2 ? f[2] : ""}}});
+    }
+    std::ifstream chosen(path + ".chosen");
+    for (std::string line; std::getline(chosen, line);) {
+        auto f = fields(line);
+        for (auto& o : out) {
+            if (f.size() != 2 || f[0] != o.name) continue;
+            if (o.toggle) o.chosen = f[1] == "on";
+            for (size_t i = 0; !o.toggle && i < o.items.size(); ++i)
+                if (o.items[i].first == f[1]) o.chosen = (int)i;
+        }
+    }
+    return out;
+}
+
 bool any_gamepad_input() {
     int n = 0;
     SDL_JoystickID* ids = SDL_GetGamepads(&n);
@@ -58,6 +101,7 @@ class Launcher {
 public:
     explicit Launcher(SaturnConfig& cfg) : cfg_(cfg), set_(host_settings()) {
         taps_ = cfg.multitap ? cfg.multitap : set_.number("launcher", "multitap");
+        if (!cfg.options.empty()) options_ = read_options(cfg.options);
     }
 
     // false: the player closed the window
@@ -161,6 +205,7 @@ private:
         if (ImGui::Button("  Start  ")) {
             set_.set("launcher", "multitap", std::to_string(taps_));
             save();
+            start_options_chosen();
             started_ = true;
         }
         if (ImGui::IsWindowAppearing()) ImGui::SetItemDefaultFocus();
@@ -173,6 +218,7 @@ private:
 
         if (ImGui::BeginTable("layout", 2, ImGuiTableFlags_SizingStretchSame)) {
             ImGui::TableNextColumn();
+            start_options();
             players();
             display_and_sound();
             ImGui::TableNextColumn();
@@ -197,6 +243,37 @@ private:
         for (auto& c : host_controllers()) row(c.slot + 1, c.name.c_str(), c.held);
         ImGui::TextDisabled("Press a button on a gamepad to see its player.");
 
+    }
+
+    void start_options() {
+        if (options_.empty()) return;
+        ImGui::SeparatorText("Start options");
+        for (auto& o : options_) {
+            if (o.toggle) {
+                bool on = o.chosen;
+                if (ImGui::Checkbox(o.name.c_str(), &on)) o.chosen = on;
+                continue;
+            }
+            if (o.items.empty()) continue;
+            if (ImGui::BeginCombo(o.name.c_str(), o.items[o.chosen].first.c_str())) {
+                for (size_t i = 0; i < o.items.size(); ++i)
+                    if (ImGui::Selectable(o.items[i].first.c_str(), (int)i == o.chosen)) o.chosen = (int)i;
+                ImGui::EndCombo();
+            }
+        }
+    }
+
+    // The chosen options' arguments for the run, and the choices kept for next time.
+    void start_options_chosen() {
+        if (options_.empty()) return;
+        std::ofstream kept(cfg_.options + ".chosen");
+        for (auto& o : options_) {
+            if (o.items.empty()) continue;
+            kept << o.name << '\t' << (o.toggle ? (o.chosen ? "on" : "off") : o.items[o.chosen].first) << '\n';
+            if (o.toggle && !o.chosen) continue;
+            std::stringstream args(o.items[o.toggle ? 0 : o.chosen].second);
+            for (std::string a; args >> a;) cfg_.launch_args.push_back(a);
+        }
     }
 
     void controls() {
@@ -268,6 +345,7 @@ private:
     int taps_;
     bool started_ = false;
     bool want_picture_ = false;
+    std::vector<StartOption> options_;
     std::string binding_, binding_section_;     // the Saturn button waiting for a new key or gamepad button
     bool settling_ = false;                     // a gamepad binding was just taken: its button may still be held
 };

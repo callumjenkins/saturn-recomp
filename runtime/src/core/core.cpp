@@ -113,8 +113,9 @@ static bool has_entry(const SH2Module* m, uint32_t addr) {
     return lo < m->nfuncs && m->funcs[lo].addr == addr;
 }
 
-// An image whose bytes match the module, or failing that the one module with an
-// entry at addr: a library loaded once rewrites its own tables and variables.
+static const int kSlots = 8;
+static const SH2Module* g_active[kSlots];
+
 const SH2Module* sh2_identify_containing(uint32_t addr, bool* exact) {
     const SH2Module* by_entry = nullptr;
     int entries = 0;
@@ -125,11 +126,12 @@ const SH2Module* sh2_identify_containing(uint32_t addr, bool* exact) {
         if (has_entry(m, addr)) { by_entry = m; ++entries; }
     }
     *exact = false;
+    if (entries == 1)
+        for (const SH2Module* active : g_active) {
+            if (active && active != by_entry && addr - active->base < active->size) return nullptr;
+        }
     return entries == 1 ? by_entry : nullptr;
 }
-
-static const int kSlots = 8;
-static const SH2Module* g_active[kSlots];
 
 int sh2_active_slots() { return kSlots; }
 const SH2Module* sh2_active_slot(int i) { return g_active[i]; }
@@ -157,9 +159,6 @@ SH2Func sh2_lookup(uint32_t addr) {
     return nullptr;
 }
 
-// A call to a module's base address is a program start: on the Saturn the
-// 1st read address, where a crt0 resets the stack. The services decide what
-// that means (the game's runtime unwinds the host stack, the tests just call).
 static bool is_base(uint32_t addr) {
     static uint32_t bases[kSlots * 2];
     static int n = -1;
@@ -179,7 +178,11 @@ static bool is_base(uint32_t addr) {
 
 void sh2_call(SH2Context& c, uint32_t addr) {
     if (addr >> 29 == 1) addr &= 0x1FFFFFFFu;
-    if (SH2_UNLIKELY(is_base(addr))) { sh2_program_start(c, addr); return; }
+    if (SH2_UNLIKELY(is_base(addr))) {
+        const SH2Module* m = sh2_identify(addr);
+        if (m && m->callable_entry) sh2_activate(m);
+        else { sh2_program_start(c, addr); return; }
+    }
     if (SH2Func f = sh2_lookup(addr)) f(c);
     else sh2_call_unknown(c, addr);
 }

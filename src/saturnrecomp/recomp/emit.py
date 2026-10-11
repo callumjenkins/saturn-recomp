@@ -265,10 +265,11 @@ class Body:
     were resolved, `unknown` lists static targets that are not entries here.
     """
 
-    def __init__(self, prog, f, entries, volatile=frozenset(), comments=True, hooks=frozenset()):
+    def __init__(self, prog, f, entries, volatile=frozenset(), comments=True, hooks=frozenset(), unwind_returns=False):
         self.p, self.f, self.img = prog, f, prog.img
         self.entries, self.volatile, self.comments = entries, volatile, comments
         self.hooks = hooks
+        self.unwind_returns = unwind_returns
         self.ops = {a: prog.img.insn(a) for a in f.code}
         self.slots = {a + 2 for a, i in self.ops.items() if i.delay and a + 2 in f.code}
         self.sites = {}
@@ -403,17 +404,18 @@ class Body:
             slot = ""
         s = slot + " " if slot else ""
         ret = _h(a + 4)
+        check = "if (c.pc != %s) return;" % ret if self.unwind_returns else "SH2_RET(c, %s);" % ret
         if op in ("bt/s", "bf/s"):
             return ("{ const bool k = %sc.t; %sif (k) { %s } }"
                     % ("" if op == "bt/s" else "!", s, self._goto(ins.target, a)), a + 4)
         if op == "bra":
             return s + self._goto(ins.target, a), None
         if op == "bsr":
-            return "c.pr = %s; %sSH2_POLL(c); %s SH2_RET(c, %s);" % (ret, s, self._call(ins.target), ret), a + 4
+            return "c.pr = %s; %sSH2_POLL(c); %s %s" % (ret, s, self._call(ins.target), check), a + 4
         if op in ("jsr", "bsrf"):
             x = _r(ins.n) if op == "jsr" else "%s + %s" % (ret, _r(ins.n))
-            return ("{ const uint32_t x = %s; c.pr = %s; %sSH2_POLL(c); %s SH2_RET(c, %s); }"
-                    % (x, ret, s, self._dcall(a), ret), a + 4)
+            return ("{ const uint32_t x = %s; c.pr = %s; %sSH2_POLL(c); %s %s }"
+                    % (x, ret, s, self._dcall(a), check), a + 4)
         if op in ("jmp", "braf"):
             x = _r(ins.n) if op == "jmp" else "%s + %s" % (ret, _r(ins.n))
             return "{ const uint32_t x = %s; %s%s }" % (x, s, self._djump(a)), None

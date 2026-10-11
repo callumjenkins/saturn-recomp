@@ -64,6 +64,10 @@ struct SaturnConfig {
     uint32_t task_setjmp = 0, task_longjmp = 0;   // the game's own task switch (tasks.cpp), 0: none
     int agent_fd = -1;              // a socket another program plays the run through (agent.cpp)
     std::string writes;             // "VBLANK:ADDR=HEX,...": memory written at those VBlank-INs, as the agent's write
+    std::string cheats;             // "MODULE:ADDR=HEX" or "MODULE:ADDR|=HEX",...: written or or-ed in once a VBlank
+                                    // while that module is active
+    std::string options;            // a file of start options for the launcher (launcher.cpp)
+    std::vector<std::string> launch_args;   // the arguments the launcher's start options add
     std::string state_in;           // a dump (state.cpp) the run starts from instead of power-on
     std::string state_out;          // dumps go to this file: at a stop that waits for one, and as below
     int state_every = 0;            // ... every this many seconds of the host's time (0: only at a stop)
@@ -87,6 +91,7 @@ void sat_note(const char* fmt, ...) __attribute__((format(printf, 1, 2)));   // 
 [[noreturn]] void sat_stop(const char* why);                  // ends the run cleanly
 void sat_interrupt(SH2Context& c, uint32_t vec, uint32_t level);   // take it now (a safe point)
 bool sat_in_interrupt();            // the master is running an interrupt handler
+int sat_interrupt_vector();         // the vector of the innermost one, or -1
 void slave_on();                    // SMPC SSHON: the slave boots
 void slave_off();                   // SSHOFF: held in reset
 void slave_idle_check(uint32_t ftcsr);   // the slave read its FTCSR: yield if nothing is there

@@ -66,6 +66,9 @@ class Module:
     file: str
     base: int
     seeds: list[int] = field(default_factory=list)
+    runtime_literals: bool = False
+    callable_entry: bool = False
+    unwind_returns: bool = False
 
 
 @dataclass
@@ -246,7 +249,9 @@ def load(path):
         t = tomllib.load(f)
     symbols = dict(t.get("symbols", {}))
     modules = [Module(m["name"], os.path.join(root, m["file"]), m["base"],
-                      [_addr(s, symbols) for s in m.get("seeds", [])]) for m in t.get("module", [])]
+                      [_addr(s, symbols) for s in m.get("seeds", [])],
+                      m.get("runtime_literals", False), m.get("callable_entry", False),
+                      m.get("unwind_returns", False)) for m in t.get("module", [])]
     names = {m.name for m in modules}
 
     def known(module, where):

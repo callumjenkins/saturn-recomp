@@ -40,6 +40,8 @@
 // error that ends it included (movie.cpp).
 // --write sets memory at a VBlank-IN, as the agent's write does: a stage
 // select, say, given as data.
+// --cheat sets memory, or ors bits into it, once a VBlank while a module is active: a game's
+// invincibility flag, say, written only while that game is loaded.
 // --save names the file the game's saves (the backup memory) are kept in; "-"
 // keeps them for the run alone, starting empty. Without it they go to
 // saturn-recomp/PRODUCT_VERSION/backup.bin in the user's data directory
@@ -48,8 +50,9 @@
 // volume, the controls; host.cpp): "-" keeps the defaults. Without it, it is settings.ini in that
 // directory's saturn-recomp folder, written with the defaults if it is missing.
 // --launcher opens a menu in the window before the run, for the players, the controls, the display
-// and the volume (launcher.cpp). What it chooses for the run, as saturn's own arguments, goes to
-// DIR/launch.txt (with --out), one a line, for a replay.
+// and the volume (launcher.cpp), and the game's start options when --options names a file of them.
+// What it chooses for the run, as saturn's own arguments, goes to DIR/launch.txt (with --out), one a
+// line, for a replay.
 // --log writes what would go to stdout and stderr to FILE instead, for a host that shows neither (Android).
 // --state-in starts the run from a dump of the machine instead of power-on (state.cpp), and
 // --state-out writes one: at the first safe moment from VBlank --state-at, every --state-every
@@ -79,9 +82,8 @@ static int64_t clock_seconds(const char* s) {
     return days * 86400 + h * 3600 + mi * 60 + se;
 }
 
-int main(int argc, char** argv) {
-    SaturnConfig cfg;
-    bool launcher = false;
+// 2 and the usage on stderr when an argument does not read; 0 otherwise.
+static int parse_args(SaturnConfig& cfg, bool& launcher, int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         const char* a = argv[i];
         bool more = i + 1 < argc;
@@ -138,6 +140,8 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(a, "--multitap") && more) cfg.multitap = std::atoi(argv[++i]);
         else if (!std::strcmp(a, "--agent") && more) cfg.agent_fd = std::atoi(argv[++i]);
         else if (!std::strcmp(a, "--write") && more) cfg.writes += (cfg.writes.empty() ? "" : ",") + std::string(argv[++i]);
+        else if (!std::strcmp(a, "--cheat") && more) cfg.cheats += (cfg.cheats.empty() ? "" : ",") + std::string(argv[++i]);
+        else if (!std::strcmp(a, "--options") && more) cfg.options = argv[++i];
         else if (!std::strcmp(a, "--clock") && more) {
             cfg.clock = clock_seconds(argv[++i]);
             if (cfg.clock < 0) { std::fprintf(stderr, "--clock: YYYY-MM-DDTHH:MM:SS\n"); return 2; }
@@ -164,15 +168,27 @@ int main(int argc, char** argv) {
                                  "             [--clock YYYY-MM-DDTHH:MM:SS] [--agent FD] [--write VBLANK:ADDR=HEX,...] [--video FILE]\n"
                                  "             [--save FILE|-] [--coverage FILE] [--checkpoint SECONDS] [--log FILE]\n"
                                  "             [--state-in FILE] [--state-out FILE] [--state-every SECONDS] [--state-at VBLANK]\n"
-                                 "             [--progress FILE --progress-keep ADDR:BYTES,...] [--after FILE] [--launcher]\n");
+                                 "             [--progress FILE --progress-keep ADDR:BYTES,...] [--after FILE] [--launcher [--options FILE]]\n"
+                                 "             [--cheat MODULE:ADDR=HEX|MODULE:ADDR|=HEX,...]\n");
             return 2;
         }
     }
+    return 0;
+}
+
+int main(int argc, char** argv) {
+    SaturnConfig cfg;
+    bool launcher = false;
+    if (int bad = parse_args(cfg, launcher, argc, argv)) return bad;
     if (cfg.cue.empty()) { std::fprintf(stderr, "saturn: --cue is required\n"); return 2; }
     if (launcher && !cfg.headless) {
         if (!host_launch(cfg)) return host_wants_frame() ? 0 : 2;       // closed, or no window to show it in
+        std::vector<char*> extra{argv[0]};
+        for (auto& arg : cfg.launch_args) extra.push_back(arg.data());
+        if (int bad = parse_args(cfg, launcher, (int)extra.size(), extra.data())) return bad;
         if (FILE* f = cfg.out == "." ? nullptr : std::fopen((cfg.out + "/launch.txt").c_str(), "w")) {
             std::fprintf(f, "--multitap\n%d\n", cfg.multitap);
+            for (auto& arg : cfg.launch_args) std::fprintf(f, "%s\n", arg.c_str());
             std::fclose(f);
         }
     }

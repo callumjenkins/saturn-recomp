@@ -107,23 +107,8 @@ static void draw_shape(const Cmd& c, const uint8_t* cmd, int comm, Pt* p) {
         break;
     }
     case 0x1: {                                 // scaled sprite
-        int zp = c.ctrl >> 8 & 0xF;
         int x0, y0, x1, y1;
-        if (!zp) {
-            x0 = p[0].x; y0 = p[0].y; x1 = p[2].x; y1 = p[2].y;
-        } else {
-            int w = sx13(cw(cmd, 16)), h = sx13(cw(cmd, 18));   // B: the width and height on screen
-            switch (zp & 3) {
-            case 2: x0 = p[0].x - w / 2; x1 = x0 + w; break;
-            case 3: x0 = p[0].x - w; x1 = p[0].x; break;
-            default: x0 = p[0].x; x1 = p[0].x + w; break;
-            }
-            switch (zp >> 2 & 3) {
-            case 2: y0 = p[0].y - h / 2; y1 = y0 + h; break;
-            case 3: y0 = p[0].y - h; y1 = p[0].y; break;
-            default: y0 = p[0].y; y1 = p[0].y + h; break;
-            }
-        }
+        scaled_corners(c, cmd, p, x0, y0, x1, y1);
         quad(c, {x0, y0}, {x1, y0}, {x1, y1}, {x0, y1});
         break;
     }

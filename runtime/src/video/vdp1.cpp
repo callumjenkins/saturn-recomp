@@ -196,6 +196,24 @@ static Rgb mix(const Rgb& a, const Rgb& b, int k, int n) {
     return {a.r + (b.r - a.r) * k / n, a.g + (b.g - a.g) * k / n, a.b + (b.b - a.b) * k / n};
 }
 
+// A scaled sprite's corners on screen: C opposite A, or with a zoom point, B's width and
+// height placed against A as the point says.
+static void scaled_corners(const Cmd& c, const uint8_t* cmd, const Pt* p, int& x0, int& y0, int& x1, int& y1) {
+    int zp = c.ctrl >> 8 & 0xF;
+    if (!zp) { x0 = p[0].x; y0 = p[0].y; x1 = p[2].x; y1 = p[2].y; return; }
+    int w = sx13(cw(cmd, 16)), h = sx13(cw(cmd, 18));
+    switch (zp & 3) {
+    case 2: x0 = p[0].x - w / 2; x1 = x0 + w; break;
+    case 3: x0 = p[0].x - w; x1 = p[0].x; break;
+    default: x0 = p[0].x; x1 = p[0].x + w; break;
+    }
+    switch (zp >> 2 & 3) {
+    case 2: y0 = p[0].y - h / 2; y1 = y0 + h; break;
+    case 3: y0 = p[0].y - h; y1 = p[0].y; break;
+    default: y0 = p[0].y; y1 = p[0].y + h; break;
+    }
+}
+
 // A line from p0 to p1; for a texture, row v, its columns spread along the line.
 // The shapes drawn to pixels: vdp1_raster.inc's own rules, or with SATURN_VDP1_GPL,
 // vdp1_raster_gpl.inc's, which follow Mednafen's and are under its licence, the GPL.
@@ -204,6 +222,98 @@ static Rgb mix(const Rgb& a, const Rgb& b, int k, int n) {
 #else
 #include "vdp1_raster.inc"
 #endif
+
+// ---- the time a draw takes ------------------------------------------------------------------
+// VDP1 runs at the SH-2's clock, 28.64 MHz, 1,816.5 cycles a line. What a command costs was
+// measured on Beetle Saturn (Mednafen's Saturn core), as a black box: every command of the
+// classics' play, Sonic World and Saturn Bomberman's battle-round logged with the cycles the
+// core charged it, and the rules below fitted to those. A draw's total comes within about 1% for
+// sprites and polygons and 4% for distorted sprites. Polylines and lines were not measured, so
+// they are costed as a polygon's lines.
+//
+// Every command costs 16 cycles to fetch. Shapes are walked as quad() draws them, a line at a
+// time:
+// - a normal sprite costs each row (8 cycles when 8 dots wide, else 12) and 19/16 a dot. A row
+//   stops where it leaves the clip window, but one that starts beyond it is walked in full;
+// - a scaled sprite costs each row 13.3 and 1.1 a dot, for the dots inside the clip window only;
+// - distorted sprites and polygons cost each line, and each dot up to where the line leaves the
+//   clip window (all of it if it never enters): 9.8 and 1.35 a dot, or 7.6 and 1.6 for polygons.
+static const double kVdp1NsPerCycle = 1e9 / 28636360.0;
+
+struct ClipBox { int x0, y0, x1, y1; };
+
+static int cost_step(int a, int b, int i, int n) {  // a + (b - a) * i / n, rounded
+    if (n <= 0) return a;
+    int d = (b - a) * i * 2;
+    return a + (d >= 0 ? (d + n) / (2 * n) : -((-d + n) / (2 * n)));
+}
+
+static ClipBox clip_box(const Cmd& c) {
+    ClipBox b{0, 0, g_sys_x, g_sys_y};
+    if (c.clip && !c.outside) {
+        b.x0 = std::max(b.x0, g_ux0); b.y0 = std::max(b.y0, g_uy0);
+        b.x1 = std::min(b.x1, g_ux1); b.y1 = std::min(b.y1, g_uy1);
+    }
+    return b;
+}
+
+// The dots of the line a-b that the chip steps through: up to where it leaves the box, or all of
+// them if it never enters it.
+static int dots_until_exit(Pt a, Pt b, const ClipBox& box) {
+    int n = std::max(std::abs(b.x - a.x), std::abs(b.y - a.y));
+    bool inside = false;
+    for (int i = 0; i <= n; ++i) {
+        int x = cost_step(a.x, b.x, i, n), y = cost_step(a.y, b.y, i, n);
+        if (x >= box.x0 && x <= box.x1 && y >= box.y0 && y <= box.y1) inside = true;
+        else if (inside) return i;
+    }
+    return n + 1;
+}
+
+// The cycles of quad()'s lines from edge a-d to edge b-c.
+static double quad_cycles(Pt a, Pt b, Pt cc, Pt d, const ClipBox& box, double per_line, double per_dot) {
+    int n = std::max({std::abs(d.x - a.x), std::abs(d.y - a.y), std::abs(cc.x - b.x), std::abs(cc.y - b.y)});
+    n = std::min(n, 2048);
+    double cycles = 0;
+    for (int i = 0; i <= n; ++i) {
+        Pt l{cost_step(a.x, d.x, i, n), cost_step(a.y, d.y, i, n)};
+        Pt r{cost_step(b.x, cc.x, i, n), cost_step(b.y, cc.y, i, n)};
+        cycles += per_line + per_dot * dots_until_exit(l, r, box);
+    }
+    return cycles;
+}
+
+static double shape_cycles(const Cmd& c, const uint8_t* cmd, int comm, const Pt* p) {
+    ClipBox box = clip_box(c);
+    switch (comm) {
+    case 0x0: {
+        int cols = p[0].x <= box.x1 ? std::clamp(box.x1 - p[0].x + 1, 0, c.w) : c.w;
+        return c.h * ((c.w <= 8 ? 8 : 12) + cols * 19.0 / 16);
+    }
+    case 0x1: {
+        int x0, y0, x1, y1;
+        scaled_corners(c, cmd, p, x0, y0, x1, y1);
+        int rows = std::abs(y1 - y0) + 1;
+        int vis_x = std::max(0, std::min(std::max(x0, x1), box.x1) - std::max(std::min(x0, x1), box.x0) + 1);
+        int vis_y = std::max(0, std::min(std::max(y0, y1), box.y1) - std::max(std::min(y0, y1), box.y0) + 1);
+        return rows * 13.3 + (double)vis_x * vis_y * 1.1;
+    }
+    case 0x2: case 0x3:
+        return quad_cycles(p[0], p[1], p[2], p[3], box, 9.8, 1.35);
+    case 0x4:
+        return quad_cycles(p[0], p[1], p[2], p[3], box, 7.6, 1.6);
+    case 0x5: case 0x7: {
+        double cycles = 0;
+        for (int i = 0; i < 4; ++i) cycles += 7.6 + 1.6 * dots_until_exit(p[i], p[(i + 1) & 3], box);
+        return cycles;
+    }
+    case 0x6:
+        return 7.6 + 1.6 * dots_until_exit(p[0], p[1], box);
+    }
+    return 0;
+}
+
+static double g_draw_cycles;                    // the draw under way, so far
 
 static void command(const uint8_t* cmd, uint32_t a) {
     Cmd c{};
@@ -250,6 +360,7 @@ static void command(const uint8_t* cmd, uint32_t a) {
         for (int i = 0; i < 4; ++i) c.g[i] = rgb_of(tw(ga + i * 2));
     }
     for (Pt& q : p) { q.x += g_local_x; q.y += g_local_y; }
+    g_draw_cycles += shape_cycles(c, cmd, comm, p);
     draw_shape(c, cmd, comm, p);
 }
 
@@ -322,9 +433,11 @@ static void draw() {
     }
     uint32_t a = 0, ret = 0, last = 0;
     int n = 0;
+    g_draw_cycles = 0;
     for (int guard = 0; guard < 20000; ++guard) {
         uint16_t ctrl = vw(a);
         last = a;
+        g_draw_cycles += 16;                    // the fetch, of every command the walk reaches
         if (ctrl & 0x8000) break;
         int jp = ctrl >> 12 & 7;
         if (!(jp & 4)) {
@@ -350,8 +463,8 @@ static void draw() {
     g_reg[COPR] = (uint16_t)(last >> 3);
     ++g_draws;
     g_drawing = true;
-    g_draw_end = sat_now() + 1000000;           // 1 ms
-    sat_trace("VDP1 draw %llu: %d commands", (unsigned long long)g_draws, n);
+    g_draw_end = sat_now() + (uint64_t)(g_draw_cycles * kVdp1NsPerCycle);
+    sat_trace("VDP1 draw %llu: %d commands, %.0f cycles", (unsigned long long)g_draws, n, g_draw_cycles);
 }
 
 static bool matchable(const uint8_t* b) { return (cw(b, 0) & 0xF) <= 7; }

@@ -56,6 +56,11 @@ def load(spec, seeds=()):
 
 def match(a, b):
     """{entry in a: entry in b}."""
+    return propagate(a, b, exact(a, b))
+
+
+def exact(a, b):
+    """{entry in a: entry in b} for the fingerprints exactly one function on each side has."""
     (ia, pa), (ib, pb) = a, b
     fa = collections.defaultdict(list)
     fb = collections.defaultdict(list)
@@ -68,12 +73,20 @@ def match(a, b):
         eb = fb.get(h)
         if len(ea) == 1 and eb and len(eb) == 1:
             m[ea[0]] = eb[0]
-    # propagate through call sites
+    return m
+
+
+def propagate(a, b, m, voters=None):
+    """Add to `m` the unmatched functions called from the same place in two matched ones (the n-th call of
+    each), repeated to a fixed point. With `voters`, only the pairs it accepts (x, y) vote."""
+    (ia, pa), (ib, pb) = a, b
     changed = True
     while changed:
         changed = False
         used = set(m.values())
         for x, y in list(m.items()):
+            if voters and not voters(x, y):
+                continue
             ca = ordered_calls(ia, pa, pa.funcs[x])
             cb = ordered_calls(ib, pb, pb.funcs[y])
             if len(ca) != len(cb):

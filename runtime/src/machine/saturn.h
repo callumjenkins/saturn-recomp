@@ -196,7 +196,6 @@ bool onchip_deliver(SH2Context& c);   // the watchdog's interval interrupt, if d
 // ---- video (video.cpp; vdp1.cpp, vdp2.cpp, host.cpp through video.h and host.h) --------------------------
 void video_init();
 void video_tick(uint64_t now);        // raster timing: VBlank in/out, lines, VDP1 frames
-uint64_t video_next_blanking_line(uint64_t now);   // when the next line 0 (VBlank-OUT) or line 1 comes
 uint32_t video_read(uint32_t a, int size);    // VDP1, VDP2, SCSP (canonical addresses)
 void video_write(uint32_t a, uint32_t v, int size);
 bool video_owns(uint32_t a);

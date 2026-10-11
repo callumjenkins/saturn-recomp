@@ -51,7 +51,6 @@ static int g_draw_fb;                           // the other one is shown
 static uint16_t g_reg[0x10];                    // TVMR FBCR PTMR EWDR EWLR EWRR ENDR - EDSR LOPR COPR MODR
 enum { TVMR, FBCR, PTMR, EWDR, EWLR, EWRR, ENDR, EDSR = 8, LOPR, COPR, MODR };
 static bool g_change_pending, g_erase_pending, g_erase_field;
-static const int kLateChangeLines = 16;          // a VBlank-OUT handler taken this late is not in time
 static bool g_drawing;
 static uint64_t g_draw_end, g_frame_changes, g_draws;
 
@@ -604,22 +603,6 @@ static void erase(int which) {
             g_hi[which][y * 1024 + x] = fb8 ? (x & 1 ? g_reg[EWDR] & 0xFF : g_reg[EWDR] >> 8) : g_reg[EWDR];
 }
 
-static void change_frame() {
-    g_draw_fb ^= 1;
-    ++g_frame_changes;
-    if (g_cfg.interp) {
-        g_rec_prev = std::move(g_rec_last);
-        g_rec_last = std::move(g_rec_cur);
-        g_rec_cur = RecFrame{};
-        g_rec_last.field = g_fields;
-        g_rec_last.ewdr = g_reg[EWDR]; g_rec_last.ewlr = g_reg[EWLR]; g_rec_last.ewrr = g_reg[EWRR];
-        std::copy(g_vdp2_regs + 0x70, g_vdp2_regs + 0xA0, g_rec_last.scroll);
-        g_rec_last.vram.assign(g_vdp1_vram, g_vdp1_vram + sizeof g_vdp1_vram);
-    }
-    sat_trace("VDP1 frame change %llu", (unsigned long long)g_frame_changes);
-    if ((g_reg[PTMR] & 3) == 2) draw();
-}
-
 void vdp1_vblank_out() {
     // the field that has just been shown erased the framebuffer shown, if it had to
     if (g_erase_field) { erase(g_draw_fb ^ 1); g_erase_field = false; }
@@ -627,8 +610,20 @@ void vdp1_vblank_out() {
     if (g_erase_pending) { g_erase_field = true; g_erase_pending = false; }
     if (one_cycle || g_change_pending) {
         g_change_pending = false;
+        g_draw_fb ^= 1;
+        ++g_frame_changes;
+        if (g_cfg.interp) {
+            g_rec_prev = std::move(g_rec_last);
+            g_rec_last = std::move(g_rec_cur);
+            g_rec_cur = RecFrame{};
+            g_rec_last.field = g_fields;
+            g_rec_last.ewdr = g_reg[EWDR]; g_rec_last.ewlr = g_reg[EWLR]; g_rec_last.ewrr = g_reg[EWRR];
+            std::copy(g_vdp2_regs + 0x70, g_vdp2_regs + 0xA0, g_rec_last.scroll);
+            g_rec_last.vram.assign(g_vdp1_vram, g_vdp1_vram + sizeof g_vdp1_vram);
+        }
         if (one_cycle) g_erase_field = true;
-        change_frame();
+        sat_trace("VDP1 frame change %llu", (unsigned long long)g_frame_changes);
+        if ((g_reg[PTMR] & 3) == 2) draw();
     }
 }
 
@@ -646,9 +641,7 @@ static void reg_write(uint32_t off, uint16_t v) {
     g_reg[r] = v;
     switch (r) {
     case FBCR:
-        // A change the VBlank-OUT handler asks for is in time for that blanking's change.
-        if ((v & 3) == 3 && sat_interrupt_vector() == 0x41 && video_line() < kLateChangeLines) change_frame();
-        else if ((v & 3) == 3) g_change_pending = true;
+        if ((v & 3) == 3) g_change_pending = true;
         if ((v & 3) == 2) g_erase_pending = true;
         break;
     case PTMR:

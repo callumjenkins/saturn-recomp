@@ -530,17 +530,12 @@ void sh2_poll(SH2Context& c) {
     onchip_deliver(c);
 }
 
-static int g_int_depth, g_int_vector = -1;
+static int g_int_depth;
 
 bool sat_in_interrupt() { return g_int_depth > 0; }
-int sat_interrupt_vector() { return g_int_vector; }
 
 void sat_interrupt(SH2Context& c, uint32_t vec, uint32_t level) {
-    struct Depth {
-        int outer = g_int_vector;
-        explicit Depth(uint32_t vec) { ++g_int_depth; g_int_vector = (int)(vec & 0x7F); }
-        ~Depth() { --g_int_depth; g_int_vector = outer; }
-    } depth(vec);
+    struct Depth { Depth() { ++g_int_depth; } ~Depth() { --g_int_depth; } } depth;
     ++g_ints[vec & 0x7F];
     SH2Context saved = c;
     uint32_t target = ld32(c.vbr + vec * 4);

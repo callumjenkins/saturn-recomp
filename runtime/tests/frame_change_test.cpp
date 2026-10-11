@@ -55,3 +55,12 @@ TEST(a_change_asked_for_during_the_frame_comes_at_the_next_blanking_only) {
     run_to(at(f + 2, 2));
     CHECK_EQ(vdp1_frame_changes(), changes + 1);
 }
+
+// Polls are cut short to land on line 0, VBlank-OUT, and on line 1, where the change is decided.
+TEST(the_next_blanking_line_is_line_0_or_line_1) {
+    CHECK_EQ(video_next_blanking_line(at(5, 100)), at(6, 0));
+    CHECK_EQ(video_next_blanking_line(at(6, 0) - 1), at(6, 0));
+    CHECK_EQ(video_next_blanking_line(at(6, 0)), at(6, 1));
+    CHECK_EQ(video_next_blanking_line(at(6, 0) + 1), at(6, 1));
+    CHECK_EQ(video_next_blanking_line(at(6, 1)), at(7, 0));
+}

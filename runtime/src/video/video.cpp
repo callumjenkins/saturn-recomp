@@ -90,6 +90,13 @@ static void vblank_in(uint64_t now) {
     host_pace(now);
 }
 
+uint64_t video_next_blanking_line(uint64_t now) {
+    const uint64_t line_ns = kFrameNs / kLines;
+    uint64_t m = now / line_ns + 1;
+    if (m % kLines > 1) m += kLines - m % kLines;      // on to the next line 0
+    return m * line_ns;
+}
+
 void video_tick(uint64_t now) {
     uint64_t target = now / (kFrameNs / kLines);
     while (g_line_abs < target) {

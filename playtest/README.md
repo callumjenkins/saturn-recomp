@@ -79,6 +79,12 @@ listed under its root: `behind` a call from code some run reached (with the runs
 caller, which says where in the game to look), reached only through a `pointer` in the program's
 data, or an `orphan` that nothing calls.
 
+Code that is known not to be a lead can be set aside with a classes file, named by `classes` in
+`[playtest]`. Each line is `MODULE ADDRESS CLASS`, then a note, and a group takes the class of its root.
+The report prints each class's total and leaves its groups out of the list; `--all` lists them with
+their class. Classes are the game's own words, such as `online` for code only a modem reaches or `dead`
+for code no release calls (see the `version-diff` skill for finding the latter).
+
 `publish` sends the generated C++ to R2 and starts the release workflow through `gh`. The workflow
 compiles that C++ against this runtime on Linux, Windows and macOS, packages the launcher with
 PyInstaller, builds the Android app for arm64 and makes a GitHub prerelease tagged `playtest-BUILD`. Then it tells the Worker, and the

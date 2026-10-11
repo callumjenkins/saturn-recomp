@@ -116,3 +116,15 @@ def test_the_coverage_map_sorts_unreached_code_by_what_leads_to_it(tmp_path):
     assert found["modules"]["KRNL"] == {"code": 18, "reached": 6, "behind": 6, "pointer": 4, "orphan": 2}
     assert [(n, kind, f"{r[1]:08X}", [f"{c[1]:08X}" for c in cs]) for n, kind, r, cs in found["roots"]] == [
         (6, "behind", "06000100", ["06000000"]), (4, "pointer", "06000300", []), (2, "orphan", "06000400", [])]
+
+
+def test_the_report_sets_classed_groups_aside_and_lists_them_on_request(tmp_path):
+    classes = tmp_path / "classes.tsv"
+    classes.write_text("# dead code\nKRNL 06000400 dead  no release calls it\n")
+    found = {"modules": {"KRNL": {"code": 18, "reached": 6, "behind": 6, "orphan": 4}},
+             "roots": [(6, "behind", ("KRNL", 0x06000100), []), (4, "orphan", ("KRNL", 0x06000400), [])],
+             "classes": coverage.classes(str(classes))}
+    text = coverage.report(found, {})
+    assert "dead                1 groups        0 behind        0 pointer        4 orphan" in text
+    assert "06000400" not in text.split("by their root:")[1]
+    assert "06000400  [dead]" in coverage.report(found, {}, everything=True)

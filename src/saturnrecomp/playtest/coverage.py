@@ -9,6 +9,10 @@ function no run reached goes to a root:
 - orphan: neither called nor pointed at, as the scan for stack-frame prologues finds uncalled code.
 
 A function under roots of more than one kind goes to the first of those, in that order.
+
+A game can name a classes file in [playtest] (`classes`): lines of MODULE ADDRESS CLASS, then a note, for
+code known not to be a lead, such as code only an absent peripheral reaches or code no release calls.
+A group takes its root's class, and the report sets classed groups aside.
 """
 import collections
 import glob
@@ -72,6 +76,18 @@ def pointed_at(images, insns):
     return {k for k in insns if k[1] in words}
 
 
+def classes(path):
+    """{(module, entry): class} from a classes file; empty for no file."""
+    out = {}
+    if not path:
+        return out
+    for line in open(path, encoding="utf-8"):
+        parts = line.split("#", 1)[0].split()
+        if len(parts) >= 3:
+            out[(parts[0], int(parts[1], 16))] = parts[2]
+    return out
+
+
 def build(insns, calls, reached, pointed):
     """{"modules": {name: {"code", "reached", KIND: bytes}}, "roots": [(bytes, kind, root, [reached callers])]}; `reached` is any collection of functions."""
     reached = set(reached)
@@ -133,20 +149,36 @@ def coverage_map(game, pulled):
     runs = entered(review.known_coverage(game, pulled), insns)
     found = build(insns, calls, runs, pointed_at(images, insns))
     found["runs"] = runs
+    found["classes"] = classes(game.playtest.classes if game.playtest else "")
     return found
 
 
-def report(found, symbols, top=25, modules=None):
-    """The map as text: each module's code, how much was reached, and the largest groups no run reached."""
+def report(found, symbols, top=25, modules=None, everything=False):
+    """The map as text: each module's code, how much was reached, the classed groups set aside, and the
+    largest groups left; with `everything`, the classed groups are listed too, with their class."""
     names = {v: k for k, v in symbols.items()}
     lines = [f"{'module':8}{'code':>9}{'reached':>9}" + "".join(f"{k:>9}" for k in KINDS)]
     for m, c in found["modules"].items():
         pct = 100 * c.get("reached", 0) / c["code"]
         lines.append(f"{m:8}{c['code']:9}{pct:8.0f}%" + "".join(f"{c.get(k, 0):9}" for k in KINDS))
+    classed = found.get("classes", {})
+    roots = [f for f in found["roots"] if not modules or f[2][0] in modules]
+    aside = collections.defaultdict(collections.Counter)
+    for n, kind, r, _ in roots:
+        if r in classed:
+            aside[classed[r]]["groups"] += 1
+            aside[classed[r]][kind] += n
+    if aside:
+        lines.append("\nset aside by class, in bytes:")
+        for name, c in sorted(aside.items()):
+            lines.append(f"{name:17}{c['groups']:4} groups" + "".join(f"{c.get(k, 0):9} {k}" for k in KINDS))
+    if not everything:
+        roots = [f for f in roots if f[2] not in classed]
     lines.append("\nthe largest groups no run reached, in bytes, by their root:")
-    for n, kind, r, cs in [f for f in found["roots"] if not modules or f[2][0] in modules][:top]:
+    for n, kind, r, cs in roots[:top]:
         via = ", ".join(f"{c[1]:08X}" + (f" {names[c[1]]}" if c[1] in names else "") for c in cs[:3])
-        lines.append(f"{n:7}  {kind:8} {r[0]} {r[1]:08X}" + (f"  from {via}" if via else ""))
+        lines.append(f"{n:7}  {kind:8} {r[0]} {r[1]:08X}" + (f"  from {via}" if via else "")
+                     + (f"  [{classed[r]}]" if r in classed else ""))
         if cs and "runs" in found:
             seen = set().union(*(found["runs"][c] for c in cs))
             named = sorted(seen, key=lambda n: (n[:1].isdigit(), n))      # the game's own routes before testers' sessions

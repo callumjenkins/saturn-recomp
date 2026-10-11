@@ -88,6 +88,7 @@ class Playtest:
     coverage: list[str] = field(default_factory=list)
     args: list[str] = field(default_factory=list)
     boxart: str = ""
+    classes: str = ""          # the coverage classes file, or "" for none
 
     @property
     def manifest(self):
@@ -275,7 +276,7 @@ def load(path):
         p = t["playtest"]
         playtest = Playtest(p["endpoint"].rstrip("/"), p["repo"], os.path.join(root, p.get("disc", "disc.json")),
                             [os.path.join(root, g) for g in p.get("coverage", [])], list(p.get("args", [])),
-                            p.get("boxart", ""))
+                            p.get("boxart", ""), os.path.join(root, p["classes"]) if "classes" in p else "")
     return Game(game.get("name", os.path.basename(root)), root, os.path.join(root, game.get("build", "build")),
                 os.path.join(root, game.get("seeds", "seeds.json")), modules, symbols, tasks, hooks,
                 list(game.get("cmake", [])), playtest, _checkpoint(t["checkpoint"], symbols) if "checkpoint" in t else None)

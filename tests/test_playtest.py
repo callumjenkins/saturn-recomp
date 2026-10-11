@@ -9,7 +9,7 @@ import zipfile
 
 import pytest
 
-from saturnrecomp.playtest import disc_image, review, session, upload
+from saturnrecomp.playtest import coverage, disc_image, review, session, upload
 
 FAKE_SATURN = """#!{python}
 import sys, time
@@ -95,3 +95,24 @@ def test_new_code_is_what_no_known_run_reached(tmp_path):
     mine = tmp_path / "mine.txt"
     mine.write_text("KRNL 06010000 4 1\nKRNL 06010010 2 1\n")
     assert len(review.instructions(str(mine)) - review.instructions(str(known))) == 2
+
+
+def test_the_coverage_map_sorts_unreached_code_by_what_leads_to_it(tmp_path):
+    def f(addr, body):
+        return f"void f_{addr:08X}(SH2Context& c) {{\n" + "".join(f"    {line}\n" for line in body) + "}\n"
+    ins = lambda a: f"c.r[0] = 0;  // {a:08X} nop"
+    (tmp_path / "p_krnl_000.cpp").write_text(
+        f(0x06000000, [ins(0x06000000), "f_06000100(c);  // 06000002 bsr", ins(0x06000004)])     # reached
+        + f(0x06000100, [ins(0x06000100), "f_06000200(c);  // 06000102 bsr"])                    # behind it
+        + f(0x06000200, [ins(0x06000200)])                                                       # under that
+        + f(0x06000300, [ins(0x06000300), ins(0x06000302)])                                      # in a table
+        + f(0x06000400, [ins(0x06000400)])                                                       # nothing leads here
+        + f(0x06000004, [ins(0x06000004)]))                                                      # inside the reached one
+    cov = tmp_path / "coverage.txt"
+    cov.write_text("KRNL 06000000 3 1\nKRNL 06000100 2 0\n")
+    insns, calls = coverage.generated(str(tmp_path), ["KRNL"])
+    image = bytes.fromhex("06000300")
+    found = coverage.build(insns, calls, coverage.entered([str(cov)], insns), coverage.pointed_at([image], insns))
+    assert found["modules"]["KRNL"] == {"code": 18, "reached": 6, "behind": 6, "pointer": 4, "orphan": 2}
+    assert [(n, kind, f"{r[1]:08X}", [f"{c[1]:08X}" for c in cs]) for n, kind, r, cs in found["roots"]] == [
+        (6, "behind", "06000100", ["06000000"]), (4, "pointer", "06000300", []), (2, "orphan", "06000400", [])]

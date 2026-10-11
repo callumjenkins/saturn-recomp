@@ -14,10 +14,12 @@
 //     reg  R|W  SIZE  ADDR  COUNT
 //     area R|W  NAME  LO  HI  COUNT
 //     call TARGET FROM COUNT
+//     modem R|W ADDR PR COUNT FIRST LAST [VALUES]
 #include "saturn.h"
 #include "state.h"
 #include <cstdio>
 #include <map>
+#include <set>
 #include <tuple>
 
 uint32_t mem_rd(const uint8_t* p, uint32_t o, int size) {
@@ -35,6 +37,10 @@ struct AreaLog { uint32_t lo = 0xFFFFFFFFu, hi = 0; uint64_t n = 0; };
 static std::map<std::tuple<uint32_t, int, char>, uint64_t> g_regs;
 static std::map<std::pair<std::string, char>, AreaLog> g_areas;
 static std::map<std::pair<uint32_t, uint32_t>, uint64_t> g_calls;
+// The modem ports again, split by PR, with the VBlanks of the first and last access and the first few values written.
+// PR names the caller only when the access is in a leaf function; elsewhere it is the last call's return address.
+struct ModemLog { uint64_t n = 0, first = 0, last = 0; std::set<uint32_t> values; };
+static std::map<std::tuple<uint32_t, char, uint32_t>, ModemLog> g_modem;
 
 // A register access costs the CPU a safe point of time: a loop that waits on a
 // device (a status register, the CD block's answers) lets time move on.
@@ -62,6 +68,14 @@ static void log_area(const char* name, uint32_t a, char rw) {
     ++l.n;
 }
 
+static void log_modem(uint32_t a, char rw, uint32_t v) {
+    ModemLog& l = g_modem[{a, rw, g_cpu->pr}];
+    uint64_t now = sat_vblanks();
+    if (!l.n++) l.first = now;
+    l.last = now;
+    if (rw == 'W' && l.values.size() < 8) l.values.insert(v);
+}
+
 void mmio_watch(uint32_t lo, uint32_t hi) { g_watch_lo = lo; g_watch_hi = hi; }
 
 void mmio_log_call(uint32_t target, uint32_t from) { ++g_calls[{target, from}]; }
@@ -77,6 +91,12 @@ void mmio_log_write(const std::string& path) {
         std::fprintf(f, "watch %c %08X %llu\n", k.second, k.first, (unsigned long long)n);
     for (auto& [k, n] : g_calls)
         std::fprintf(f, "call %08X %08X %llu\n", k.first, k.second, (unsigned long long)n);
+    for (auto& [k, l] : g_modem) {
+        std::fprintf(f, "modem %c %08X %08X %llu %llu %llu", std::get<1>(k), std::get<0>(k), std::get<2>(k),
+                     (unsigned long long)l.n, (unsigned long long)l.first, (unsigned long long)l.last);
+        for (uint32_t v : l.values) std::fprintf(f, " %02X", v);
+        std::fputc('\n', f);
+    }
     std::fclose(f);
 }
 
@@ -119,7 +139,10 @@ uint32_t sh2_mmio_read(uint32_t a, int size) {
         if (size != 1) sat_fatal("%d-byte read of the SMPC at %08X", size, a);
         return smpc_read(a & 0x7F);
     }
-    if (modem_port(a)) return size == 1 ? 0xFF : size == 2 ? 0xFFFF : 0xFFFFFFFFu;
+    if (modem_port(a)) {
+        log_modem(a, 'R', 0);
+        return size == 1 ? 0xFF : size == 2 ? 0xFFFF : 0xFFFFFFFFu;
+    }
     if (a >= 0x05800000u && a < 0x05900000u) return cd_read(a & 0xFFFFF, size);
     if (a >= 0x05FE0000u && a < 0x05FE0100u) return scu_read(a & 0xFF, size);
     if (video_owns(a)) return video_read(a, size);
@@ -145,7 +168,7 @@ void sh2_mmio_write(uint32_t a, uint32_t v, int size) {
     }
     if (a >= 0x01000000u && a < 0x01800000u) { slave_kick(); return; }             // SINIT
     if (a >= 0x01800000u && a < 0x02000000u) { onchip_input_capture(0); return; }  // MINIT
-    if (modem_port(a)) return;
+    if (modem_port(a)) { log_modem(a, 'W', v); return; }
     if (a >= 0x05800000u && a < 0x05900000u) { cd_write(a & 0xFFFFF, v, size); return; }
     if (a >= 0x05FE0000u && a < 0x05FE0100u) { scu_write(a & 0xFF, v, size); return; }
     if (video_owns(a)) { video_write(a, v, size); return; }

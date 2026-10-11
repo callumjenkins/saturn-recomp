@@ -31,7 +31,7 @@ import urllib.request
 import zipfile
 
 from .. import build, config
-from . import review
+from . import coverage, review
 from .upload import USER_AGENT, vblanks
 
 RUNTIME = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "runtime")
@@ -141,6 +141,9 @@ def main(argv=None):
     r = sub.add_parser("reviewed")
     r.add_argument("session")
     r.add_argument("summary", help="the text testers see, or @FILE holding it")
+    r = sub.add_parser("coverage", help="where the code no known run reached sits, and what leads to it")
+    r.add_argument("--top", type=int, default=25, help="how many of the largest groups to list")
+    r.add_argument("--module", action="append", help="list only this module's groups (repeatable)")
     r = sub.add_parser("replay")
     r.add_argument("session")
     r.add_argument("--video", action="store_true")
@@ -185,6 +188,8 @@ def main(argv=None):
         body = {"summary": summary, "new_functions": len(found["missed"]), "new_bytes": found["new_bytes"], "missed": found["missed"]}
         print(api(game, "POST", f"/api/admin/sessions/{a.session}/review", body))
         json.dump(body, open(os.path.join(session, review.REVIEWED), "w"), indent=1)
+    elif a.command == "coverage":
+        print(coverage.report(coverage.coverage_map(game, pulled), game.symbols, a.top, a.module))
     elif a.command == "replay":
         replay(game, session, a.video)
     elif a.command == "product":

@@ -70,7 +70,14 @@ python -m saturnrecomp.playtest game.toml pull               # sessions ready fo
 python -m saturnrecomp.playtest game.toml review ID --add-seeds
 python -m saturnrecomp.playtest game.toml replay ID --video  # the session again, headless, with a video
 python -m saturnrecomp.playtest game.toml reviewed ID @summary.txt
+python -m saturnrecomp.playtest game.toml coverage --module KRNL  # what no known run has reached yet
 ```
+
+`coverage` measures the current recompile against the game's own runs and the reviewed sessions, by
+instruction address, so code that several functions share counts once. Each group of unreached code is
+listed under its root: `behind` a call from code some run reached (with the runs that reached that
+caller, which says where in the game to look), reached only through a `pointer` in the program's
+data, or an `orphan` that nothing calls.
 
 `publish` sends the generated C++ to R2 and starts the release workflow through `gh`. The workflow
 compiles that C++ against this runtime on Linux, Windows and macOS, packages the launcher with

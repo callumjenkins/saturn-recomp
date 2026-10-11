@@ -3,18 +3,108 @@ package org.saturnrecomp.playtest
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Test
+import org.junit.Rule
+import org.junit.rules.TemporaryFolder
+import java.io.File
 
 /** Save files from sessions' records and progress lines, with a checkpoint shaped like Bomberman's. */
 class SavesTest {
+    @get:Rule val tmp = TemporaryFolder()
     private val checkpoint = JSONObject()
         .put("keep", "060C029C:2,060C063E:1,060D5F39:1")
         .put("accept", JSONArray("[[1, 6], [256, 264]]"))
         .put("show", JSONArray("""[["Stage {}", 0, "world-stage"], ["Lives {}", 1, "u8"], ["Speed {}", 2, "steps:E0:20?"],
-            ["{}", 2, "bits:01=Kick,02=Glove?"], ["{} dino", 1, "names:,Pink,Blue?", [2, 4]]]"""))
+            ["{}", 2, "bits:01=Kick,02=Glove?"], ["{} dino", 1, "names:,Pink,Blue,Green?", [2, 4]]]"""))
 
     private fun session(id: String, progress: List<String>, record: JSONObject = JSONObject(), vblanks: Long = 9000) =
-        Saves.Session(id, record, progress, vblanks, "Sam", null, JSONObject().put("meta", JSONObject().put("dump", "latest")))
+        Saves.Session(id, record, progress, vblanks, "Sam", null, JSONObject().put("meta", JSONObject().put("dump", "latest")
+            .put("end_keep", checkpoint.getString("keep")).put("end_line", progress.lastOrNull())))
+
+    @Test
+    fun continueUsesSavedStatsAndStageStartsKeepTheirEntryStats() {
+        val played = session("20261011-010441-a", listOf("2000 0103 03 26"))
+        played.remote!!.getJSONObject("meta")
+            .put("end_keep", checkpoint.getString("keep"))
+            .put("end_line", "9000 0103 02 00")
+        val save = Saves.build(listOf(played), checkpoint).single()
+        assertEquals(listOf("Stage 2-4", "Lives 2", "Speed -7"), save.lastWords)
+        assertEquals(listOf("Stage 2-4", "Lives 3", "Speed -6", "Glove", "Green dino"), save.starts.single().words)
+    }
+
+    @Test
+    fun localSavedStatsOverrideRemoteStatsWithoutChangingStageStarts() {
+        val dir = tmp.newFolder()
+        writeStateSummaryFixture(File(dir, "state.bin"), mapOf(
+            0x060C029CL to byteArrayOf(1, 3), 0x060C063EL to byteArrayOf(2), 0x060D5F39L to byteArrayOf(0)))
+        val remote = session("20261011-010441-a", listOf("2000 0103 03 26"))
+        val local = Saves.Session(remote.id, remote.record, remote.progress, 9000, "Sam", dir, remote.remote)
+        val save = Saves.build(listOf(local), checkpoint).single()
+        assertEquals(listOf("Stage 2-4", "Lives 2", "Speed -7"), save.lastWords)
+        assertEquals("Green dino", save.starts.single().words.last())
+        File(dir, "state.bin").delete()
+        writeStateSummaryFixture(File(dir, "state-at-start.bin"), emptyMap())
+        assertEquals(listOf("Stage 2-4"), save.lastWords)
+    }
+
+    @Test
+    fun aStageBranchShowsSavedStatsBeforeItsFirstProgressLine() {
+        val branch = session("20261011-030000-a", emptyList(), JSONObject().put("starts_at", "2000 0001 03 E0").put("resume", 4610))
+        branch.remote!!.getJSONObject("meta").put("end_line", "4610 0001 02 E0")
+        val save = Saves.build(listOf(branch), checkpoint).single()
+        assertEquals(listOf("Stage 1-2", "Lives 2"), save.lastWords)
+        assertEquals(listOf("Stage 1-2", "Lives 3"), save.starts.single().words)
+    }
+
+    @Test
+    fun aMenuSessionWithoutProgressDoesNotShowUninitializedInventory() {
+        val played = session("20261011-023504-a", emptyList())
+        played.remote!!.getJSONObject("meta").put("end_line", "9000 0000 00 F0")
+        val dir = tmp.newFolder()
+        writeStateSummaryFixture(File(dir, "state.bin"), emptyMap())
+        val local = Saves.Session(played.id, played.record, emptyList(), 9000, "Sam", dir, played.remote)
+        assertEquals(emptyList<String>(), Saves.build(listOf(played), checkpoint).single().lastWords)
+        assertEquals(emptyList<String>(), Saves.build(listOf(local), checkpoint).single().lastWords)
+    }
+
+    @Test
+    fun unavailableOrIncompatibleSavedStatsShowOnlyTheLastKnownStage() {
+        for (meta in listOf(JSONObject().put("dump", "latest"),
+            JSONObject().put("dump", "none").put("end_keep", "other").put("end_line", "9000 0103 02 00"),
+            JSONObject().put("dump", "latest").put("end_keep", checkpoint.getString("keep")).put("end_line", "9000 0103 ZZ 00"),
+            JSONObject().put("dump", "latest").put("end_keep", checkpoint.getString("keep")).put("end_line", "9000 0103 -1 00"),
+            JSONObject().put("dump", "latest").put("end_keep", checkpoint.getString("keep")).put("end_line", "9000 0103 +1 00"),
+            JSONObject().put("dump", "latest").put("end_keep", checkpoint.getString("keep")).put("end_line", "9000 0103 2 00"),
+            JSONObject().put("dump", "latest").put("end_keep", checkpoint.getString("keep")).put("end_line", "9000 0000 00 F0"))) {
+            val played = session("20261011-010441-a", listOf("2000 0103 03 26"))
+            played.remote!!.put("meta", meta)
+            assertEquals(listOf("Stage 2-4"), Saves.build(listOf(played), checkpoint).single().lastWords)
+        }
+    }
+
+    @Test
+    fun uploadMetadataDescribesTheLatestDumpWithoutChangingProgress() {
+        val dir = tmp.newFolder()
+        File(dir, "session.json").writeText(JSONObject().put("save", "s").put("progress_keep", checkpoint.getString("keep")).toString())
+        File(dir, "progress.txt").writeText("2000 0103 03 26\n")
+        writeStateSummaryFixture(File(dir, "state.bin"), mapOf(
+            0x060C029CL to byteArrayOf(1, 3), 0x060C063EL to byteArrayOf(2), 0x060D5F39L to byteArrayOf(0)))
+        val meta = Saves.meta(dir)
+        assertEquals("latest", meta.getString("dump"))
+        assertEquals(checkpoint.getString("keep"), meta.getString("end_keep"))
+        assertEquals("0 0103 02 00", meta.getString("end_line"))
+        assertEquals("2000 0103 03 26\n", File(dir, "progress.txt").readText())
+        File(dir, "state.bin").delete()
+        assertFalse(Saves.meta(dir).has("end_line"))
+        writeStateSummaryFixture(File(dir, "state.bin"), emptyMap())
+        File(dir, "progress.txt").delete()
+        assertFalse(Saves.meta(dir).has("end_line"))
+        File(dir, "session.json").writeText(Sessions.read(dir).put("starts_at", "2000 0103 03 26").toString())
+        writeStateSummaryFixture(File(dir, "state.bin"), mapOf(
+            0x060C029CL to byteArrayOf(1, 3), 0x060C063EL to byteArrayOf(2), 0x060D5F39L to byteArrayOf(0)))
+        assertEquals("0 0103 02 00", Saves.meta(dir).getString("end_line"))
+    }
 
     @Test
     fun aProgressLineIsShownByTheCheckpoint() {
@@ -103,7 +193,7 @@ class SavesTest {
         assertEquals(first.id, b.parent!!.getString("save"))
         assertEquals(listOf(4610L, 8000L), b.starts.map { it.vblank })
         assertEquals(listOf(branch.id, again.id), b.sessions.map { it.id })
-        assertEquals(listOf("Stage 1-2", "Lives 3"), b.endOf(again).words)
+        assertEquals(listOf("Stage 1-2"), b.endOf(again).words)
         assertEquals(2, saves.first { it.id != branch.id }.starts.size)
     }
 }

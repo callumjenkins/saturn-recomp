@@ -74,6 +74,7 @@ object Sessions {
             .put("started", started.atZone(ZoneId.systemDefault()).withZoneSameInstant(ZoneOffset.UTC).format(UTC))
             .put("clock", clock).put("args", extra)
             .put("platform", "Android ${Build.VERSION.RELEASE} ${Build.SUPPORTED_ABIS?.firstOrNull() ?: ""} ${Build.MANUFACTURER} ${Build.MODEL}")
+        checkpoint?.let { record.put("progress_keep", it.getString("keep")) }
         if (from != null) record.put("continues", from.name)
         if (rebuilt != null) record.put("rebuilds", rebuilt.first)
         record.put("save", save ?: out.name)

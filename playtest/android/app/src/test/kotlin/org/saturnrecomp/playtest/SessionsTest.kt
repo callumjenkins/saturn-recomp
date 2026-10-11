@@ -25,6 +25,13 @@ class SessionsTest {
     }
 
     @Test
+    fun aNewSessionKeepsTheLayoutForItsSavedStats() {
+        info.put("checkpoint", JSONObject().put("keep", "060C063E:1"))
+        val (out, _) = start()
+        assertEquals("060C063E:1", Sessions.read(out).getString("progress_keep"))
+    }
+
+    @Test
     fun playStartsASaveFileOfItsOwn() {
         val (out, args) = start()
         val record = Sessions.read(out)

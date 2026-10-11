@@ -32,6 +32,7 @@
 #include "video.h"
 #include "host.h"
 #include "host_sdl.h"
+#include "pace.h"
 #include "pad_slots.h"
 #include "settings.h"
 #include "touch_pad.h"
@@ -49,7 +50,7 @@ static SDL_Texture* g_tex;
 static int g_tex_w, g_tex_h;
 static uint16_t g_buttons[kHostSlots];
 static const Frame* g_last;
-using Clock = std::chrono::steady_clock;
+using Clock = PaceClock;
 static Clock::time_point g_base;                // host time of virtual time 0
 static bool g_paced;
 
@@ -977,11 +978,9 @@ void host_pace(uint64_t now) {
         g_base = Clock::now() - std::chrono::nanoseconds(now);
         return;
     }
-    Clock::time_point due = g_base + std::chrono::nanoseconds(now);
-    Clock::time_point t = Clock::now();
-    if (t > due + std::chrono::milliseconds(100)) g_base += t - due;   // behind: do not run to catch up
-    else if (due > t) {
+    auto wait = pace_wait(g_base, now, Clock::now());
+    if (wait > Clock::duration{}) {
         HostCall in("SDL_DelayPrecise");
-        SDL_DelayPrecise((Uint64)std::chrono::duration_cast<std::chrono::nanoseconds>(due - t).count());
+        SDL_DelayPrecise((Uint64)std::chrono::duration_cast<std::chrono::nanoseconds>(wait).count());
     }
 }

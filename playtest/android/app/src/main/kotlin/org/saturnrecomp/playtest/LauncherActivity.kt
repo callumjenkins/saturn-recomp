@@ -1,6 +1,7 @@
 package org.saturnrecomp.playtest
 
 import android.app.Activity
+import android.app.ActivityManager
 import android.app.AlertDialog
 import android.content.Intent
 import android.graphics.BitmapFactory
@@ -37,6 +38,7 @@ class LauncherActivity : Activity() {
     private lateinit var settings: JSONObject
     private val work = Executors.newSingleThreadExecutor()
     private var busy = false
+    private var savesOpen = false
 
     private lateinit var artwork: ImageView
     private lateinit var updateLink: TextView
@@ -174,6 +176,8 @@ class LauncherActivity : Activity() {
         work.execute {
             val unfinished = Sessions.unfinished(home)
             if (unfinished.isNotEmpty()) Thread.sleep(2000)     // SDL gives the game a second to write its coverage once it is closed
+            // The launcher resumes for a moment after a play started from Save files, while its game is still starting.
+            if (gameRunning()) return@execute
             val finished = unfinished.filter { Sessions.finish(it) }
             // A Continue this build cannot load the dump of goes on again from the checkpoint or the presses instead.
             finished.firstOrNull { Sessions.dumpRefused(it) }?.let { refused ->
@@ -212,6 +216,7 @@ class LauncherActivity : Activity() {
     @Deprecated("startActivityForResult is all a plain Activity has")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == SAVES) savesOpen = false
         if (requestCode == SAVES && resultCode == RESULT_OK && data != null) {
             val line = data.getStringExtra(SavesActivity.EXTRA_LINE)
             if (line != null) play(branch = Sessions.Branch(line, data.getStringExtra(SavesActivity.EXTRA_CLOCK)?.ifEmpty { null }
@@ -240,7 +245,13 @@ class LauncherActivity : Activity() {
             .show()
     }
 
+    private fun gameRunning() =
+        (getSystemService(ACTIVITY_SERVICE) as ActivityManager).runningAppProcesses?.any { it.processName == "$packageName:game" } == true
+
+    // Both the button and a game left through Save files open the list, and two lists open would each start a game.
     private fun chooseSession() {
+        if (savesOpen) return
+        savesOpen = true
         startActivityForResult(Intent(this, SavesActivity::class.java), SAVES)
     }
 

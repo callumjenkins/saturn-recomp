@@ -54,12 +54,21 @@ object Saves {
         /** Where its latest session ended, which opening it goes on from. */
         val end: Point get() = sessions.last().let { Point(endKind(it), it, it.vblanks, null, words(it)) }
 
-        /** Where `session` ended, in the words of the last stage start it noted. */
+        /** An earlier session's continue point, with its saved stats when available. */
         fun endOf(session: Session) = Point(endKind(session), session, session.vblanks, null, words(session))
 
         val lastWords: List<String> get() = end.words
 
-        private fun words(s: Session) = s.progress.lastOrNull()?.let { describe(checkpoint, it) }?.ifEmpty { null } ?: firstWords
+        private fun words(s: Session): List<String> {
+            if (s.progress.isEmpty() && firstWords.isEmpty()) return emptyList()
+            val keep = checkpoint?.optString("keep") ?: return emptyList()
+            val line = if (s.local != null) StateSummary.line(File(s.local, "state.bin"), keep, s.vblanks)
+                else s.remote?.optJSONObject("meta")?.takeIf { it.optString("end_keep") == keep }?.optString("end_line")
+            val lastStart = s.progress.lastOrNull() ?: sessions.first().record.optString("starts_at")
+            return line?.takeIf { first(it) != null && first(it) == first(lastStart) }
+                ?.let { describe(checkpoint, it) }?.takeIf { it.isNotEmpty() }
+                ?: (s.progress.lastOrNull()?.let { describe(checkpoint, it) }?.ifEmpty { null } ?: firstWords).take(1)
+        }
     }
 
     fun endKind(s: Session) = if (s.dump == "latest") Kind.EXACT else Kind.REPLAY
@@ -108,7 +117,12 @@ object Saves {
      */
     fun kept(checkpoint: JSONObject?, line: String): List<List<Int>>? {
         val lengths = checkpoint?.optString("keep")?.split(",")?.map { it.substringAfter(":").toIntOrNull() } ?: return null
-        val kept = line.trim().split(" ").drop(1).map { f -> f.chunked(2).map { it.toInt(16) } }
+        val fields = line.trim().split(" ").drop(1)
+        if (fields.map { it.length } != lengths.map { it?.times(2) }) return null
+        val kept = fields.map { f -> f.chunked(2).map { byte ->
+            if (byte.any { it.digitToIntOrNull(16) == null }) return null
+            byte.toInt(16)
+        } }
         return kept.takeIf { k -> k.map { it.size } == lengths }
     }
 
@@ -185,6 +199,13 @@ object Saves {
             File(session, "state-at-start.bin").exists() -> "start"
             else -> "none"
         })
+        val hasProgress = File(session, "progress.txt").takeIf { it.exists() }?.readLines()?.any { it.isNotBlank() } == true
+            || record.optString("starts_at").isNotEmpty()
+        record.optString("progress_keep").takeIf { it.isNotEmpty() && hasProgress }?.let { keep ->
+            StateSummary.line(File(session, "state.bin"), keep, Sessions.vblanks(session))?.let { line ->
+                out.put("end_keep", keep).put("end_line", line)
+            }
+        }
         return out
     }
 }

@@ -539,10 +539,11 @@ void cd_init() {
 }
 
 uint32_t cd_read(uint32_t off, int size) {
-    if (off == 0x18000 || off == 0x98000) {     // the data port
+    if ((off & ~1u) == 0x18000 || (off & ~1u) == 0x98000) {     // the data port
         if (size == 4) { uint32_t hi = next_word(); return hi << 16 | next_word(); }
-        if (size == 2) return next_word();
-        sat_fatal("byte read of the CD data port");
+        uint16_t w = next_word();
+        if (size == 2) return w;
+        return off & 1 ? w & 0xFF : w >> 8;     // a byte read takes a whole word from the FIFO, as Mednafen's bus does
     }
     switch (off & ~3u) {
     case 0x90008: return g_hirq;

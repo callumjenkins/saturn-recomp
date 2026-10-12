@@ -128,3 +128,50 @@ def test_the_report_sets_classed_groups_aside_and_lists_them_on_request(tmp_path
     assert "dead                1 groups        0 behind        0 pointer        4 orphan" in text
     assert "06000400" not in text.split("by their root:")[1]
     assert "06000400  [dead]" in coverage.report(found, {}, everything=True)
+
+
+OTHER_DISC_TOML = """
+[game]
+name = "Test"
+
+[[module]]
+name = "MAIN"
+file = "main.bin"
+base = 0x06004000
+
+[playtest]
+endpoint = "https://example.invalid"
+repo = "o/n"
+
+[playtest.other_disc]
+label = "Japanese voices"
+disc = "disc-jp.json"
+files = "/A/V.AIF=/V.AIF"
+tracks = 2
+cue = "iso-jp/jp.cue"
+"""
+
+
+def other_disc_game(tmp_path):
+    from saturnrecomp import config
+    (tmp_path / "game.toml").write_text(OTHER_DISC_TOML)
+    (tmp_path / "disc.json").write_text('{"product": "MK-1", "version": "V1.000"}')
+    (tmp_path / "disc-jp.json").write_text('{"product": "T-1", "version": "V1.000"}')
+    return config.load(str(tmp_path / "game.toml"))
+
+
+def test_a_bundle_offers_the_other_disc_with_its_manifest(tmp_path):
+    from saturnrecomp.playtest.__main__ import bundle
+    out = tmp_path / "bundle"
+    bundle(other_disc_game(tmp_path), "ID", str(out))
+    info = json.loads((out / "playtest.json").read_text())
+    assert info["other_disc"] == {"label": "Japanese voices", "files": "/A/V.AIF=/V.AIF", "tracks": "2"}
+    assert json.loads((out / "other-disc.json").read_text())["product"] == "T-1"
+
+
+def test_a_replay_plays_with_this_machines_copy_of_the_other_disc(tmp_path):
+    from saturnrecomp.playtest.__main__ import replay_args
+    game = other_disc_game(tmp_path)
+    played = replay_args(game, ["--other-disc", "C:/tester/jp.cue", "--track-from-other", "2"])
+    assert played == ["--other-disc", str(tmp_path / "iso-jp/jp.cue"), "--track-from-other", "2"]
+    assert replay_args(game, ["--multitap", "1"]) == ["--multitap", "1"]

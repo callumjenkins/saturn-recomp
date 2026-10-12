@@ -48,7 +48,7 @@ object Sessions {
      */
     fun start(
         home: File, info: JSONObject, cue: File, send: Boolean, from: File? = null, useDump: Boolean = true,
-        branch: Branch? = null, save: String? = null, parent: JSONObject? = null,
+        branch: Branch? = null, save: String? = null, parent: JSONObject? = null, more: List<String> = emptyList(),
     ): Pair<File, List<String>> {
         val started = LocalDateTime.now().truncatedTo(ChronoUnit.SECONDS)
         val out = File(home, "sessions/${started.format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))}-${UUID.randomUUID().toString().replace("-", "").take(8)}")
@@ -69,6 +69,7 @@ object Sessions {
         if (saves.exists()) saves.copyTo(File(out, "backup-at-start.bin"))
         val extra = JSONArray(info.optJSONArray("args")?.let { a -> (0 until a.length()).map { a.getString(it) } } ?: emptyList<String>())
         rebuilt?.second?.forEach { extra.put("--write").put(it) }
+        more.forEach { extra.put(it) }
         val record = JSONObject()
             .put("id", out.name).put("product", info.getString("product")).put("build", info.getString("build"))
             .put("started", started.atZone(ZoneId.systemDefault()).withZoneSameInstant(ZoneOffset.UTC).format(UTC))

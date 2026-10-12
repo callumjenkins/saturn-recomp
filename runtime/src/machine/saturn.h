@@ -60,6 +60,9 @@ struct SaturnConfig {
     std::string video;              // the run's pictures and sound to this MP4 (movie.cpp)
     bool interp = false;            // fields between the game's frames drawn moving (vdp1.cpp)
     int multitap = 0;               // 6-player multitaps: 1 on port 1, 2 on both ports
+    std::string other_disc;         // a second disc that files and audio tracks are borrowed from (cdrom_borrow)
+    std::string from_other;         // ... those files: "PATH=OTHERPATH,..."
+    std::string tracks_from_other;  // ... and those tracks: "2,..."
     int64_t clock = -1;             // the SMPC's clock at power-on, seconds since 1970 (no time zone); -1: the host's
     uint32_t task_setjmp = 0, task_longjmp = 0;   // the game's own task switch (tasks.cpp), 0: none
     int agent_fd = -1;              // a socket another program plays the run through (agent.cpp)
@@ -168,6 +171,8 @@ struct CdTrack { uint32_t fad, ctrladr; };
 int  cdrom_tracks(CdTrack* out, int max);             // number of tracks
 uint32_t cdrom_leadout();
 bool cdrom_find(const char* path, uint32_t* fad, uint32_t* size);   // ISO 9660, "DIR/FILE.EXT"
+// Serves files ("PATH=OTHERPATH,..." or just PATH) and audio tracks ("2,...") from another disc instead.
+bool cdrom_borrow(const std::string& other_cue, const std::string& files, const std::string& tracks, std::string& error);
 std::string cdrom_first_file();                       // the 1st file of the root: the 1st read file
 void cd_init();
 void cd_tick();

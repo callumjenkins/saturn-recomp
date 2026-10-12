@@ -17,6 +17,7 @@ import android.view.ViewGroup
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -43,6 +44,10 @@ class LauncherActivity : Activity() {
     private lateinit var artwork: ImageView
     private lateinit var updateLink: TextView
     private lateinit var discLabel: TextView
+    private var other: JSONObject? = null           // playtest.json's other_disc: files a player's other disc can give
+    private var otherManifest: JSONObject? = null
+    private var otherOn: CheckBox? = null
+    private var otherLabel: TextView? = null
     private lateinit var token: EditText
     private lateinit var who: Spinner
     private lateinit var playButton: Button
@@ -85,6 +90,18 @@ class LauncherActivity : Activity() {
         discLabel = text()
         button("Choose files…") { chooseFiles() }
         button("From a URL…") { chooseUrl() }
+        other = info.optJSONObject("other_disc")?.also { o ->
+            otherManifest = JSONObject(assets.open("other-disc.json").use { it.readBytes().decodeToString() })
+            otherOn = CheckBox(this).apply {
+                text = o.getString("label")
+                isChecked = settings.optBoolean("other_on")
+                setOnCheckedChangeListener { _, on -> settings.put("other_on", on); saveSettings() }
+                setPadding(0, pad, 0, 0)
+                column.addView(this)
+            }
+            otherLabel = text()
+            button("Choose that disc…") { chooseFiles(PICK_OTHER) }
+        }
         text("Who's playing", bold = true).setPadding(0, pad, 0, 0)
         who = Spinner(this, Spinner.MODE_DROPDOWN).apply { column.addView(this) }
         showTesters(emptyList())
@@ -205,12 +222,12 @@ class LauncherActivity : Activity() {
         }
     }
 
-    private fun chooseFiles() {
+    private fun chooseFiles(request: Int = PICK) {
         val pick = Intent(Intent.ACTION_OPEN_DOCUMENT)
             .addCategory(Intent.CATEGORY_OPENABLE)
             .setType("*/*")
             .putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
-        startActivityForResult(pick, PICK)
+        startActivityForResult(pick, request)
     }
 
     @Deprecated("startActivityForResult is all a plain Activity has")
@@ -226,9 +243,11 @@ class LauncherActivity : Activity() {
             }
             return
         }
-        if (requestCode != PICK || resultCode != RESULT_OK || data == null) return
+        if ((requestCode != PICK && requestCode != PICK_OTHER) || resultCode != RESULT_OK || data == null) return
         val uris = data.clipData?.let { clip -> (0 until clip.itemCount).map { clip.getItemAt(it).uri } } ?: listOfNotNull(data.data)
-        if (uris.isNotEmpty()) start { import(uris) }
+        if (uris.isEmpty()) return
+        if (requestCode == PICK) start { import(uris, "disc") { useImage(it) } }
+        else start { import(uris, "other-disc") { useOtherImage(it) } }
     }
 
     private fun chooseUrl() {
@@ -264,7 +283,11 @@ class LauncherActivity : Activity() {
         settings.put("token", token.text.toString().trim())
         saveSettings()
         val code = credential()
-        val (session, args) = Sessions.start(home, info, File(cue), send = code.isNotEmpty(), from = from, useDump = useDump, branch = branch, save = save, parent = parent)
+        val otherCue = settings.optString("other_cue")
+        val more = other?.takeIf { settings.optBoolean("other_on") && otherCue.isNotEmpty() }?.let {
+            listOf("--other-disc", otherCue, "--from-other", it.getString("files"), "--track-from-other", it.getString("tracks"))
+        } ?: emptyList()
+        val (session, args) = Sessions.start(home, info, File(cue), send = code.isNotEmpty(), from = from, useDump = useDump, branch = branch, save = save, parent = parent, more = more)
         val record = Sessions.read(session)
         say((when {
             branch != null -> "The game goes back to that stage start, then the controller is yours. "
@@ -287,9 +310,9 @@ class LauncherActivity : Activity() {
         startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("${info.getString("endpoint")}/#$link")))
     }
 
-    // Each choice of disc lands in disc/new, which replaces disc/current once it checks out.
-    private fun import(uris: List<Uri>) {
-        val folder = File(home, "disc/new").apply { deleteRecursively(); mkdirs() }
+    // Each choice of disc lands in WHERE/new, which replaces WHERE/current once it checks out.
+    private fun import(uris: List<Uri>, where: String, use: (File) -> Unit) {
+        val folder = File(home, "$where/new").apply { deleteRecursively(); mkdirs() }
         for (uri in uris) {
             val name = contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
                 if (it.moveToFirst()) it.getString(0) else null
@@ -310,7 +333,7 @@ class LauncherActivity : Activity() {
             }
             if (Disc.isZip(target)) Disc.unzip(target, folder)
         }
-        useImage(folder)
+        use(folder)
     }
 
     private fun download(url: String) {
@@ -341,6 +364,27 @@ class LauncherActivity : Activity() {
         say("Disc checked." + if (warnings.isNotEmpty()) " Its music tracks differ, so the music may too." else "")
     }
 
+    private fun useOtherImage(folder: File) {
+        val o = other ?: return
+        val found = Disc.findImage(folder)
+        say("Checking that disc…")
+        val (errors, _) = Disc.check(found, otherManifest!!) { say(it) }
+        if (errors.isNotEmpty()) {
+            folder.deleteRecursively()
+            say("This is not the disc ${o.getString("label")} needs:\n" + errors.take(5).joinToString("\n"))
+            return
+        }
+        val current = File(home, "other-disc/current").apply { deleteRecursively() }
+        if (!folder.renameTo(current)) throw java.io.IOException("cannot move the disc into $current")
+        val image = File(current, found.relativeTo(folder).path)
+        settings.put("other_image", image.path)
+        settings.put("other_cue", Disc.cueFor(image, File(home, "other-disc")).path)
+        settings.put("other_on", true)
+        saveSettings()
+        runOnUiThread { otherOn?.isChecked = true; showDisc() }
+        say("Disc checked. ${o.getString("label")} are on.")
+    }
+
     /** The game's box art, which the app fetches from the URL in playtest.json the first time rather than shipping it. */
     private fun showArtwork() {
         val file = File(home, BOX_ART)
@@ -366,6 +410,8 @@ class LauncherActivity : Activity() {
 
     private fun showDisc() {
         discLabel.text = settings.optString("image").takeIf { it.isNotEmpty() }?.let { File(it).name } ?: "None chosen yet"
+        otherLabel?.text = settings.optString("other_image").takeIf { it.isNotEmpty() }?.let { File(it).name }
+            ?: "Needs your own copy of that disc"
     }
 
     private fun saveSettings() = File(home, "launcher.json").writeText(settings.toString(1))
@@ -394,6 +440,7 @@ class LauncherActivity : Activity() {
     companion object {
         private const val PICK = 1
         private const val SAVES = 2
+        private const val PICK_OTHER = 3
         private const val NOBODY = "Nobody: keep sessions on this phone"
         private const val WITH_CODE = "Someone with a tester code…"
         private const val BOX_ART = "boxart"

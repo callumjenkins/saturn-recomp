@@ -616,6 +616,13 @@ int saturn_main(const SaturnConfig& cfg) {
     parse_cheats(cfg.cheats);
     parse_keep(cfg.progress_keep);
     if (!cdrom_open(cfg.cue)) { std::fprintf(stderr, "cannot open the disc %s\n", cfg.cue.c_str()); return 2; }
+    if (!cfg.other_disc.empty()) {
+        std::string error;
+        if (!cdrom_borrow(cfg.other_disc, cfg.from_other, cfg.tracks_from_other, error)) {
+            std::fprintf(stderr, "--other-disc: %s\n", error.c_str());
+            return 2;
+        }
+    }
     g_master = SH2Context{};
     g_master.budget = kBudget;
     video_init();

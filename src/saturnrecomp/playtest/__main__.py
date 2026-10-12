@@ -60,6 +60,10 @@ def bundle(game, ident, out):
             "repo": game.playtest.repo, "args": game.playtest.args, "boxart": game.playtest.boxart}
     if game.checkpoint:
         info["checkpoint"] = game.checkpoint.to_json()
+    other = game.playtest.other_disc
+    if other:
+        info["other_disc"] = {"label": other.label, "files": other.files, "tracks": other.tracks}
+        shutil.copy(other.disc, os.path.join(out, "other-disc.json"))
     json.dump(info, open(os.path.join(out, "playtest.json"), "w"), indent=1)
     shutil.copy(game.playtest.disc, os.path.join(out, "disc.json"))
 
@@ -104,6 +108,17 @@ def pull(game, pulled):
         print("no sessions waiting for review")
 
 
+def replay_args(game, args):
+    """A session's saturn arguments for this machine: another disc it played with is this machine's copy."""
+    played = list(args)
+    if "--other-disc" in played:
+        cue = game.playtest.other_disc.cue if game.playtest.other_disc else ""
+        if not cue:
+            raise SystemExit("the session played with another disc: name this machine's copy in [playtest.other_disc] cue")
+        played[played.index("--other-disc") + 1] = cue
+    return played
+
+
 def replay(game, session, video):
     """The session played again headless on the current build, into its replay/ directory, from the dump it
     started from if it has one."""
@@ -115,11 +130,12 @@ def replay(game, session, video):
         save = shutil.copy(os.path.join(session, "backup-at-start.bin"), os.path.join(out, "backup.bin"))
     dump = os.path.join(session, "state-at-start.bin")
     recorded = os.path.join(session, "input.txt")
+    played = replay_args(game, info.get("args", []))
     has_presses = os.path.exists(recorded) and open(recorded).read().strip(",\n")
     args = [game.saturn, "--cue", _cue(), "--out", out, "--save", save, "--clock", info["clock"], "--headless",
             *(["--input", f"@{recorded}"] if has_presses else []), "--vblanks", str(vblanks(session) + 600),
             *(["--state-in", dump] if os.path.exists(dump) else []),
-            "--coverage", os.path.join(out, "coverage.txt"), *info.get("args", []),
+            "--coverage", os.path.join(out, "coverage.txt"), *played,
             *(["--video", os.path.abspath(os.path.join(out, "video.mp4"))] if video else [])]
     with open(os.path.join(out, "log.txt"), "w") as log:
         code = subprocess.run(args, stdout=log, stderr=subprocess.STDOUT).returncode

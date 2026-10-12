@@ -32,6 +32,15 @@ class SessionsTest {
     }
 
     @Test
+    fun anotherDiscsArgumentsReachTheGameAndTheSessionsRecord() {
+        val more = listOf("--other-disc", "/x/jp.cue", "--from-other", "/A=/A", "--track-from-other", "2")
+        val (out, args) = Sessions.start(tmp.root, info, File(tmp.root, "disc.cue"), send = false, more = more)
+        assertTrue(args.containsAll(more))
+        val recorded = Sessions.read(out).getJSONArray("args")
+        assertEquals(more, (0 until recorded.length()).map { recorded.getString(it) })
+    }
+
+    @Test
     fun playStartsASaveFileOfItsOwn() {
         val (out, args) = start()
         val record = Sessions.read(out)

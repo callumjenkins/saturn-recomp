@@ -34,6 +34,13 @@
     args = []                       # saturn arguments every session plays with
     boxart = "https://..."          # the box art the Android app shows, fetched by the app, never bundled
 
+    [playtest.other_disc]           # optional: files and audio tracks a player can take from another disc of theirs
+    label = "Japanese voices"       # what the launchers' option says
+    disc = "disc-jp.json"           # that disc's manifest
+    files = "/BOMSS/M_058.AIF=/M_058.AIF"   # saturn's --from-other
+    tracks = "2"                    # saturn's --track-from-other
+    cue = "iso-jp/GAME.cue"         # this machine's copy, which replays use in place of the tester's
+
     [checkpoint]                    # optional: a start a session's Continue can rebuild when its dump won't load
     keep = [["stage_2", 2], ["score", 8], ["objects+0x5E", 1]]   # the first's changes start one
     accept = [[0x0001, 0x0006], [0x0100, 0x0108]]   # ranges of the first's values, big-endian, it can be rebuilt from
@@ -81,6 +88,16 @@ class Tasks:
 
 
 @dataclass
+class OtherDisc:
+    """Files and audio tracks a player can take from another disc of their own, such as another region's."""
+    label: str
+    disc: str                  # its manifest
+    files: str                 # saturn's --from-other
+    tracks: str                # saturn's --track-from-other
+    cue: str = ""              # this machine's copy, for replays
+
+
+@dataclass
 class Playtest:
     endpoint: str
     repo: str
@@ -89,6 +106,7 @@ class Playtest:
     args: list[str] = field(default_factory=list)
     boxart: str = ""
     classes: str = ""          # the coverage classes file, or "" for none
+    other_disc: OtherDisc | None = None
 
     @property
     def manifest(self):
@@ -277,6 +295,10 @@ def load(path):
         playtest = Playtest(p["endpoint"].rstrip("/"), p["repo"], os.path.join(root, p.get("disc", "disc.json")),
                             [os.path.join(root, g) for g in p.get("coverage", [])], list(p.get("args", [])),
                             p.get("boxart", ""), os.path.join(root, p["classes"]) if "classes" in p else "")
+        if "other_disc" in p:
+            o = p["other_disc"]
+            playtest.other_disc = OtherDisc(o["label"], os.path.join(root, o["disc"]), o.get("files", ""),
+                                            str(o.get("tracks", "")), os.path.join(root, o["cue"]) if "cue" in o else "")
     return Game(game.get("name", os.path.basename(root)), root, os.path.join(root, game.get("build", "build")),
                 os.path.join(root, game.get("seeds", "seeds.json")), modules, symbols, tasks, hooks,
                 list(game.get("cmake", [])), playtest, _checkpoint(t["checkpoint"], symbols) if "checkpoint" in t else None)

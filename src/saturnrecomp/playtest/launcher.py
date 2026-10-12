@@ -47,15 +47,27 @@ class Launcher:
         ttk.Button(frame, text="Choose file…", command=self.choose_file).grid(column=0, row=5, sticky="w")
         ttk.Button(frame, text="From a URL…", command=self.choose_url).grid(column=1, row=5, sticky="w")
 
-        ttk.Label(frame, text="Tester code").grid(column=0, row=6, sticky="w", pady=(12, 0))
+        row = 6
+        self.other = self.info.get("other_disc")
+        if self.other:
+            self.other_manifest = json.load(open(os.path.join(bundle, "other-disc.json")))
+            self.other_on = tk.BooleanVar(value=self.settings.get("other_on", False))
+            ttk.Checkbutton(frame, text=self.other["label"], variable=self.other_on,
+                            command=self._other_toggled).grid(column=0, row=row, columnspan=3, sticky="w", pady=(12, 0))
+            self.other_label = ttk.Label(frame, width=52)
+            self.other_label.grid(column=0, row=row + 1, columnspan=3, sticky="w")
+            ttk.Button(frame, text="Choose that disc…", command=self.choose_other).grid(column=0, row=row + 2, sticky="w")
+            row += 3
+
+        ttk.Label(frame, text="Tester code").grid(column=0, row=row, sticky="w", pady=(12, 0))
         self.token = tk.StringVar(value=self.settings.get("token", ""))
-        ttk.Entry(frame, textvariable=self.token, width=52, show="•").grid(column=0, row=7, columnspan=3, sticky="w")
+        ttk.Entry(frame, textvariable=self.token, width=52, show="•").grid(column=0, row=row + 1, columnspan=3, sticky="w")
 
         self.play_button = ttk.Button(frame, text="Play", command=self.play)
-        self.play_button.grid(column=0, row=8, sticky="w", pady=(16, 0))
-        ttk.Button(frame, text="My sessions", command=self.open_sessions).grid(column=1, row=8, sticky="w", pady=(16, 0))
+        self.play_button.grid(column=0, row=row + 2, sticky="w", pady=(16, 0))
+        ttk.Button(frame, text="My sessions", command=self.open_sessions).grid(column=1, row=row + 2, sticky="w", pady=(16, 0))
         self.status = ttk.Label(frame, width=52, wraplength=420)
-        self.status.grid(column=0, row=9, columnspan=3, sticky="w", pady=(12, 0))
+        self.status.grid(column=0, row=row + 3, columnspan=3, sticky="w", pady=(12, 0))
 
         self._show_disc()
         self.root.after(100, self._drain)
@@ -72,6 +84,16 @@ class Launcher:
         url = simpledialog.askstring("Disc from a URL", "A link to your own copy of the disc: a .cue, .iso or .bin, or a .zip holding them.", parent=self.root)
         if url and url.strip():
             self._start(self._download, url.strip())
+
+    def choose_other(self):
+        path = filedialog.askopenfilename(title=f"Your disc for {self.other['label']}",
+                                          filetypes=[("Disc images", "*.cue *.iso *.bin"), ("All files", "*")])
+        if path:
+            self._start(self._use_other_image, path)
+
+    def _other_toggled(self):
+        self.settings["other_on"] = self.other_on.get()
+        self._save_settings()
 
     def open_sessions(self):
         webbrowser.open(f"{self.info['endpoint']}/#token={self.token.get().strip()}")
@@ -135,7 +157,11 @@ class Launcher:
             if ended:
                 self.events.put(("status", "Session sent. Its review shows under My sessions." if ok
                                  else "Could not send the session. The launcher tries again next time it starts."))
-        session.play(saturn, self.settings["cue"], self.info, self.info["endpoint"], token or None, self.info.get("args", ()), sent)
+        args = list(self.info.get("args", ()))
+        if self.other and self.other_on.get() and self.settings.get("other_cue"):
+            args += ["--other-disc", self.settings["other_cue"], "--from-other", self.other["files"],
+                     "--track-from-other", self.other["tracks"]]
+        session.play(saturn, self.settings["cue"], self.info, self.info["endpoint"], token or None, args, sent)
         if not token:
             self.events.put(("status", "Session kept on this computer."))
 
@@ -151,6 +177,9 @@ class Launcher:
     def _show_disc(self):
         image = self.settings.get("image")
         self.disc_label.config(text=os.path.basename(image) if image else "None chosen yet")
+        if self.other:
+            other = self.settings.get("other_image")
+            self.other_label.config(text=os.path.basename(other) if other else "Needs your own copy of that disc")
 
     def _start(self, work, *args):
         """Runs `work` off the window's thread, one job at a time."""
@@ -179,6 +208,21 @@ class Launcher:
         self._save_settings()
         self.events.put(("disc", None))
         self.events.put(("status", "Disc checked." + (" Its music tracks differ, so the music may too." if warnings else "")))
+
+
+    def _use_other_image(self, image):
+        self.events.put(("status", "Checking that disc…"))
+        errors, _ = disc_image.verify(image, self.other_manifest)
+        if errors:
+            self.events.put(("status", f"This is not the disc {self.other['label']} needs:\n" + "\n".join(errors[:5])))
+            return
+        self.settings["other_image"] = image
+        self.settings["other_cue"] = disc_image.cue_for(image, os.path.join(self.home, "other-disc"))
+        self.settings["other_on"] = True
+        self.other_on.set(True)
+        self._save_settings()
+        self.events.put(("disc", None))
+        self.events.put(("status", f"Disc checked. {self.other['label']} are on."))
 
 
 def main(argv=None):

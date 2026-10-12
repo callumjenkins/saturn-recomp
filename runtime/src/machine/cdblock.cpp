@@ -534,6 +534,10 @@ void cd_init() {
     g_cddev = 0;                                // as the BIOS leaves it after reading the boot files
     g_status = ST_PAUSE;
     g_fad = 150;
+    g_repeat = g_repeat_left = 0;
+    g_audio_play = false;
+    g_cdda.clear();
+    g_cmd_busy = false;
     g_hirq = CMOK | CSCT | PEND | ESEL | EHST | ECPY | EFLS;
     report();
 }

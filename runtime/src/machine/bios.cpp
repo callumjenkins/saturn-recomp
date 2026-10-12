@@ -75,6 +75,9 @@ void bios_boot() {
     smpc_set_area(areas[0]);
     bios_select_save(ip);
     sh2_mem_write(0x06002000u, ip, ip_size && ip_size <= sizeof ip ? ip_size : sizeof ip);
+    // The BIOS also copies the header to 0x06000C00, and its sizes and addresses to 0x060002A0 (below).
+    // A program's file system reads 0x06000CCC for a directory a previous program left there.
+    sh2_mem_write(0x06000C00u, ip, 0x100);
 
     std::string first = cdrom_first_file();
     uint32_t size = 0;
@@ -88,6 +91,7 @@ void bios_boot() {
         st32(0x06000000u + v * 4, kSlotBase + v * 4);
         st32(0x06000400u + v * 4, kSlaveSlotBase + v * 4);
     }
+    sh2_mem_write(0x060002A0u, ip + 0xE0, 0x20);   // over vectors A8-AF, as the BIOS leaves them
     for (uint32_t v = 0; v < 0x80; ++v) g_uint[v] = kDefaultHandler + v * 4;
     st32(0x06000324u, 0);                       // SYS_GETSYSCK: 320 dots, 26.8 MHz
     st32(0x06000348u, 0xFFFFFFFFu);             // SYS_GETSCUIM: all masked
@@ -240,12 +244,19 @@ bool bios_call(SH2Context& c, uint32_t addr) {
         c.r[0] = 0;
         sat_trace("CD block init(%u)", r4);
         break;
-    case 0x06000288:                            // boot the disc again, as from power-on, with 3 at 0x06000290
+    case 0x06000288: {                          // boot the disc again, as from power-on, with 3 at 0x06000290
+        // The BIOS leaves 0x06000210, where the NetLink's programs hand a mode and "Richard" to the next boot.
+        uint32_t hand_off[2] = {ld32(0x06000210u), ld32(0x06000214u)};
         sat_note("the program rebooted the disc, from %08X", c.pr);
         cd_init();
+        onchip_reset(0);
+        video_reboot();
         bios_boot();
+        st32(0x06000210u, hand_off[0]);
+        st32(0x06000214u, hand_off[1]);
         st32(0x06000290u, 3);
         sh2_program_start(c, g_first_read);
+    }
     case 0x0600026C:
         sat_note("the program called 0x0600026C (the BIOS's exit to the system), from %08X", c.pr);
         sat_stop("exit to the system");

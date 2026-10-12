@@ -66,3 +66,29 @@ TEST(a_borrowed_file_is_read_from_the_other_disc_past_this_ones_lead_out) {
     CHECK_EQ(cdrom_read(fad, raw), true);
     CHECK_EQ(std::memcmp(raw + 16, "OTHER", 5), 0);
 }
+
+TEST(a_boot_copies_ip_bins_header_over_what_a_previous_program_left_in_the_bios_area) {
+    char tmpl[] = "/tmp/cdrom_test_XXXXXX";
+    std::string dir = mkdtemp(tmpl);
+    std::string cue = disc(dir, "ip", "FIRST");
+    uint8_t ip[0x100];
+    std::memset(ip, ' ', sizeof ip);
+    std::memcpy(ip, "SEGA SEGASATURN ", 16);
+    const uint8_t sizes[16] = {0, 0, 0x10, 0, 0, 0, 0, 0, 0x06, 0x00, 0x20, 0x00, 0, 0, 0, 0};
+    std::memcpy(ip + 0xE0, sizes, 16);
+    const uint8_t first[8] = {0x06, 0x00, 0x40, 0x00, 0, 0, 0, 0};
+    std::memcpy(ip + 0xF0, first, 8);
+    FILE* f = std::fopen((dir + "/ip.bin").c_str(), "r+b");
+    std::fwrite(ip, 1, sizeof ip, f);
+    std::fclose(f);
+    CHECK_EQ(cdrom_open(cue), true);
+    g_cfg.save = "-";
+    st8(0x06000CCC, 1);                         // a directory to open, as the NetLink's XS leaves it
+    bios_boot();
+    bool header = true, sizes_copied = true;
+    for (uint32_t i = 0; i < 0x100; ++i) header = header && ld8(0x06000C00 + i) == ip[i];
+    for (uint32_t i = 0; i < 0x20; ++i) sizes_copied = sizes_copied && ld8(0x060002A0 + i) == ip[0xE0 + i];
+    CHECK_EQ(header, true);
+    CHECK_EQ(sizes_copied, true);
+    CHECK_EQ(ld8(0x06000CCC), (uint8_t)' ');
+}

@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -41,6 +42,8 @@ void video_init() {
         std::exit(3);
     }
 }
+
+void video_reboot() { std::memset(g_vdp2_regs, 0, sizeof g_vdp2_regs); }
 
 static int display_lines() {
     int vreso = reg16(g_vdp2_regs, 0x00) >> 4 & 3;

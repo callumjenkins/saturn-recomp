@@ -197,6 +197,11 @@ static Rgb mix(const Rgb& a, const Rgb& b, int k, int n) {
 }
 
 // A line from p0 to p1; for a texture, row v, its columns spread along the line.
+// Pixel steps a draw may take, clipped ones included: a few times a busy game frame's. A runaway draw is cut
+// short, as the next frame change cuts short Mednafen's, which draws in time slices.
+static const uint64_t kDrawSteps = 4000000;
+static uint64_t g_draw_steps;
+
 // The shapes drawn to pixels: vdp1_raster.inc's own rules, or with SATURN_VDP1_GPL,
 // vdp1_raster_gpl.inc's, which follow Mednafen's and are under its licence, the GPL.
 #if SATURN_VDP1_GPL
@@ -322,7 +327,14 @@ static void draw() {
     }
     uint32_t a = 0, ret = 0, last = 0;
     int n = 0;
+    g_draw_steps = 0;
     for (int guard = 0; guard < 20000; ++guard) {
+        if (g_draw_steps >= kDrawSteps) {
+            static bool told;
+            if (!told) sat_note("VDP1: a draw ran out of time after %d commands and was cut short", n);
+            told = true;
+            break;
+        }
         uint16_t ctrl = vw(a);
         last = a;
         if (ctrl & 0x8000) break;

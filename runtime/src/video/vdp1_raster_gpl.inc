@@ -261,6 +261,7 @@ bool raster_line(const Cmd& c, Vtx p0, Vtx p1, bool aa, int row, bool always) {
     uint16_t pix = c.colr;
     bool transparent = false;                   // a polygon or line: drawn in its colour
     do {
+        if (++g_draw_steps >= kDrawSteps) return clipped;   // past 2048 long, e overflows int32 and the line may never reach term
         if (c.textured) {
             while (t.pending()) {
                 fetch(t.inc());
@@ -301,7 +302,7 @@ void raster_quad(const Cmd& c, const Vtx* p, bool textured) {
         rows.setup((unsigned)dmax + 1, top, bottom);
     }
     const int32_t t0 = c.hflip ? (c.w ? c.w - 1 : 0) : 0, t1 = c.hflip ? 0 : (c.w ? c.w - 1 : 0);
-    for (int32_t iter = dmax; iter >= 0; --iter) {
+    for (int32_t iter = dmax; iter >= 0 && g_draw_steps < kDrawSteps; --iter) {
         Vtx a = left.vertex(), b = right.vertex();
         a.t = t0;
         b.t = t1;

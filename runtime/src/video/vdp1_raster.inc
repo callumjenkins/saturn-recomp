@@ -20,6 +20,7 @@ static void line(const Cmd& c, Pt p0, Pt p1, int v, Rgb g0, Rgb g1) {
     int dx = p1.x - p0.x, dy = p1.y - p0.y;
     int adx = std::abs(dx), ady = std::abs(dy);
     int len = std::max(adx, ady);
+    g_draw_steps += (uint64_t)len + 1;
     int xi = dx < 0 ? -1 : 1, yi = dy < 0 ? -1 : 1;
     int ends = 0;
     bool stop = false;
@@ -88,7 +89,7 @@ static void quad(const Cmd& c, Pt a, Pt b, Pt cc, Pt d) {
     int right = std::max(std::abs(cc.x - b.x), std::abs(cc.y - b.y));
     int n = std::max(left, right);
     if (n > 2048) return;                       // a shape far off the framebuffer: the chip would spend ages on it
-    for (int i = 0; i <= n; ++i) {
+    for (int i = 0; i <= n && g_draw_steps < kDrawSteps; ++i) {
         Pt l{step_to(a.x, d.x, i, n), step_to(a.y, d.y, i, n)};
         Pt r{step_to(b.x, cc.x, i, n), step_to(b.y, cc.y, i, n)};
         int v = c.textured ? (int)((int64_t)i * c.h / (n + 1)) : 0;

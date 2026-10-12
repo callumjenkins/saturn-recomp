@@ -12,10 +12,10 @@
 // saves. longjmp marks a switch to the buffer's fiber. The switch happens where
 // longjmp's return lands somewhere other than its caller expected (or in a
 // fiber's base loop, after a tail call into longjmp): the running fiber parks
-// there and the buffer's fiber resumes, or a new fiber starts at the restored
-// PC when no fiber saved that buffer with those registers (a task the kernel
-// built by hand). A fiber resumed where it parked returns from that call as if
-// nothing happened. A fiber to be resumed anywhere else starts over at the new
+// there and the buffer's fiber resumes, or an idle fiber (or a new one) starts
+// at the restored PC when no fiber saved that buffer with those registers (a
+// task the kernel built by hand, or one whose fiber has moved to another task).
+// A fiber resumed where it parked returns from that call as if nothing happened. A fiber to be resumed anywhere else starts over at the new
 // PC on the same stack, which is dropped rather than unwound: it holds only
 // recompiled code's frames and the runtime's calls into it, with nothing to
 // destroy, and an unwind costs far more than a switch where the unwinder
@@ -28,6 +28,7 @@
 #include <exception>
 #include <map>
 #include <memory>
+#include <set>
 #include <vector>
 #define MINICORO_IMPL
 #include "minicoro.h"
@@ -42,6 +43,7 @@ struct Fiber {
     uint32_t start = 0;
     uint32_t expected = ~0u;                 // where it goes on if resumed where it parked; ~0u: nowhere
     int int_depth = 0;                       // the interrupt handlers it was inside when it parked
+    uint32_t buf = 0;                        // the task it runs: the buffer it last saved, or was started for
     ~Fiber() { if (co) mco_destroy(co); }
 };
 
@@ -56,7 +58,13 @@ std::vector<std::unique_ptr<Fiber>> g_fibers;
 std::map<uint32_t, std::vector<Saved>> g_saved;
 const size_t kSavesPerBuffer = 4;
 
+// A fiber that saves another task's buffer has moved to that task (a kernel can switch stacks by hand to
+// set one up), so what it saved for any other is gone.
 void record(uint32_t buf, const Saved& s) {
+    if (s.fiber->buf != buf)
+        for (auto& [b, v] : g_saved)
+            if (b != buf) std::erase_if(v, [&](const Saved& o) { return o.fiber == s.fiber; });
+    s.fiber->buf = buf;
     std::vector<Saved>& v = g_saved[buf];
     std::erase_if(v, [&](const Saved& o) { return o.r15 == s.r15 && o.pr == s.pr; });
     v.insert(v.begin(), s);
@@ -137,6 +145,19 @@ Fiber* new_fiber(uint32_t pc) {
     return g_fibers.back().get();
 }
 
+// A fiber that no saved buffer leads back to, to start over for a task that has none.
+Fiber* idle_fiber() {
+    std::set<Fiber*> held{g_cur};
+    for (auto& [b, v] : g_saved)
+        for (const Saved& o : v) held.insert(o.fiber);
+    for (auto& f : g_fibers)
+        if (!held.count(f.get())) {
+            f->expected = ~0u;
+            return f.get();
+        }
+    return nullptr;
+}
+
 void on_setjmp(SH2Context& c, uint32_t) {
     if (c.cpu == 0) record(c.r[4], {g_cur, c.r[15], c.pr});
 }
@@ -191,7 +212,9 @@ void tasks_route(SH2Context& c, uint32_t expected) {
     if (auto it = g_saved.find(g_buf); it != g_saved.end())
         for (const Saved& o : it->second)
             if (o.r15 == c.r[15] && o.pr == c.pc) { t = o.fiber; break; }
+    if (!t) t = idle_fiber();
     if (!t) t = new_fiber(c.pc);
+    t->buf = g_buf;
     if (t == g_cur) throw TaskUnwind{c.pc};
     if (t->expected != c.pc) restart(t, c.pc);
     g_cur->expected = expected;
@@ -248,6 +271,7 @@ void tasks_state(State& s) {
         if (!s.loading) continue;
         if (fiber >= nfibers) state_fail("a buffer saved by no task");
         g_saved[buf].push_back({g_fibers[fiber].get(), r15, pr});
+        g_fibers[fiber]->buf = buf;
     }
 }
 

@@ -4,7 +4,7 @@
 // line status for received bytes and the modem status for the carrier. What the modem says reaches the
 // FIFO at the baud rate, a byte each start bit, data bits, parity and stop bits.
 //
-// In command mode a line ending in CR is an AT command; E, V, Q, Z, S0 (rings before answering), A, D,
+// In command mode a line ending in CR is an AT command; E, V, Q, Z, &F, S0 (rings before answering), A, D,
 // H and O act, and anything else is accepted with OK. Online, every byte goes down the line until
 // "+++" with a second of silence either side returns to command mode with the call held.
 #include "modem.h"
@@ -65,6 +65,7 @@ void Modem::result(const char* text) {
 void Modem::connect(uint64_t now) {
     online_ = data_ = true;
     rings_ = 0;
+    next_ring_ = 0;
     pluses_ = 0;
     escape_at_ = 0;
     last_tx_ = now;
@@ -95,6 +96,26 @@ void Modem::drop() {
     result("NO CARRIER");
 }
 
+void Modem::hang_up() {
+    if (calling_until_) {
+        calling_until_ = 0;
+        line_->hang_up();
+    }
+    if (online_) {
+        line_->hang_up();
+        online_ = data_ = false;
+        msr_ = (msr_ & ~kDcd) | kDeltaDcd;
+    }
+}
+
+// Z and &F: the settings as at power-on, and a call held in command mode ends.
+void Modem::reset() {
+    hang_up();
+    echo_ = verbose_ = true;
+    quiet_ = false;
+    auto_answer_ = 0;
+}
+
 void Modem::command(const std::string& text, uint64_t now) {
     size_t i = 0;
     auto number = [&](int fallback) {
@@ -110,8 +131,13 @@ void Modem::command(const std::string& text, uint64_t now) {
         case 'E': echo_ = number(0) != 0; break;
         case 'V': verbose_ = number(0) != 0; break;
         case 'Q': quiet_ = number(0) != 0; break;
-        case 'Z': echo_ = verbose_ = true; quiet_ = false; auto_answer_ = 0; number(0); break;
-        case '&': case '\\': case '%':
+        case 'Z': reset(); number(0); break;
+        case '&':
+            if (i < text.size() && std::toupper((unsigned char)text[i]) == 'F') reset();
+            if (i < text.size()) ++i;
+            number(0);
+            break;
+        case '\\': case '%':
             if (i < text.size()) ++i;
             number(0);
             break;
@@ -132,15 +158,7 @@ void Modem::command(const std::string& text, uint64_t now) {
         }
         case 'H':
             number(0);
-            if (calling_until_) {
-                calling_until_ = 0;
-                line_->hang_up();
-            }
-            if (online_) {
-                line_->hang_up();
-                online_ = data_ = false;
-                msr_ = (msr_ & ~kDcd) | kDeltaDcd;
-            }
+            hang_up();
             break;
         case 'A':
             if (line_->ringing() && line_->answer()) connect(now);

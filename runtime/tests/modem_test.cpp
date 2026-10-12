@@ -136,6 +136,27 @@ TEST(plus_plus_plus_between_silences_holds_the_call_and_hanging_up_drops_it) {
     CHECK_EQ(callee.read(kMsr, g_now) & 0x80, 0);
 }
 
+TEST(a_factory_reset_ends_a_call_held_in_command_mode_so_the_next_dial_goes_through) {
+    auto x = std::make_shared<Exchange>();
+    Modem caller(std::make_unique<End>(x, 0)), callee(std::make_unique<End>(x, 1));
+    type(callee, "ATE0S0=1\r");
+    heard(callee);
+    type(caller, "ATE0\r");
+    heard(caller);
+    type(caller, "ATD1\r");
+    heard(callee);
+    heard(caller);
+    heard(caller, 1100);
+    type(caller, "+++");
+    heard(caller, 1100);
+    type(caller, "AT&F0\r");
+    CHECK_EQ(caller.online(), false);
+    CHECK_EQ(heard(callee).find("NO CARRIER") != std::string::npos, true);
+    type(caller, "ATD1\r");
+    heard(callee);
+    CHECK_EQ(heard(caller).find("CONNECT 28800") != std::string::npos, true);
+}
+
 TEST(a_leased_line_is_online_from_the_start_without_a_word) {
     auto x = std::make_shared<Exchange>();
     auto a = std::make_unique<End>(x, 0), b = std::make_unique<End>(x, 1);

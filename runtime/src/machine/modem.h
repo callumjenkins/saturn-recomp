@@ -47,6 +47,8 @@ private:
     void result(const char* text);
     void connect(uint64_t now);
     void drop();
+    void hang_up();
+    void reset();
     uint64_t byte_ns() const;
     uint8_t pending() const;                      // IIR's interrupt bits for the highest one pending, 0x01 for none
 

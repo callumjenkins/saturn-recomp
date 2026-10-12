@@ -30,7 +30,7 @@ def inputs(game):
     modules, task switch, hooks and build options, the learned seeds, and this package's source, all of it, since
     an unneeded recompile costs less than a stale one."""
     out = {f"module {m.name}": _sha1(m.file) if os.path.exists(m.file) else None for m in game.modules}
-    config_part = repr((game.modules, game.tasks, sorted(game.hooks.items()), game.cmake))
+    config_part = repr((game.modules, game.tasks, sorted(game.hooks.items()), game.cmake, game.task_switches))
     out["game.toml"] = hashlib.sha1(config_part.encode()).hexdigest()
     out["seeds"] = hashlib.sha1(json.dumps(game.learned_seeds(), sort_keys=True).encode()).hexdigest()
     source = hashlib.sha1()
@@ -78,7 +78,8 @@ def recompile(game, log=print):
     generate(specs, out, log=log, hooks=game.hooks, tasks=tasks,
              runtime_literals={m.name for m in game.modules if m.runtime_literals},
              callable_entries={m.name for m in game.modules if m.callable_entry},
-             unwind_returns={m.name for m in game.modules if m.unwind_returns})
+             unwind_returns={m.name for m in game.modules if m.unwind_returns},
+             task_switches=[(s.save, s.save_key, s.resume_sp, s.switch, s.switch_key) for s in game.task_switches])
     build_dir = os.path.join(game.build, "recomp-build")
     # options left out of game.toml must not survive in CMake's cache
     if os.path.exists(os.path.join(build_dir, "CMakeCache.txt")):

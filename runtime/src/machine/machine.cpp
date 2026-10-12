@@ -29,6 +29,7 @@
 // entry on a fresh host stack: the old program's C++ frames do not pile up
 // under the new one.
 #include "saturn.h"
+#include "modem.h"
 #include "host.h"
 #include "video.h"
 #include "state.h"
@@ -501,6 +502,10 @@ static void checkpoint_due() {
 }
 
 // ---- time, devices, interrupts ----------------------------------------------------------
+// The NetLink's interrupt reaches the SCU as A-bus external interrupt 12 (vector 0x5C), where BOOT and
+// the XBAND client install their UART handlers.
+static const int kModemLine = 12;
+
 void master_poll_devices() {
     uint64_t now = sat_now();
     video_tick(now);
@@ -508,6 +513,7 @@ void master_poll_devices() {
     cheats_due();
     agent_poll();
     cd_tick();
+    if (g_modem) scu_external(kModemLine, g_modem->interrupting(now));
     smpc_tick();
     sound_tick();
     checkpoint_due();
@@ -533,6 +539,8 @@ void sh2_poll(SH2Context& c) {
 static int g_int_depth;
 
 bool sat_in_interrupt() { return g_int_depth > 0; }
+int sat_interrupt_depth() { return g_int_depth; }
+void sat_set_interrupt_depth(int depth) { g_int_depth = depth; }
 
 void sat_interrupt(SH2Context& c, uint32_t vec, uint32_t level) {
     struct Depth { Depth() { ++g_int_depth; } ~Depth() { --g_int_depth; } } depth;
@@ -623,6 +631,12 @@ int saturn_main(const SaturnConfig& cfg) {
             return 2;
         }
     }
+    if (!cfg.modem.empty()) {
+        std::string error;
+        std::unique_ptr<ModemLine> line = cfg.modem == "line" ? modem_no_line() : modem_tcp_line(cfg.modem, error);
+        if (!line) { std::fprintf(stderr, "--modem %s: %s\n", cfg.modem.c_str(), error.c_str()); return 2; }
+        g_modem = std::make_unique<Modem>(std::move(line));
+    }
     g_master = SH2Context{};
     g_master.budget = kBudget;
     video_init();
@@ -637,7 +651,8 @@ int saturn_main(const SaturnConfig& cfg) {
     sat_note("boot: %s at %08X", m->name, entry);
     if (cfg.task_setjmp) tasks_configure(cfg.task_setjmp, cfg.task_longjmp);
     else if (g_sh2_tasks[0]) tasks_configure(g_sh2_tasks[0], g_sh2_tasks[1]);
-    bool tasks = cfg.task_setjmp || g_sh2_tasks[0];
+    for (int i = 0; i < g_sh2_ntask_switches; ++i) tasks_add_switch(g_sh2_task_switches[i]);
+    bool tasks = cfg.task_setjmp || g_sh2_tasks[0] || g_sh2_ntask_switches;
     if (tasks) state_enable();
     state_init();
     if (!cfg.state_in.empty()) {

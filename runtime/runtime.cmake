@@ -18,6 +18,7 @@ add_library(saturn_machine OBJECT
     ${_src}/machine/machine.cpp ${_src}/machine/bios.cpp ${_src}/machine/mmio.cpp ${_src}/machine/tasks.cpp
     ${_src}/machine/onchip.cpp ${_src}/machine/scu.cpp ${_src}/machine/scudsp.cpp ${_src}/machine/smpc.cpp
     ${_src}/machine/cdrom.cpp ${_src}/machine/cdblock.cpp ${_src}/machine/agent.cpp ${_src}/machine/state.cpp
+    ${_src}/machine/modem.cpp ${_src}/machine/modem_tcp.cpp
     ${_src}/video/video.cpp ${_src}/video/vdp1.cpp ${_src}/video/vdp2.cpp ${_src}/video/png.cpp ${_src}/video/movie.cpp
     ${_src}/sound/sound.cpp ${_src}/sound/scsp.cpp)
 option(SATURN_NO_SDL "build the headless host even if SDL3 is installed" OFF)
@@ -63,6 +64,9 @@ target_include_directories(saturn_m68k PUBLIC ${_m68k})
 target_include_directories(saturn_machine PRIVATE ${_rt}/third_party/minicoro)
 target_compile_options(saturn_m68k PRIVATE -w)
 target_link_libraries(saturn_machine PUBLIC saturn_m68k)
+if(WIN32)
+  target_link_libraries(saturn_machine PUBLIC ws2_32)   # the modem's TCP line
+endif()
 foreach(t saturn_core saturn_stub saturn_machine saturn_host)
   target_include_directories(${t} PUBLIC ${_rt}/include)
 endforeach()

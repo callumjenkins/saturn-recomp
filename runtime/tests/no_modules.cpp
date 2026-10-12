@@ -4,3 +4,5 @@
 extern const SH2Module* const g_sh2_modules[] = {nullptr};
 extern const int g_sh2_nmodules = 0;
 extern const uint32_t g_sh2_tasks[2] = {0, 0};
+extern const SH2TaskSwitch g_sh2_task_switches[] = {{0, 0, 0, 0, 0}};
+extern const int g_sh2_ntask_switches = 0;

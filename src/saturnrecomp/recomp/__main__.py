@@ -242,8 +242,9 @@ endif()
 
 
 def generate(specs, out, per_file=8000, comments=True, optest=False, log=print, hooks=None, tasks=None,
-             runtime_literals=None, callable_entries=None, unwind_returns=None):
-    """hooks: {program name: [address, ...]}, see --hook. tasks: (setjmp, longjmp), see --tasks."""
+             runtime_literals=None, callable_entries=None, unwind_returns=None, task_switches=()):
+    """hooks: {program name: [address, ...]}, see --hook. tasks: (setjmp, longjmp), see --tasks.
+    task_switches: [(save, save_key, resume_sp, switch, switch_key)], config.TaskSwitch's fields."""
     hooks = hooks or {}
     runtime_literals = runtime_literals or set()
     callable_entries = callable_entries or set()
@@ -274,6 +275,9 @@ def generate(specs, out, per_file=8000, comments=True, optest=False, log=print, 
             f.write("    &%s::module,\n" % m.ns)
         f.write("};\nextern const int g_sh2_nmodules = %d;\n" % len(modules))
         f.write("extern const uint32_t g_sh2_tasks[2] = {0x%08X, 0x%08X};\n" % (tasks or (0, 0)))
+        rows = [", ".join("0x%X" % v for v in s) for s in task_switches] or ["0, 0, 0, 0, 0"]
+        f.write("extern const SH2TaskSwitch g_sh2_task_switches[] = {%s};\n" % ", ".join("{%s}" % r for r in rows))
+        f.write("extern const int g_sh2_ntask_switches = %d;\n" % len(task_switches))
     srcs = [x for m in modules for x in m.files] + ["modules.cpp"]
     with Out(os.path.join(out, "CMakeLists.txt")) as f:
         f.write(CMAKE.format(rt=RUNTIME.replace("\\", "/"), srcs="\n    ".join(srcs)))

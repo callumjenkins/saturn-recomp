@@ -16,6 +16,7 @@
 //     call TARGET FROM COUNT
 //     modem R|W ADDR PR COUNT FIRST LAST [VALUES]
 #include "saturn.h"
+#include "modem.h"
 #include "state.h"
 #include <cstdio>
 #include <map>
@@ -40,7 +41,7 @@ static std::map<std::pair<uint32_t, uint32_t>, uint64_t> g_calls;
 // The modem ports again, split by PR, with the VBlanks of the first and last access and the first few values written.
 // PR names the caller only when the access is in a leaf function; elsewhere it is the last call's return address.
 struct ModemLog { uint64_t n = 0, first = 0, last = 0; std::set<uint32_t> values; };
-static std::map<std::tuple<uint32_t, char, uint32_t>, ModemLog> g_modem;
+static std::map<std::tuple<uint32_t, char, uint32_t>, ModemLog> g_modem_log;
 
 // A register access costs the CPU a safe point of time: a loop that waits on a
 // device (a status register, the CD block's answers) lets time move on.
@@ -69,7 +70,7 @@ static void log_area(const char* name, uint32_t a, char rw) {
 }
 
 static void log_modem(uint32_t a, char rw, uint32_t v) {
-    ModemLog& l = g_modem[{a, rw, g_cpu->pr}];
+    ModemLog& l = g_modem_log[{a, rw, g_cpu->pr}];
     uint64_t now = sat_vblanks();
     if (!l.n++) l.first = now;
     l.last = now;
@@ -91,7 +92,7 @@ void mmio_log_write(const std::string& path) {
         std::fprintf(f, "watch %c %08X %llu\n", k.second, k.first, (unsigned long long)n);
     for (auto& [k, n] : g_calls)
         std::fprintf(f, "call %08X %08X %llu\n", k.first, k.second, (unsigned long long)n);
-    for (auto& [k, l] : g_modem) {
+    for (auto& [k, l] : g_modem_log) {
         std::fprintf(f, "modem %c %08X %08X %llu %llu %llu", std::get<1>(k), std::get<0>(k), std::get<2>(k),
                      (unsigned long long)l.n, (unsigned long long)l.first, (unsigned long long)l.last);
         for (uint32_t v : l.values) std::fprintf(f, " %02X", v);
@@ -116,10 +117,15 @@ static const char* area_of(uint32_t a) {
     return nullptr;
 }
 
-// The two places software looks for a NetLink modem's UART. None is fitted:
-// reads float high, so its scratch-register test fails.
+// The two places software looks for a NetLink modem's UART. Without --modem none is fitted: reads float
+// high, so its scratch-register test fails. With one, the UART's registers are the bytes at 0x05895001
+// and every 4 after it, and the other place takes the strobe the software writes after each access.
 static bool modem_port(uint32_t a) {
     return (a >= 0x05825000u && a < 0x05825040u) || (a >= 0x05895000u && a < 0x05895040u);
+}
+
+static int uart_register(uint32_t a, int size) {
+    return g_modem && size == 1 && a >= 0x05895000u && (a & 3) == 1 ? (int)((a - 0x05895001u) >> 2) : -1;
 }
 
 uint32_t sh2_mmio_read(uint32_t a, int size) {
@@ -141,6 +147,8 @@ uint32_t sh2_mmio_read(uint32_t a, int size) {
     }
     if (modem_port(a)) {
         log_modem(a, 'R', 0);
+        int reg = uart_register(a, size);
+        if (reg >= 0) return g_modem->read(reg, sat_now());
         return size == 1 ? 0xFF : size == 2 ? 0xFFFF : 0xFFFFFFFFu;
     }
     if (a >= 0x05800000u && a < 0x05900000u) return cd_read(a & 0xFFFFF, size);
@@ -168,7 +176,12 @@ void sh2_mmio_write(uint32_t a, uint32_t v, int size) {
     }
     if (a >= 0x01000000u && a < 0x01800000u) { slave_kick(); return; }             // SINIT
     if (a >= 0x01800000u && a < 0x02000000u) { onchip_input_capture(0); return; }  // MINIT
-    if (modem_port(a)) { log_modem(a, 'W', v); return; }
+    if (modem_port(a)) {
+        log_modem(a, 'W', v);
+        int reg = uart_register(a, size);
+        if (reg >= 0) g_modem->write(reg, (uint8_t)v, sat_now());
+        return;
+    }
     if (a >= 0x05800000u && a < 0x05900000u) { cd_write(a & 0xFFFFF, v, size); return; }
     if (a >= 0x05FE0000u && a < 0x05FE0100u) { scu_write(a & 0xFF, v, size); return; }
     if (video_owns(a)) { video_write(a, v, size); return; }

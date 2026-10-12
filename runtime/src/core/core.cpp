@@ -176,9 +176,16 @@ static bool is_base(uint32_t addr) {
     return false;
 }
 
+// A module's base address where the active program, loaded over it, has a function: a call there is a call.
+static bool inside_loaded_program(uint32_t addr) {
+    for (const SH2Module* a : g_active)
+        if (a && a->base != addr && addr - a->base < a->size && has_entry(a, addr)) return true;
+    return false;
+}
+
 void sh2_call(SH2Context& c, uint32_t addr) {
     if (addr >> 29 == 1) addr &= 0x1FFFFFFFu;
-    if (SH2_UNLIKELY(is_base(addr))) {
+    if (SH2_UNLIKELY(is_base(addr)) && !inside_loaded_program(addr)) {
         const SH2Module* m = sh2_identify(addr);
         if (m && m->callable_entry) sh2_activate(m);
         else { sh2_program_start(c, addr); return; }

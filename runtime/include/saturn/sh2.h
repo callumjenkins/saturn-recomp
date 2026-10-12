@@ -186,6 +186,11 @@ static inline void sh2_mac_l(SH2Context& c, int n, int m) {
 extern const SH2Module* const g_sh2_modules[];
 extern const int g_sh2_nmodules;
 extern const uint32_t g_sh2_tasks[2];             // the game's setjmp and longjmp the build was given, 0 if none
+// A task switch that swaps stacks (game.toml's [[task_switch]]): hooked where the running task's stack pointer
+// is saved (its block in register save_key) and where the next one's is loaded (its block in switch_key).
+struct SH2TaskSwitch { uint32_t save, save_key, resume_sp, sw, switch_key; };
+extern const SH2TaskSwitch g_sh2_task_switches[];
+extern const int g_sh2_ntask_switches;
 const SH2Module* sh2_module(const char* name);
 const SH2Module* sh2_identify(uint32_t base);     // the module whose image is in memory at base
 const SH2Module* sh2_identify_containing(uint32_t addr, bool* exact);   // a module whose image in memory holds addr

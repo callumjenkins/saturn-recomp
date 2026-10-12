@@ -63,6 +63,7 @@ struct SaturnConfig {
     std::string other_disc;         // a second disc that files and audio tracks are borrowed from (cdrom_borrow)
     std::string from_other;         // ... those files: "PATH=OTHERPATH,..."
     std::string tracks_from_other;  // ... and those tracks: "2,..."
+    std::string modem;              // a NetLink fitted: "line" with nothing on its line, or a TCP line (modem.h); empty: none
     int64_t clock = -1;             // the SMPC's clock at power-on, seconds since 1970 (no time zone); -1: the host's
     uint32_t task_setjmp = 0, task_longjmp = 0;   // the game's own task switch (tasks.cpp), 0: none
     int agent_fd = -1;              // a socket another program plays the run through (agent.cpp)
@@ -94,6 +95,8 @@ void sat_note(const char* fmt, ...) __attribute__((format(printf, 1, 2)));   // 
 [[noreturn]] void sat_stop(const char* why);                  // ends the run cleanly
 void sat_interrupt(SH2Context& c, uint32_t vec, uint32_t level);   // take it now (a safe point)
 bool sat_in_interrupt();            // the master is running an interrupt handler
+int sat_interrupt_depth();          // ... how many deep, on the running task's fiber (tasks.cpp)
+void sat_set_interrupt_depth(int depth);
 void slave_on();                    // SMPC SSHON: the slave boots
 void slave_off();                   // SSHOFF: held in reset
 void slave_idle_check(uint32_t ftcsr);   // the slave read its FTCSR: yield if nothing is there
@@ -140,6 +143,7 @@ enum ScuIrq {
     IRQ_SPRITE_END,
 };
 void scu_raise(int irq);
+void scu_external(int line, bool asserted);   // an A-bus cartridge's interrupt line 0-15 (vector 0x50 + line)
 void scu_set_mask(uint32_t ims);
 uint32_t scu_mask();
 bool scu_deliver(SH2Context& c);    // take pending, unmasked interrupts above c's mask; any taken?
@@ -183,6 +187,7 @@ void cd_audio_sample(int16_t lr[2]);                 // CD-DA at 44 100 Hz, to t
 // ---- the game's tasks (tasks.cpp) --------------------------------------------------------
 struct TaskUnwind { uint32_t pc; };   // a fiber's host stack unwinds to its base loop, to go on at pc
 void tasks_configure(uint32_t setjmp_addr, uint32_t longjmp_addr);
+void tasks_add_switch(const SH2TaskSwitch& s);   // a task switch that swaps stacks (game.toml's [[task_switch]])
 bool tasks_pending();               // a longjmp ran and its switch has not happened yet
 void tasks_route(SH2Context& c, uint32_t expected);   // switch; returns once resumed, at expected
 void tasks_run(uint32_t entry);      // the program from entry as the first task; ends only by an exception

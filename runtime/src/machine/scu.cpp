@@ -4,7 +4,10 @@
 // Interrupts: a source sets its bit in IST; an interrupt whose bit is not
 // masked in IMS goes to the master at its fixed level, and is taken at the
 // master's next poll if the level is above the CPU's mask. Taking it clears
-// the bit.
+// the bit. An A-bus cartridge's external interrupt lines (IST bits 16-31, all
+// masked by IMS bit 15) are pending once each time they are asserted: a line
+// stays blocked until the program acknowledges A-bus interrupts (bit 0 of
+// 0xA8), as in Mednafen.
 //
 // DMA runs at once when started (DxEN with GO for the "start at once"
 // factor, or when its start factor comes: VBlank-IN/OUT, sprite draw end),
@@ -20,10 +23,23 @@ static uint32_t g_regs[0x40];              // everything else, as written
 struct Dma { uint32_t r, w, c, ad, en, md; };
 static Dma g_dma[3];
 
-// levels by IST bit (ST-097), vectors 0x40 + bit
+// levels by IST bit (ST-097), vectors 0x40 + bit; the external lines', vectors 0x50 + line
 static const uint8_t kLevel[16] = {0xF, 0xE, 0xD, 0xC, 0xB, 0xA, 0x9, 0x8, 0x8, 0x6, 0x6, 0x5, 0x3, 0x2, 0, 0};
+static const uint8_t kExternalLevel[16] = {7, 7, 7, 7, 4, 4, 4, 4, 1, 1, 1, 1, 1, 1, 1, 1};
+static uint32_t g_ext_asserted, g_ext_blocked;      // external lines, as IST bits 16-31
 
 void scu_raise(int irq) { g_ist |= 1u << irq; }
+
+static void abus_check() {
+    g_ist |= g_ext_asserted & ~g_ext_blocked;
+    g_ext_blocked |= g_ext_asserted;
+}
+
+void scu_external(int line, bool asserted) {
+    uint32_t bit = 1u << (16 + line);
+    g_ext_asserted = asserted ? g_ext_asserted | bit : g_ext_asserted & ~bit;
+    abus_check();
+}
 void scu_set_mask(uint32_t ims) { g_ims = ims; }
 uint32_t scu_mask() { return g_ims; }
 
@@ -31,13 +47,24 @@ bool scu_deliver(SH2Context& c) {
     bool any = false;
     for (;;) {
         uint32_t pend = g_ist & ~g_ims & 0x3FFFu;
-        if (!pend) return any;
+        uint32_t ext = g_ims & 0x8000u ? 0 : g_ist >> 16;
+        if (!pend && !ext) return any;
         int best = -1;
         for (int b = 0; b < 14; ++b)
             if ((pend >> b & 1) && (best < 0 || kLevel[b] > kLevel[best])) best = b;
-        if (kLevel[best] <= c.imask) return any;
-        g_ist &= ~(1u << best);
-        sat_interrupt(c, 0x40 + best, kLevel[best]);
+        int line = -1;
+        for (int b = 0; b < 16 && line < 0; ++b)
+            if (ext >> b & 1) line = b;
+        int level = best < 0 ? 0 : kLevel[best];
+        if (line >= 0 && kExternalLevel[line] > level) {
+            if (kExternalLevel[line] <= c.imask) return any;
+            g_ist &= ~(1u << (16 + line));
+            sat_interrupt(c, 0x50 + line, kExternalLevel[line]);
+        } else {
+            if (level <= c.imask) return any;
+            g_ist &= ~(1u << best);
+            sat_interrupt(c, 0x40 + best, level);
+        }
         any = true;
     }
 }
@@ -180,6 +207,9 @@ void scu_write(uint32_t off, uint32_t v, int size) {
     case 0x98: g_t1md = v; return;
     case 0xA0: g_ims = v; return;
     case 0xA4: g_ist &= v; return;              // writing 0 clears
+    case 0xA8:                                  // A-bus interrupt acknowledge
+        if (v & 1) { g_ext_blocked = 0; abus_check(); }
+        return;
     case 0x80: case 0x84: case 0x88: case 0x8C:
         scu_dsp_write(off, v);
         return;

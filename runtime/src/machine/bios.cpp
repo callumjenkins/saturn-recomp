@@ -117,6 +117,8 @@ static const char* slot_name(uint32_t p) {
     case 0x06000344: return "SYS_CHGSCUIM";
     case 0x06000358: return "BUP_Init";
     case 0x06000280: return "SYS_CHGUIPR";
+    case 0x0600029C: return "CD block init";
+    case 0x06000288: return "boot the disc";
     }
     return nullptr;
 }
@@ -232,6 +234,18 @@ bool bios_call(SH2Context& c, uint32_t addr) {
         for (uint32_t i = 0; i < 0x20; ++i) g_uipr[i] = ld32(r4 + i * 4);
         sat_trace("SYS_CHGUIPR(%08X)", r4);
         break;
+    case 0x0600029C:                            // CD block init(0): 0 once the drive answers
+        st32(0x06000278u, 0);
+        st32(0x0600027Cu, 0);
+        c.r[0] = 0;
+        sat_trace("CD block init(%u)", r4);
+        break;
+    case 0x06000288:                            // boot the disc again, as from power-on, with 3 at 0x06000290
+        sat_note("the program rebooted the disc, from %08X", c.pr);
+        cd_init();
+        bios_boot();
+        st32(0x06000290u, 3);
+        sh2_program_start(c, g_first_read);
     case 0x0600026C:
         sat_note("the program called 0x0600026C (the BIOS's exit to the system), from %08X", c.pr);
         sat_stop("exit to the system");

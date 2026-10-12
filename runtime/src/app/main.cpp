@@ -9,6 +9,7 @@
 //            [--write VBLANK:ADDR=HEX,...] [--video FILE] [--save FILE|-] [--coverage FILE] [--checkpoint SECONDS]
 //            [--log FILE] [--state-in FILE] [--state-out FILE] [--state-every SECONDS] [--state-at VBLANK]
 //            [--progress FILE --progress-keep ADDR:BYTES,...] [--after FILE] [--launcher]
+//            [--modem line|dial=HOST:PORT[,listen=PORT]]
 //
 // --vblanks and --starts end the run after that many VBlanks or program
 // starts; the log of the hardware touched goes to DIR/hw-log.txt. --shot
@@ -37,7 +38,8 @@
 // --coverage writes every recompiled function, with its module, address, instruction count and
 // whether it ran, when the run ends, an error that ends it included; --checkpoint SECONDS writes it again every
 // SECONDS of the host's time. --video writes the run's pictures and sound as an MP4 through ffmpeg, an
-// error that ends it included (movie.cpp).
+// error that ends it included (movie.cpp). --modem fits a NetLink modem (modem.cpp): "line" with nothing on
+// its line, or a TCP line on which every number dialled calls HOST:PORT and a connection to PORT rings.
 // --other-disc CUE with --from-other PATH=OTHERPATH,... and --track-from-other N,... plays those files and
 // audio tracks from that disc instead (cdrom.cpp).
 // --write sets memory at a VBlank-IN, as the agent's write does: a stage
@@ -140,6 +142,7 @@ static int parse_args(SaturnConfig& cfg, bool& launcher, int argc, char** argv) 
         else if (!std::strcmp(a, "--video") && more) cfg.video = argv[++i];
         else if (!std::strcmp(a, "--interp")) cfg.interp = true;
         else if (!std::strcmp(a, "--multitap") && more) cfg.multitap = std::atoi(argv[++i]);
+        else if (!std::strcmp(a, "--modem") && more) cfg.modem = argv[++i];
         else if (!std::strcmp(a, "--other-disc") && more) cfg.other_disc = argv[++i];
         else if (!std::strcmp(a, "--from-other") && more) cfg.from_other = argv[++i];
         else if (!std::strcmp(a, "--track-from-other") && more) cfg.tracks_from_other = argv[++i];
@@ -174,7 +177,7 @@ static int parse_args(SaturnConfig& cfg, bool& launcher, int argc, char** argv) 
                                  "             [--save FILE|-] [--coverage FILE] [--checkpoint SECONDS] [--log FILE]\n"
                                  "             [--state-in FILE] [--state-out FILE] [--state-every SECONDS] [--state-at VBLANK]\n"
                                  "             [--progress FILE --progress-keep ADDR:BYTES,...] [--after FILE] [--launcher [--options FILE]]\n"
-                                 "             [--cheat MODULE:ADDR=HEX|MODULE:ADDR|=HEX,...]\n"
+                                 "             [--cheat MODULE:ADDR=HEX|MODULE:ADDR|=HEX,...] [--modem line|dial=HOST:PORT[,listen=PORT]]\n"
                                  "             [--other-disc CUE --from-other PATH=OTHERPATH,... --track-from-other N,...]\n");
             return 2;
         }

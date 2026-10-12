@@ -21,7 +21,8 @@
 // destroy, and an unwind costs far more than a switch where the unwinder
 // parses DWARF on every throw (Android's).
 //
-// Only the master's tasks are handled, and never from inside an interrupt.
+// Only the master's tasks are handled. A switch from inside an interrupt handler parks the fiber inside
+// it: each fiber keeps its own count of the handlers it is in, and finishes them when it resumes.
 #include "saturn.h"
 #include "state.h"
 #include <exception>
@@ -40,6 +41,7 @@ struct Fiber {
     mco_coro* co = nullptr;
     uint32_t start = 0;
     uint32_t expected = ~0u;                 // where it goes on if resumed where it parked; ~0u: nowhere
+    int int_depth = 0;                       // the interrupt handlers it was inside when it parked
     ~Fiber() { if (co) mco_destroy(co); }
 };
 
@@ -49,7 +51,17 @@ Fiber g_main;
 Fiber* g_cur = &g_main;
 Fiber* g_next;                               // where a fiber that yields asked to go
 std::vector<std::unique_ptr<Fiber>> g_fibers;
-std::map<uint32_t, Saved> g_saved;          // jmp_buf address -> who saved it, with what
+// jmp_buf address -> who saved it, with what, newest first. A switch inside an interrupt handler can save
+// a buffer that the interrupted switch has just saved, and loading it puts the outer save back.
+std::map<uint32_t, std::vector<Saved>> g_saved;
+const size_t kSavesPerBuffer = 4;
+
+void record(uint32_t buf, const Saved& s) {
+    std::vector<Saved>& v = g_saved[buf];
+    std::erase_if(v, [&](const Saved& o) { return o.r15 == s.r15 && o.pr == s.pr; });
+    v.insert(v.begin(), s);
+    if (v.size() > kSavesPerBuffer) v.pop_back();
+}
 bool g_pending;
 uint32_t g_buf;
 std::exception_ptr g_exc;                    // raised in a fiber, for the master's loop
@@ -86,6 +98,7 @@ void switch_to(Fiber* t) {
 void fiber_main(mco_coro*) {
     Fiber* me = g_cur;
     me->expected = ~0u;
+    sat_set_interrupt_depth(0);
     uint32_t pc = me->start;
     try {
         for (;;) {
@@ -125,7 +138,7 @@ Fiber* new_fiber(uint32_t pc) {
 }
 
 void on_setjmp(SH2Context& c, uint32_t) {
-    if (c.cpu == 0) g_saved[c.r[4]] = {g_cur, c.r[15], c.pr};
+    if (c.cpu == 0) record(c.r[4], {g_cur, c.r[15], c.pr});
 }
 
 void on_longjmp(SH2Context& c, uint32_t) {
@@ -134,7 +147,35 @@ void on_longjmp(SH2Context& c, uint32_t) {
     g_buf = c.r[4];
 }
 
+// Stack-swapping switches (tasks_add_switch), by their save and switch addresses. A switch back into the
+// task it saved is routed too: it can return from deeper than it was entered, as a system call's handler
+// that takes the switch's way out does, and the router then unwinds the task's fiber to it. Such a switch
+// that returns where it was called from leaves its routing pending, until the next save clears it.
+std::vector<SH2TaskSwitch> g_switches;
+
+void on_switch_save(SH2Context& c, uint32_t addr) {
+    if (c.cpu != 0) return;
+    g_pending = false;
+    for (const SH2TaskSwitch& s : g_switches)
+        if (s.save == addr) record(c.r[s.save_key], {g_cur, c.r[15] + s.resume_sp, c.pr});
+}
+
+void on_switch_load(SH2Context& c, uint32_t addr) {
+    if (c.cpu != 0) return;
+    for (const SH2TaskSwitch& s : g_switches)
+        if (s.sw == addr) {
+            g_pending = true;
+            g_buf = c.r[s.switch_key];
+        }
+}
+
 }  // namespace
+
+void tasks_add_switch(const SH2TaskSwitch& s) {
+    g_switches.push_back(s);
+    sh2_hook_add(s.save, on_switch_save);
+    sh2_hook_add(s.sw, on_switch_load);
+}
 
 void tasks_configure(uint32_t setjmp_addr, uint32_t longjmp_addr) {
     sh2_hook_add(setjmp_addr, on_setjmp);
@@ -144,17 +185,19 @@ void tasks_configure(uint32_t setjmp_addr, uint32_t longjmp_addr) {
 bool tasks_pending() { return g_pending; }
 
 void tasks_route(SH2Context& c, uint32_t expected) {
-    if (sat_in_interrupt()) sat_fatal("task switch to %08X inside an interrupt: not handled", c.pc);
     g_pending = false;
     state_point(c);
     Fiber* t = nullptr;
-    auto it = g_saved.find(g_buf);
-    if (it != g_saved.end() && it->second.r15 == c.r[15] && it->second.pr == c.pc) t = it->second.fiber;
+    if (auto it = g_saved.find(g_buf); it != g_saved.end())
+        for (const Saved& o : it->second)
+            if (o.r15 == c.r[15] && o.pr == c.pc) { t = o.fiber; break; }
     if (!t) t = new_fiber(c.pc);
     if (t == g_cur) throw TaskUnwind{c.pc};
     if (t->expected != c.pc) restart(t, c.pc);
     g_cur->expected = expected;
+    g_cur->int_depth = sat_interrupt_depth();
     switch_to(t);
+    sat_set_interrupt_depth(g_cur->int_depth);
 }
 
 void tasks_on_thread_stack(void (*fn)(void*), void* arg) {
@@ -180,7 +223,8 @@ void tasks_state(State& s) {
     std::map<Fiber*, uint32_t> index;
     for (size_t i = 0; i < g_fibers.size(); ++i) index[g_fibers[i].get()] = (uint32_t)i;
     uint32_t nfibers = (uint32_t)g_fibers.size();
-    uint64_t n = g_saved.size();
+    uint64_t n = 0;
+    for (auto& [buf, v] : g_saved) n += v.size();
     s(nfibers);
     s(n);
     if (s.loading) {
@@ -189,20 +233,21 @@ void tasks_state(State& s) {
         g_saved.clear();
         for (uint32_t i = 0; i < nfibers; ++i) new_fiber(0);
     }
-    auto it = g_saved.begin();
+    std::vector<std::pair<uint32_t, Saved>> rows;
+    for (auto& [buf, v] : g_saved)
+        for (const Saved& o : v) rows.push_back({buf, o});
     for (uint64_t k = 0; k < n; ++k) {
         uint32_t buf = 0, fiber = 0, r15 = 0, pr = 0;
         if (!s.loading) {
-            buf = it->first, r15 = it->second.r15, pr = it->second.pr;
-            auto f = index.find(it->second.fiber);
+            buf = rows[k].first, r15 = rows[k].second.r15, pr = rows[k].second.pr;
+            auto f = index.find(rows[k].second.fiber);
             if (f == index.end()) state_fail("a buffer saved outside a task");
             fiber = f->second;
-            ++it;
         }
         s(buf), s(fiber), s(r15), s(pr);
         if (!s.loading) continue;
         if (fiber >= nfibers) state_fail("a buffer saved by no task");
-        g_saved[buf] = {g_fibers[fiber].get(), r15, pr};
+        g_saved[buf].push_back({g_fibers[fiber].get(), r15, pr});
     }
 }
 

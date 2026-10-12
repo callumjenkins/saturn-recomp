@@ -22,6 +22,14 @@
     yields = ["krnl_setjmp", "krnl_yield"]
     unknown_yields = true           # a call to a target discovery cannot name may yield too
 
+    [[task_switch]]                 # optional: a program that switches tasks by swapping stacks
+    module = "XBAND"
+    save = 0x06006098               # where the outgoing task's stack pointer goes into its block
+    save_key = "r1"                 # ... the register holding that block
+    resume_sp = 84                  # how far the stack there is below where the task resumes
+    switch = 0x060060C4             # where the incoming task's stack pointer comes out of its block
+    switch_key = "r0"
+
     [[hook]]
     module = "KRNL"
     at = "bomber_hit_flag"
@@ -229,6 +237,19 @@ def _checkpoint(c, symbols):
 
 
 @dataclass
+class TaskSwitch:
+    """A task switch that saves the running task's stack pointer in its block and loads another's, then
+    returns into that task: hooked where each happens, keyed by the block. The saved task resumes at the
+    PR it had when saved, with its stack resume_sp bytes higher."""
+    module: str
+    save: int
+    save_key: int
+    resume_sp: int
+    switch: int
+    switch_key: int
+
+
+@dataclass
 class Game:
     name: str
     root: str
@@ -241,6 +262,7 @@ class Game:
     cmake: list[str] = field(default_factory=list)
     playtest: Playtest | None = None
     checkpoint: Checkpoint | None = None
+    task_switches: list[TaskSwitch] = field(default_factory=list)
 
     @property
     def saturn(self):
@@ -286,6 +308,12 @@ def load(path):
     hooks = {}
     if tasks:
         hooks.setdefault(tasks.module, []).extend([tasks.setjmp, tasks.longjmp])
+    switches = []
+    for s in t.get("task_switch", []):
+        sw = TaskSwitch(known(s["module"], "a [[task_switch]]"), _addr(s["save"], symbols), _register(s["save_key"]),
+                        int(s["resume_sp"]), _addr(s["switch"], symbols), _register(s["switch_key"]))
+        hooks.setdefault(sw.module, []).extend([sw.save, sw.switch])
+        switches.append(sw)
     for h in t.get("hook", []):
         hooks.setdefault(known(h["module"], "a [[hook]]"), []).append(_addr(h["at"], symbols))
     game = t.get("game", {})
@@ -301,7 +329,14 @@ def load(path):
                                             str(o.get("tracks", "")), os.path.join(root, o["cue"]) if "cue" in o else "")
     return Game(game.get("name", os.path.basename(root)), root, os.path.join(root, game.get("build", "build")),
                 os.path.join(root, game.get("seeds", "seeds.json")), modules, symbols, tasks, hooks,
-                list(game.get("cmake", [])), playtest, _checkpoint(t["checkpoint"], symbols) if "checkpoint" in t else None)
+                list(game.get("cmake", [])), playtest, _checkpoint(t["checkpoint"], symbols) if "checkpoint" in t else None,
+                switches)
+
+
+def _register(name):
+    if not (name.startswith("r") and name[1:].isdigit() and 0 <= int(name[1:]) <= 15):
+        raise SystemExit(f"{name}: a register is r0 to r15")
+    return int(name[1:])
 
 
 def _addr(value, symbols):

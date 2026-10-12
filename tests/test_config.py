@@ -99,3 +99,25 @@ def test_a_checkpoint_shows_a_progress_line_in_words(tmp_path):
     assert config.show_value("u8@3", bytes.fromhex("E0000001")) == "1"
     assert cp.rebuild("900 0003 ABCD 0005") is None
     assert cp.to_json()["show"][4] == ["{} dino", 2, "names:,,,,,,Pink?", [2, 4]]
+
+
+SWITCH = """
+[[task_switch]]
+module = "MAIN"
+save = 0x06001300
+save_key = "r1"
+resume_sp = 84
+switch = 0x06001310
+switch_key = "r0"
+"""
+
+
+def test_a_stack_swapping_task_switch_is_read_and_both_its_places_are_hooked(tmp_path):
+    g = load(tmp_path, TOML + SWITCH)
+    assert g.task_switches == [config.TaskSwitch("MAIN", 0x06001300, 1, 84, 0x06001310, 0)]
+    assert {0x06001300, 0x06001310} <= set(g.hooks["MAIN"])
+
+
+def test_a_task_switch_key_has_to_be_a_register(tmp_path):
+    with pytest.raises(SystemExit, match="r0 to r15"):
+        load(tmp_path, TOML + SWITCH.replace('"r1"', '"r16"'))

@@ -4,7 +4,7 @@ import json
 from conftest import BASE, assemble
 
 from saturnrecomp import config
-from saturnrecomp.inventory import inventory
+from saturnrecomp.inventory import evidence, inventory
 from saturnrecomp.recomp.__main__ import generate
 
 ADD1, RTS, NOP = 0x7001, 0x000B, 0x0009
@@ -61,7 +61,7 @@ def test_modules_at_one_base_are_reported_apart_with_their_sources(tmp_path):
     assert (images["A"]["source"], images["B"]["source"]) == ("/A.BIN", "/B.BIN+0x2")
     assert (images["A"]["instructions"], images["B"]["instructions"]) == (3, 2)
     assert files["/A.BIN"] == ("translated", "module A") and files["/B.BIN"] == ("translated", "module B")
-    assert gaps == [("A", BASE + 6, 6, 2)]
+    assert gaps == [("A", BASE + 6, 6, 2, "other", 0, 0)]
 
 
 def test_a_prepared_modules_changed_bytes_are_its_patches(tmp_path):
@@ -81,3 +81,16 @@ def test_an_instruction_with_no_generated_line_fails_the_check(tmp_path):
     path.write_text("".join(line for line in open(path) if not line.startswith(f"{BASE + 2:08X}")))
     *_, problems = run(g)
     assert problems == [f"A: 1 discovered instructions have no generated line, first {BASE + 2:08X}"]
+
+
+def test_a_gap_reports_its_content_prologues_and_the_pointers_into_it():
+    data = b"\0" * 4 + b"Some text\0" + bytes.fromhex("0000 2FE6 4F22 6EF3")
+    gaps = [(BASE, 4), (BASE + 4, 10), (BASE + 14, 8)]
+    found = evidence(data, BASE, gaps, {BASE + 4, BASE + 18, BASE + 20, BASE + 40})
+    assert found == [("zero", 0, 0), ("text", 0, 1), ("other", 1, 2)]
+
+
+def test_a_ranged_treatment_splits_a_file_and_the_rest_keeps_the_files_own(tmp_path):
+    files, *_ = run(game(tmp_path, "/MOVIE.CPK@0-1\tinterpreted\ta header\n/MOVIE.CPK\tdata\tthe rest\n"))
+    assert files["/MOVIE.CPK@0x0-0x1"] == ("interpreted", "a header")
+    assert files["/MOVIE.CPK@0x1-0x3"] == ("data", "the rest")

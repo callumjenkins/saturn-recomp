@@ -45,6 +45,7 @@ written for Hitachi SHC's output (and GCC's, which is close):
    by the code as a literal, or sit in a table of pointers; for the last
    two, which is how hand-written handlers are reached, the descent must
    be at least 8 instructions (a data record can decode cleanly for a few).
+   Alignment padding (0000 or nop) before it does not move a boundary.
    Failing all that, unclassified code that
    starts with a stack-frame prologue at a boundary (SHC links whole
    object files, so uncalled functions sit between called ones) is taken
@@ -900,6 +901,10 @@ class Program:
                           for e in self.funcs if e != f.entry and e in f.code)
 
     def _boundary(self, a):
+        # alignment padding between a function and the next leaves the boundary where it was
+        while (a - 2 >= self.lo and self.img.contains(a - 2) and a - 2 not in self.code
+               and a - 2 not in self.data and self.img.u16(a - 2) in (0x0000, 0x0009)):
+            a -= 2
         p = a - 2
         if p in self.data:
             return True

@@ -48,6 +48,18 @@ def test_a_prologue_after_a_scheduled_instruction_opens_a_function():
     assert BASE + 4 in p.funcs
 
 
+def test_an_uncalled_function_after_alignment_padding_is_a_function():
+    p = program(
+        RTS, NOP,                                # 00
+        0x0000,                                  # 04 padding
+        0x2F86,                                  # 06 mov.l r8,@-r15
+        0x4F22,                                  # 08 sts.l pr,@-r15
+        0x4F26,                                  # 0A lds.l @r15+,pr
+        RTS, 0x68F6,                             # 0C rts ; mov.l @r15+,r8
+    )
+    assert BASE + 6 in p.funcs
+
+
 def test_an_unbounded_table_of_code_addresses_is_a_switch():
     p = program(
         0xD302,                                  # 00 mov.l [0C],r3

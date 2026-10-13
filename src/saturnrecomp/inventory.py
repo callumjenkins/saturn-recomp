@@ -12,18 +12,24 @@ BUILD/inventory:
     images.tsv    each module: its file's SHA-1, the disc file it comes from, the byte ranges
                   preparation changed or added, and its halfwords by class: instructions, those of them with
                   no generated line, data and unclassified.
-    gaps.tsv      each unclassified run: module, guest address, file offset, length.
+    gaps.tsv      each unclassified run: module, guest address, file offset, length, and evidence for
+                  what it holds: its content (zero, text or other), the prologues in it (mov.l
+                  r14,@-r15 then sts.l pr,@-r15, as SH-2 compilers begin a function that calls) and
+                  the literals in discovered code that point into it.
     summary.txt   the totals, and each check that failed.
 
 The treatments file is TAB-separated: PATTERN, TREATMENT, then a note giving the evidence. A pattern
 is a disc path glob ("/BOMSS/*.CPK"), "track NN" for an audio track or "IP.BIN" for the system area.
-A treatment is one of TREATMENTS. Lines starting with # are comments.
+A glob with "@START-END" (hex byte offsets, END exclusive) treats that part of each file it matches;
+files.tsv then has a row per part, "PATH@START-END", and the bytes no part covers take the file's own
+treatment. A treatment is one of TREATMENTS. Lines starting with # are comments.
 
 Instructions are counted once per address however many functions hold them, delay slots included.
 A module whose image no disc file holds, at its source offset or whole, is reported, as is one whose
 map was made from other bytes or other seeds than this run discovers with.
 """
 import argparse
+import bisect
 import fnmatch
 import hashlib
 import json
@@ -51,9 +57,31 @@ def read_treatments(path):
 
 def treatment(name, rows):
     for pattern, t, note in rows:
-        if fnmatch.fnmatchcase(name, pattern):
+        if "@" not in pattern and fnmatch.fnmatchcase(name, pattern):
             return t, note
     return "unknown", ""
+
+
+def parts(path, size, rows):
+    """[(name, bytes, treatment, note)] for a file: a row per part a ranged pattern treats, in offset
+    order, and one per stretch between them with the file's own treatment."""
+    ranged = []
+    for pattern, t, note in rows:
+        glob, _, span = pattern.partition("@")
+        if span and fnmatch.fnmatchcase(path, glob):
+            lo, hi = (int(x, 16) for x in span.split("-"))
+            ranged.append((lo, min(hi, size), t, note))
+    if not ranged:
+        return [(path, size, *treatment(path, rows))]
+    out, at = [], 0
+    for lo, hi, t, note in sorted(ranged):
+        if lo > at:
+            out.append((f"{path}@{at:#x}-{lo:#x}", lo - at, *treatment(path, rows)))
+        out.append((f"{path}@{lo:#x}-{hi:#x}", hi - lo, t, note))
+        at = max(at, hi)
+    if at < size:
+        out.append((f"{path}@{at:#x}-{size:#x}", size - at, *treatment(path, rows)))
+    return out
 
 
 def read_map(path):
@@ -80,6 +108,28 @@ def changed(a, b):
             start = None
     if start is not None:
         out.append((start, len(a) - start))
+    return out
+
+
+PROLOGUE = bytes.fromhex("2FE64F22")
+
+
+def content(chunk):
+    if not chunk.strip(b"\0"):
+        return "zero"
+    printable = sum(32 <= c < 127 or c in (0, 9, 10, 13) for c in chunk)
+    return "text" if len(chunk) >= 8 and printable >= 0.9 * len(chunk) else "other"
+
+
+def evidence(data, base, gaps, literals):
+    """(content, prologues, literals pointing in) for each (address, length) gap."""
+    lits = sorted(literals)
+    out = []
+    for a, n in gaps:
+        chunk = data[a - base:a - base + n]
+        prologues = sum(1 for i in range(0, n - 3, 2) if chunk[i:i + 4] == PROLOGUE)
+        pointers = bisect.bisect_left(lits, a + n) - bisect.bisect_left(lits, a)
+        out.append((content(chunk), prologues, pointers))
     return out
 
 
@@ -121,7 +171,8 @@ def image(m, seeds, files, by_sha1, map_dir):
         "code and data": len(both), "unclassified bytes": sum(n for _, n in gaps),
         "unresolved indirect": sum(len(f.unresolved) for f in p.funcs.values()),
     }
-    return row, [(m.name, a, a - m.base, n) for a, n in gaps], problems
+    found = evidence(data, m.base, gaps, p._literal_values())
+    return row, [(m.name, a, a - m.base, n, *e) for (a, n), e in zip(gaps, found)], problems
 
 
 def inventory(game, log=print):
@@ -151,10 +202,9 @@ def inventory(game, log=print):
     files = []
     for path, size, sha1 in entries:
         if path in made_from:
-            t, note = "translated", "module " + ", ".join(made_from[path])
+            files.append((path, size, sha1, "translated", "module " + ", ".join(made_from[path])))
         else:
-            t, note = treatment(path, rows)
-        files.append((path, size, sha1, t, note))
+            files += [(name, n, sha1, t, note) for name, n, t, note in parts(path, size or 0, rows)]
 
     with open(os.path.join(out, "files.tsv"), "w", encoding="utf-8") as f:
         f.write("# path\tbytes\tsha1\ttreatment\tnote\n")
@@ -163,8 +213,8 @@ def inventory(game, log=print):
         f.write("# " + "\t".join(images[0]) + "\n")
         f.writelines("\t".join(str(v) for v in row.values()) + "\n" for row in images)
     with open(os.path.join(out, "gaps.tsv"), "w", encoding="utf-8") as f:
-        f.write("# module\taddress\toffset\tbytes\n")
-        f.writelines(f"{m}\t{a:08X}\t{o:#x}\t{n}\n" for m, a, o, n in gaps)
+        f.write("# module\taddress\toffset\tbytes\tcontent\tprologues\tpointers in\n")
+        f.writelines("\t".join([m, f"{a:08X}", f"{o:#x}", *map(str, rest)]) + "\n" for m, a, o, *rest in gaps)
 
     summary = summarise(files, images, problems, build.stale(game))
     with open(os.path.join(out, "summary.txt"), "w", encoding="utf-8") as f:

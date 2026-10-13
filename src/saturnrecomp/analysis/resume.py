@@ -3,7 +3,9 @@
 A task parks inside a call to the game's yield (or to setjmp) and comes back at that call's return
 address. That address is inside a function rather than at an entry, so the build needs it as a
 seed. A function yields if it calls one that does, jumps to one as its tail, or runs into one's entry
-as part of its own code, so the set grows from the yields the config names.
+as part of its own code, so the set grows from the yields the config names. A program that switches
+tasks by swapping stacks ([[task_switch]]) yields in the functions holding its save and switch too.
+A task resumed on a fiber other than the one it parked on runs from there up its whole call chain.
 
     python -m saturnrecomp.analysis.resume GAME.toml [--check]
 --check compares the points with the seeds the learning loop found, instead of printing them.
@@ -43,8 +45,9 @@ def _call_sites(p):
                 yield f.entry, a, lit[1] if lit and lit[0] == "lit" else _held(p, f, ins.n)
 
 
-def resume_points(path, base, seeds, yields, unknown_yields=False, log=None):
-    """The sorted return addresses of the calls that can yield, in the program at `path` loaded at `base`."""
+def resume_points(path, base, seeds, yields, unknown_yields=False, log=None, inside=()):
+    """The sorted return addresses of the calls that can yield, in the program at `path` loaded at `base`.
+    The functions whose code holds an address in `inside` yield as well as those in `yields`."""
     with open(path, "rb") as f:
         p = discover.Program(sh2.Image(f.read(), base), [base, *seeds])
     sites = list(_call_sites(p))
@@ -52,7 +55,7 @@ def resume_points(path, base, seeds, yields, unknown_yields=False, log=None):
     def may_yield(target):
         return target in yielding or (unknown_yields and target is None)
 
-    yielding = set(yields)
+    yielding = set(yields) | {f.entry for f in p.funcs.values() if f.code & set(inside)}
     while True:
         more = {e for e, _, t in sites if may_yield(t)} - yielding
         more |= {f.entry for f in p.funcs.values()
@@ -68,13 +71,21 @@ def resume_points(path, base, seeds, yields, unknown_yields=False, log=None):
 
 
 def for_game(game, log=None):
-    """The resume points of the module that switches tasks, or [] when the game has no [tasks]."""
+    """{module name: its resume points}, for the module [tasks] names and each with a [[task_switch]]."""
+    out = {}
+    learned = game.learned_seeds()
     t = game.tasks
-    if not t:
-        return []
-    m = game.module(t.module)
-    seeds = m.seeds + game.learned_seeds().get(m.name, [])
-    return resume_points(m.file, m.base, seeds, t.yields, t.unknown_yields, log)
+    if t:
+        m = game.module(t.module)
+        out[m.name] = resume_points(m.file, m.base, m.seeds + learned.get(m.name, []), t.yields, t.unknown_yields, log)
+    for name in dict.fromkeys(s.module for s in game.task_switches):
+        m = game.module(name)
+        switches = [s for s in game.task_switches if s.module == name]
+        points = resume_points(m.file, m.base, m.seeds + learned.get(name, []), [y for s in switches for y in s.yields],
+                               any(s.unknown_yields for s in switches), log,
+                               inside=[a for s in switches for a in (s.save, s.switch)])
+        out[name] = sorted(set(out.get(name, [])) | set(points))
+    return out
 
 
 def main(argv=None):
@@ -83,15 +94,15 @@ def main(argv=None):
     ap.add_argument("--check", action="store_true")
     a = ap.parse_args(argv)
     game = config.load(a.config)
-    points = for_game(game, log=lambda s: print(s, file=sys.stderr))
-    if not a.check:
-        print(",".join(f"{x:08X}" for x in points))
-        return
-    learned = game.learned_seeds().get(game.tasks.module, []) if game.tasks else []
-    missed = [s for s in learned if s not in set(points)]
-    print(f"{len(learned) - len(missed)} of {len(learned)} learned seeds predicted", file=sys.stderr)
-    for s in missed:
-        print(f"  not predicted: {s:08X}", file=sys.stderr)
+    for name, points in for_game(game, log=lambda s: print(s, file=sys.stderr)).items():
+        if not a.check:
+            print(f"{name}: " + ",".join(f"{x:08X}" for x in points))
+            continue
+        learned = game.learned_seeds().get(name, [])
+        missed = [s for s in learned if s not in set(points)]
+        print(f"{name}: {len(learned) - len(missed)} of {len(learned)} learned seeds predicted", file=sys.stderr)
+        for s in missed:
+            print(f"  not predicted: {s:08X}", file=sys.stderr)
 
 
 if __name__ == "__main__":

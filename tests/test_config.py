@@ -118,6 +118,11 @@ def test_a_stack_swapping_task_switch_is_read_and_both_its_places_are_hooked(tmp
     assert {0x06001300, 0x06001310} <= set(g.hooks["MAIN"])
 
 
+def test_a_task_switch_can_name_the_calls_that_reach_it(tmp_path):
+    g = load(tmp_path, TOML + SWITCH + "yields = [0x06001400]\nunknown_yields = true\n")
+    assert g.task_switches[0].yields == [0x06001400] and g.task_switches[0].unknown_yields
+
+
 def test_a_task_switch_key_has_to_be_a_register(tmp_path):
     with pytest.raises(SystemExit, match="r0 to r15"):
         load(tmp_path, TOML + SWITCH.replace('"r1"', '"r16"'))

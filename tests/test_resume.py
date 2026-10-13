@@ -1,6 +1,7 @@
 from conftest import BASE, assemble
 
-from saturnrecomp.analysis.resume import resume_points
+from saturnrecomp import config
+from saturnrecomp.analysis.resume import for_game, resume_points
 
 NOP, RTS = 0x0009, 0x000B
 G, F, Y, H = BASE, BASE + 0x08, BASE + 0x10, BASE + 0x14
@@ -34,3 +35,29 @@ def test_a_function_that_jumps_to_a_yield_yields(tmp_path):
         RTS, NOP,                                # 0C, the yield
     ))
     assert resume_points(str(path), BASE, [BASE + 0x0C], [BASE + 0x0C]) == [BASE + 4]
+
+
+def test_the_function_holding_a_task_switch_yields(tmp_path):
+    path = tmp_path / "prog.bin"
+    path.write_bytes(CODE)
+    assert resume_points(str(path), BASE, [H], [], inside=[Y]) == [G + 4, F + 4]
+
+
+def test_a_program_with_a_stack_swapping_switch_gets_its_resume_points(tmp_path):
+    (tmp_path / "prog.bin").write_bytes(CODE)
+    (tmp_path / "game.toml").write_text(f"""
+[[module]]
+name = "MAIN"
+file = "prog.bin"
+base = {BASE:#x}
+seeds = [{H:#x}]
+
+[[task_switch]]
+module = "MAIN"
+save = {Y:#x}
+save_key = "r1"
+resume_sp = 84
+switch = {Y:#x}
+switch_key = "r0"
+""")
+    assert for_game(config.load(str(tmp_path / "game.toml"))) == {"MAIN": [G + 4, F + 4]}

@@ -29,6 +29,8 @@
     resume_sp = 84                  # how far the stack there is below where the task resumes
     switch = 0x060060C4             # where the incoming task's stack pointer comes out of its block
     switch_key = "r0"
+    yields = [0x06006110]           # optional: functions that reach the switch through jumps discovery can't follow
+    unknown_yields = true           # optional, as in [tasks]
 
     [[hook]]
     module = "KRNL"
@@ -247,6 +249,8 @@ class TaskSwitch:
     resume_sp: int
     switch: int
     switch_key: int
+    yields: list[int] = field(default_factory=list)
+    unknown_yields: bool = False
 
 
 @dataclass
@@ -311,7 +315,8 @@ def load(path):
     switches = []
     for s in t.get("task_switch", []):
         sw = TaskSwitch(known(s["module"], "a [[task_switch]]"), _addr(s["save"], symbols), _register(s["save_key"]),
-                        int(s["resume_sp"]), _addr(s["switch"], symbols), _register(s["switch_key"]))
+                        int(s["resume_sp"]), _addr(s["switch"], symbols), _register(s["switch_key"]),
+                        [_addr(y, symbols) for y in s.get("yields", [])], s.get("unknown_yields", False))
         hooks.setdefault(sw.module, []).extend([sw.save, sw.switch])
         switches.append(sw)
     for h in t.get("hook", []):

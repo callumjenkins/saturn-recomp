@@ -70,8 +70,7 @@ def recompile(game, log=print):
     specs = []
     for m in game.modules:
         seeds = set(m.seeds) | set(learned.get(m.name, []))
-        if game.tasks and m.name == game.tasks.module:
-            seeds |= set(points)
+        seeds |= set(points.get(m.name, []))
         specs.append((m.name, m.file, m.base, sorted(seeds)))
     tasks = (game.tasks.setjmp, game.tasks.longjmp) if game.tasks else None
     out = os.path.join(game.build, "recomp")

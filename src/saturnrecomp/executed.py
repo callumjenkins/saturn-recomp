@@ -1,6 +1,6 @@
 """Whether every instruction a reference run executed has a translation: a check of the map.
 
-    python -m saturnrecomp.executed GAME.toml RUN.tsv ...
+    python -m saturnrecomp.executed GAME.toml RUN.tsv ... [--notes NOTES.tsv]
 
 Each RUN.tsv lists what a reference (an instrumented emulator) executed, one distinct instruction a line,
 TAB-separated: CPU (M, S or 68K), ADDRESS and OPCODE in hex, then anything. Lines starting with # are
@@ -15,7 +15,9 @@ image has OPCODE there (two programs can load at one address; the bytes say whic
                      or a program game.toml does not list
     elsewhere        any other address (on-chip RAM, cartridge, ...)
 
-68000 addresses are counted, not placed. Writes BUILD/inventory/executed/summary.txt and, for every
+A notes file explains "no module" addresses: TAB-separated FIRST, LAST (hex, folded addresses,
+inclusive) and a note with the evidence; the summary splits "no module" into explained, by note, and
+unexplained. 68000 addresses are counted, not placed. Writes BUILD/inventory/executed/summary.txt and, for every
 class but translated and BIOS, a TSV of its addresses (module, first and last address of each run,
 instructions in it, and the reference files that executed it).
 """
@@ -95,7 +97,30 @@ def runs(rows):
     return out
 
 
-def check(game, paths, log=print):
+def read_notes(path):
+    """[(first, last, note)]"""
+    out = []
+    for line in open(path, encoding="utf-8"):
+        if line.startswith("#") or not line.strip():
+            continue
+        first, last, note = line.rstrip("\n").split("\t", 2)
+        out.append((int(first, 16), int(last, 16), note))
+    return out
+
+
+def explain(rows, notes):
+    """({note: instructions}, the rows no note covers)."""
+    by, rest = collections.Counter(), []
+    for row in rows:
+        note = next((n for first, last, n in notes if first <= row[1] <= last), None)
+        if note is None:
+            rest.append(row)
+        else:
+            by[note] += 1
+    return by, rest
+
+
+def check(game, paths, notes=(), log=print):
     modules = [(m.name, m.base, open(m.file, "rb").read()) for m in game.modules]
     mapped = {}
     for m in game.modules:
@@ -107,9 +132,12 @@ def check(game, paths, log=print):
     out = os.path.join(game.build, "inventory", "executed")
     os.makedirs(out, exist_ok=True)
     lines = [f"Executed instructions in {len(paths)} reference runs ({', '.join(os.path.basename(p) for p in paths)}):"]
+    explained, classes["no module"] = explain(classes.get("no module", []), notes)
     for c in ("translated", "untranslated", "BIOS", "no module", "elsewhere", "68K"):
         rows = classes.get(c, [])
-        lines.append(f"  {c:13} {len(rows):8,}")
+        lines.append(f"  {c:13} {len(rows):8,}" + (" unexplained" if c == "no module" else ""))
+        if c == "no module":
+            lines += [f"  {'':13} {n:8,} {note}" for note, n in explained.most_common()]
         if c in ("translated", "BIOS") or not rows:
             continue
         with open(os.path.join(out, c.replace(" ", "-") + ".tsv"), "w", encoding="utf-8") as f:
@@ -128,9 +156,10 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("config")
     ap.add_argument("runs", nargs="+")
+    ap.add_argument("--notes", help="explanations of addresses no module holds")
     a = ap.parse_args(argv)
-    classes = check(config.load(a.config), a.runs)
-    sys.exit(1 if classes.get("untranslated") else 0)
+    classes = check(config.load(a.config), a.runs, read_notes(a.notes) if a.notes else ())
+    sys.exit(1 if classes.get("untranslated") or classes.get("no module") else 0)
 
 
 if __name__ == "__main__":

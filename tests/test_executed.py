@@ -1,4 +1,4 @@
-from saturnrecomp.executed import classify, fold, runs
+from saturnrecomp.executed import classify, explain, fold, runs
 
 BASE = 0x06004000
 A = bytes.fromhex("7001 000B 0009 7002")          # add #1,r0; rts; nop; add #2,r0
@@ -28,3 +28,9 @@ def test_mirrors_fold_and_the_bios_and_other_bytes_are_their_own_classes():
 def test_runs_join_consecutive_halfwords_of_one_module():
     assert runs([("A", 0x10, ["x"]), ("A", 0x12, ["y"]), ("A", 0x20, ["x"])]) == [
         ("A", 0x10, 0x12, 2, {"x", "y"}), ("A", 0x20, 0x20, 1, {"x"})]
+
+
+def test_a_note_explains_the_addresses_in_its_range():
+    rows = [("", 0x060EC8B0, ["x"]), ("", 0x060EC8B2, ["x"]), ("", 0x06010000, ["x"])]
+    by, rest = explain(rows, [(0x060EC8B0, 0x060F08AF, "the backup library")])
+    assert dict(by) == {"the backup library": 2} and rest == [("", 0x06010000, ["x"])]

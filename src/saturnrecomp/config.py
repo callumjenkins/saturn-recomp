@@ -14,6 +14,13 @@
     file = "build/extract/BOMSS/0KRNL.BIN"
     base = 0x06006000
     seeds = [0x06006100]            # optional
+    source = "/0"                   # optional: the disc file a prepared module comes from ...
+    source_offset = 0x3B4B0         # ... and where in it; the inventory reports the bytes that differ
+
+    [inventory]                     # optional: what python -m saturnrecomp.inventory reads
+    manifest = "disc.json"          # the disc's files and audio tracks (saturnrecomp.disc --manifest)
+    files = "build/extract"         # the disc's files, extracted
+    treatments = "inventory.tsv"    # what became of the files no module is made from
 
     [tasks]                         # optional: a game that switches its own tasks
     module = "KRNL"
@@ -86,6 +93,15 @@ class Module:
     runtime_literals: bool = False
     callable_entry: bool = False
     unwind_returns: bool = False
+    source: str = ""           # the disc file it comes from, when that file is not `file` itself
+    source_offset: int = 0
+
+
+@dataclass
+class Inventory:
+    manifest: str
+    files: str
+    treatments: str = ""
 
 
 @dataclass
@@ -267,6 +283,7 @@ class Game:
     playtest: Playtest | None = None
     checkpoint: Checkpoint | None = None
     task_switches: list[TaskSwitch] = field(default_factory=list)
+    inventory: Inventory | None = None
 
     @property
     def saturn(self):
@@ -296,7 +313,8 @@ def load(path):
     modules = [Module(m["name"], os.path.join(root, m["file"]), m["base"],
                       [_addr(s, symbols) for s in m.get("seeds", [])],
                       m.get("runtime_literals", False), m.get("callable_entry", False),
-                      m.get("unwind_returns", False)) for m in t.get("module", [])]
+                      m.get("unwind_returns", False), m.get("source", ""), m.get("source_offset", 0))
+               for m in t.get("module", [])]
     names = {m.name for m in modules}
 
     def known(module, where):
@@ -332,10 +350,15 @@ def load(path):
             o = p["other_disc"]
             playtest.other_disc = OtherDisc(o["label"], os.path.join(root, o["disc"]), o.get("files", ""),
                                             str(o.get("tracks", "")), os.path.join(root, o["cue"]) if "cue" in o else "")
+    inventory = None
+    if "inventory" in t:
+        i = t["inventory"]
+        inventory = Inventory(os.path.join(root, i["manifest"]), os.path.join(root, i["files"]),
+                              os.path.join(root, i["treatments"]) if "treatments" in i else "")
     return Game(game.get("name", os.path.basename(root)), root, os.path.join(root, game.get("build", "build")),
                 os.path.join(root, game.get("seeds", "seeds.json")), modules, symbols, tasks, hooks,
                 list(game.get("cmake", [])), playtest, _checkpoint(t["checkpoint"], symbols) if "checkpoint" in t else None,
-                switches)
+                switches, inventory)
 
 
 def _register(name):

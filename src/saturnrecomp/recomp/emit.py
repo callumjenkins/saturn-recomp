@@ -262,7 +262,10 @@ class Body:
     `entries`: this program's entry points (direct calls and tail calls go
     to them by name); `volatile`: literal addresses not to fold into
     constants. After emit(): `sites` counts the calls and jumps by how they
-    were resolved, `unknown` lists static targets that are not entries here.
+    were resolved, `unknown` lists static targets that are not entries here,
+    and `locations` holds (address, index of the line implementing it, kind):
+    a delay slot ("slot") is implemented in its branch's line, and in a line of
+    its own ("insn") as well when something jumps to it.
     """
 
     def __init__(self, prog, f, entries, volatile=frozenset(), comments=True, hooks=frozenset(), unwind_returns=False):
@@ -274,6 +277,7 @@ class Body:
         self.slots = {a + 2 for a, i in self.ops.items() if i.delay and a + 2 in f.code}
         self.sites = {}
         self.unknown = []
+        self.locations = []
         self._targets = self._resolve()
 
     # -- analysis
@@ -440,12 +444,15 @@ class Body:
             if a in labels or a in late:
                 lines.append("L_%08X:" % a)
             text, succ = self._insn(a)
+            ins = self.ops[a]
             if self.comments:
-                ins = self.ops[a]
                 note = ins.text
                 if ins.delay:
                     note += " ; " + self.img.insn(a + 2).text
                 text += "  // %08X %s" % (a, note)
+            self.locations.append((a, len(lines), "insn"))
+            if ins.delay and a + 2 in code:
+                self.locations.append((a + 2, len(lines), "slot"))
             lines.append("    " + text)
             nxt = order[i + 1] if i + 1 < len(order) else None
             if succ is not None and succ != nxt:

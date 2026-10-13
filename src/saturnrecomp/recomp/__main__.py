@@ -11,6 +11,8 @@ modules; the runtime activates the one whose image it finds in memory
     p_<name>_funcs.h        prototypes and the module descriptor
     p_<name>_NNN.cpp        the functions, split by instruction count
     p_<name>_table.cpp      the module: image base, size, crc32, entries
+    map/<NAME>.tsv          where each instruction is implemented: its address, the function, the
+                            file and line (one row per function that holds it)
     modules.cpp             every module of the build (g_sh2_modules), the task switch (g_sh2_tasks)
     CMakeLists.txt          the library `recomp`, the runtime, the self-test
     report.txt              per module: functions, calls and jumps by how
@@ -30,6 +32,7 @@ synthetic program with every SH-2 instruction form, as module OPTEST, and
 its vectors in --out/selftest/optest.txt.
 """
 import argparse
+import hashlib
 import os
 import time
 import zlib
@@ -123,7 +126,7 @@ class Module:
         self.img = sh2.Image(self.data, base)
         self.prog = discover.Program(self.img, [base] + list(seeds))
         self.entries = sorted(self.prog.funcs)
-        self.files, self.sites, self.unknown = [], {}, []
+        self.files, self.sites, self.unknown, self.rows = [], {}, [], []
         self.n_ins = self.n_calls = 0
 
     def generate(self, out, per_file, comments, log):
@@ -133,10 +136,10 @@ class Module:
             volatile.update(ins.target for a in prog.code
                             if (ins := self.img.insn(a)).op in ("mov.w", "mov.l") and ins.size)
         self.volatile = len(volatile)
-        buf, count, idx = [], 0, 0
+        buf, places, count, idx = [], [], 0, 0
 
         def flush():
-            nonlocal buf, count, idx
+            nonlocal buf, places, count, idx
             if not buf:
                 return
             name = "%s_%03d.cpp" % (self.ns, idx)
@@ -144,8 +147,12 @@ class Module:
                 f.write('#include "%s_funcs.h"\n\nnamespace %s {\n\n' % (self.ns, self.ns))
                 f.write("\n\n".join(buf))
                 f.write("\n\n}  // namespace %s\n" % self.ns)
+            line = 5                                       # the first function's, below the header
+            for text, (e, locations) in zip(buf, places):
+                self.rows += [(a, e, kind, name, line + i) for a, i, kind in locations]
+                line += text.count("\n") + 2
             self.files.append(name)
-            buf, count, idx = [], 0, idx + 1
+            buf, places, count, idx = [], [], 0, idx + 1
 
         for i, e in enumerate(self.entries):
             fn = prog.funcs[e]
@@ -153,6 +160,7 @@ class Module:
             lines = body.emit()
             lines.insert(1, "    ran[%d] = 1;" % i)              # for --coverage: this function has run
             buf.append("\n".join(lines))
+            places.append((e, [(a, k + (k >= 1), kind) for a, k, kind in body.locations]))
             for k, v in body.sites.items():
                 self.sites[k] = self.sites.get(k, 0) + v
             self.unknown += [(t, e) for t in body.unknown]
@@ -162,6 +170,12 @@ class Module:
             if count >= per_file:
                 flush()
         flush()
+        os.makedirs(os.path.join(out, "map"), exist_ok=True)
+        with Out(os.path.join(out, "map", self.name + ".tsv")) as f:
+            f.write("# %s: %s at %08X, %d bytes, sha1 %s\n# address\tfunction\tkind\tfile\tline\n"
+                    % (self.name, os.path.basename(self.path), self.base, len(self.data),
+                       hashlib.sha1(self.data).hexdigest()))
+            f.write("".join("%08X\t%08X\t%s\t%s\t%d\n" % r for r in sorted(self.rows)))
 
         with Out(os.path.join(out, self.ns + "_funcs.h")) as f:
             f.write('#pragma once\n#include "saturn/sh2.h"\n\nnamespace %s {\n' % self.ns)

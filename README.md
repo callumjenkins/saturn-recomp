@@ -40,6 +40,8 @@ python -m saturnrecomp.build game.toml [--recompile]    # recompile if needed, t
 python -m saturnrecomp.learn game.toml -- --cue GAME.cue --headless --vblanks 3600
     # run; while it stops at code discovery missed, add the seed, recompile and run again
 python -m saturnrecomp.analysis.resume game.toml --check   # where the game's tasks can resume
+python -m saturnrecomp.inventory game.toml      # every disc file and what became of it, each module's
+    # bytes by class, and a check that every discovered instruction has a generated line
 ```
 
 A program can also play a run, which is how a bot or a test plays a game it cannot script ahead of

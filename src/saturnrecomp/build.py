@@ -56,6 +56,14 @@ def stale(game):
     return [k for k in now if now[k] != before.get(k)] + [k for k in before if k not in now]
 
 
+def specs(game, log=None):
+    """(name, file, base, seeds) for each module: its own seeds, the learned ones and its resume points."""
+    learned = game.learned_seeds()
+    points = resume.for_game(game, log)
+    return [(m.name, m.file, m.base, sorted(set(m.seeds) | set(learned.get(m.name, [])) | set(points.get(m.name, []))))
+            for m in game.modules]
+
+
 def recompile(game, log=print):
     """Recompile every module with its seeds, the learned ones and the resume points, then build."""
     missing = [m.file for m in game.modules if not os.path.exists(m.file)]
@@ -65,16 +73,9 @@ def recompile(game, log=print):
     if problems:
         raise SystemExit("this machine cannot build the game yet:\n  " + "\n  ".join(problems))
     made_from = inputs(game)
-    learned = game.learned_seeds()
-    points = resume.for_game(game, log)
-    specs = []
-    for m in game.modules:
-        seeds = set(m.seeds) | set(learned.get(m.name, []))
-        seeds |= set(points.get(m.name, []))
-        specs.append((m.name, m.file, m.base, sorted(seeds)))
     tasks = (game.tasks.setjmp, game.tasks.longjmp) if game.tasks else None
     out = os.path.join(game.build, "recomp")
-    generate(specs, out, log=log, hooks=game.hooks, tasks=tasks,
+    generate(specs(game, log), out, log=log, hooks=game.hooks, tasks=tasks,
              runtime_literals={m.name for m in game.modules if m.runtime_literals},
              callable_entries={m.name for m in game.modules if m.callable_entry},
              unwind_returns={m.name for m in game.modules if m.unwind_returns},

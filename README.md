@@ -42,6 +42,8 @@ python -m saturnrecomp.learn game.toml -- --cue GAME.cue --headless --vblanks 36
 python -m saturnrecomp.analysis.resume game.toml --check   # where the game's tasks can resume
 python -m saturnrecomp.inventory game.toml      # every disc file and what became of it, each module's
     # bytes by class, and a check that every discovered instruction has a generated line
+python -m saturnrecomp.native game.toml         # each instruction's native address ranges, from line
+    # tables of a second build whose code must equal the built executable's
 ```
 
 A program can also play a run, which is how a bot or a test plays a game it cannot script ahead of

@@ -75,3 +75,27 @@ def test_an_unbounded_table_of_code_addresses_is_a_switch():
     )
     assert BASE + 0x06 in p.switches
     assert {BASE + 0x18, BASE + 0x1A} <= p.funcs[BASE].code
+
+
+def test_an_uncalled_function_after_a_string_is_a_function():
+    p = program(
+        RTS, NOP,                                # 00
+        0x4142, 0x4300,                          # 04 "ABC\0"
+        0x2F86, 0x2FE6, 0x4F22,                  # 08 mov.l r8 ; mov.l r14 ; sts.l pr
+        0x6EF3, 0x7001, 0x7001,                  # 0E mov r15,r14 ; add #1,r0 ; add #1,r0
+        0x4F26, 0x6EF6,                          # 14 lds.l @r15+,pr ; mov.l @r15+,r14
+        RTS, 0x68F6,                             # 18 rts ; mov.l @r15+,r8
+    )
+    assert BASE + 8 in p.funcs
+
+
+def test_an_uncalled_function_after_a_table_of_addresses_is_a_function():
+    p = program(
+        RTS, NOP,                                # 00
+        ("lit", BASE + 0x16),                    # 04 a table's last entry, its low byte not zero
+        0x2FE6, 0x4F22,                          # 08 mov.l r14 ; sts.l pr
+        0x6EF3, 0x7001, 0x7001, 0x7001,          # 0C mov r15,r14 ; add #1,r0 x3
+        0x4F26,                                  # 14 lds.l @r15+,pr
+        RTS, 0x6EF6,                             # 16 rts ; mov.l @r15+,r14
+    )
+    assert BASE + 8 in p.funcs

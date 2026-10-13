@@ -49,7 +49,13 @@ written for Hitachi SHC's output (and GCC's, which is close):
    Failing all that, unclassified code that
    starts with a stack-frame prologue at a boundary (SHC links whole
    object files, so uncalled functions sit between called ones) is taken
-   the same way. Repeat to a fixed point.
+   the same way. So is a full frame prologue (pushes of r8-r13, then
+   mov.l r14,@-r15 and sts.l pr,@-r15) anywhere in unclassified words, after
+   a halfword whose low byte is zero (padding, or a string's NUL) or a word
+   that points into the program (a table's last entry), if it
+   descends cleanly for at least 8 instructions: an uncalled function after
+   a table or a string its own code would have made data. Repeat to a fixed
+   point.
 7. Registers that hold call targets across a function (SHC keeps a
    often-called address in r8-r14) are found by forward constant
    propagation over the function's code; calls clobber r0-r7.
@@ -1114,9 +1120,10 @@ class Program:
     def _prologue_seeds(self):
         """Unreached code at a boundary with a stack-frame prologue in its first
         three instructions. A boundary is the start of a gap (after padding),
-        or anywhere in it right after a terminator and its delay slot."""
-        added = 0
+        or anywhere in it right after a terminator and its delay slot. Failing
+        any, full frame prologues after a zero byte anywhere in a gap."""
         img = self.img
+        added = 0
         for start, n in self.gaps():
             end = start + n
             a = start
@@ -1130,21 +1137,44 @@ class Program:
                         q += 2
                     cands.append(q)
             for c in cands:
-                if c >= end or c in self._rejected or c in self.code or c in self.funcs:
+                if c >= end or c in self.code or c in self.funcs:
                     continue
                 # the compiler schedules an argument's move or a constant ahead of the frame
                 if not any(c + k < end and self._is_prologue(img.u16(c + k)) for k in (0, 2, 4)):
                     continue
-                f, data = self._descend(c, commit=False)
-                if f.bad or f.code & self.data or data & self.code:
-                    self._rejected.add(c)
+                added += self._take(c)
+        if added:
+            return added
+        for start, n in self.gaps():
+            for c in range(start, start + n - 3, 2):
+                if img.u16(c) != 0x2FE6 or img.u16(c + 2) != 0x4F22:     # mov.l r14,@-r15 ; sts.l pr,@-r15
                     continue
-                self._descend(c)
-                for t in f.calls | f.tails:
-                    if t not in self.funcs and self.inside(t):
-                        self._pending.append(t)
-                added += 1
+                e = c
+                while e - 2 >= start and (img.u16(e - 2) & 0xFF0F) == 0x2F06 and 8 <= (img.u16(e - 2) >> 4) & 15 <= 13:
+                    e -= 2
+                after = e == start or not img.u16(e - 2) & 0xFF or self._after_pointer(e)
+                if not after or e in self.code or e in self.funcs:
+                    continue
+                added += self._take(e, at_least=8)
         return added
+
+    def _after_pointer(self, a):
+        """The aligned word before `a` is an address in the program: the end of a table of them."""
+        return not a & 3 and self.img.contains(a - 4, 4) and self.inside(self.img.u32(a - 4))
+
+    def _take(self, c, at_least=0):
+        """1 if a clean descent from `c` made it a function, else 0 (and `c` is not tried again)."""
+        if c in self._rejected:
+            return 0
+        f, data = self._descend(c, commit=False)
+        if f.bad or f.code & self.data or data & self.code or len(f.code) < at_least:
+            self._rejected.add(c)
+            return 0
+        self._descend(c)
+        for t in f.calls | f.tails:
+            if t not in self.funcs and self.inside(t):
+                self._pending.append(t)
+        return 1
 
     # -- report
     def gaps(self):

@@ -44,6 +44,8 @@ python -m saturnrecomp.inventory game.toml      # every disc file and what becam
     # bytes by class, and a check that every discovered instruction has a generated line
 python -m saturnrecomp.native game.toml         # each instruction's native address ranges, from line
     # tables of a second build whose code must equal the built executable's
+python -m saturnrecomp.executed game.toml RUN.tsv ...   # whether every instruction a reference run
+    # executed (CPU, address, opcode a line) is translated; fails if one a module holds is not
 ```
 
 A program can also play a run, which is how a bot or a test plays a game it cannot script ahead of

@@ -16,11 +16,18 @@ BUILD/inventory:
     images.tsv    each module: its file's SHA-1, the disc file it comes from, the byte ranges
                   preparation changed or added, and its halfwords by class: instructions, those of them with
                   no generated line, data and unclassified.
+    identity.json what this inventory describes: the build's own record of its inputs (each module's
+                  bytes, game.toml's modules, the seeds and saturnrecomp's source), the executable's
+                  SHA-1, and the manifest's and treatments file's.
     gaps.tsv      each unclassified run: module, guest address, file offset, length, and evidence for
-                  what it holds: its content (zero, text or other), the prologues in it (mov.l
-                  r14,@-r15 then sts.l pr,@-r15, as SH-2 compilers begin a function that calls) and
-                  the literals in discovered code that point into it.
-    summary.txt   the totals, and each check that failed.
+                  what it holds: its content (zero, fill of nop or FFFF halfwords, text or other),
+                  the prologues in it (mov.l
+                  r14,@-r15 then sts.l pr,@-r15, as SH-2 compilers begin a function that calls), the
+                  literals in discovered code that point into it, and how many instructions a descent
+                  from its start (past fill, at a boundary) decodes cleanly within it before it
+                  returns: an uncalled function with no frame, or a record that happens to decode.
+    summary.txt   the totals, each module's unclassified bytes by what the gap report found in them,
+                  and each check that failed.
 
 The treatments file is TAB-separated: PATTERN, TREATMENT, then a note giving the evidence. A pattern
 is a disc path glob ("/BOMSS/*.CPK"), "track NN" for an audio track or "IP.BIN" for the system area.
@@ -175,20 +182,41 @@ PROLOGUE = bytes.fromhex("2FE64F22")
 def content(chunk):
     if not chunk.strip(b"\0"):
         return "zero"
+    if not len(chunk) & 1 and {chunk[i:i + 2] for i in range(0, len(chunk), 2)} <= {b"\x00\x09", b"\xff\xff", b"\0\0"}:
+        return "fill"
     printable = sum(32 <= c < 127 or c in (0, 9, 10, 13) for c in chunk)
     return "text" if len(chunk) >= 8 and printable >= 0.9 * len(chunk) else "other"
 
 
-def evidence(data, base, gaps, literals):
-    """(content, prologues, literals pointing in) for each (address, length) gap."""
+def evidence(data, base, gaps, literals, descends=lambda a, n: 0):
+    """(content, prologues, literals pointing in, instructions a clean descent decodes) for each
+    (address, length) gap."""
     lits = sorted(literals)
     out = []
     for a, n in gaps:
         chunk = data[a - base:a - base + n]
         prologues = sum(1 for i in range(0, n - 3, 2) if chunk[i:i + 4] == PROLOGUE)
         pointers = bisect.bisect_left(lits, a + n) - bisect.bisect_left(lits, a)
-        out.append((content(chunk), prologues, pointers))
+        kind = content(chunk)
+        out.append((kind, prologues, pointers, descends(a, n) if kind == "other" else 0))
     return out
+
+
+def descent(p):
+    """For a gap (address, length): the instructions a descent from its start decodes, within the gap
+    and clashing with nothing classified, if it starts at a boundary and returns; else 0."""
+    def count(a, n):
+        end = a + n
+        while a < end and p.img.u16(a) in (0x0000, 0x0009, 0xFFFF):
+            a += 2
+        if a >= end or not p._boundary(a):
+            return 0
+        f, data = p._descend(a, commit=False)
+        if f.bad or f.code & p.data or data & p.code or any(not a <= c < end for c in f.code) or f.calls - p.funcs.keys():
+            return 0
+        returns = any(p.img.insn(c).op in ("rts", "rte") for c in f.code)
+        return len(f.code) if returns else 0
+    return count
 
 
 def image(m, seeds, files, by_sha1, map_dir):
@@ -229,7 +257,7 @@ def image(m, seeds, files, by_sha1, map_dir):
         "code and data": len(both), "unclassified bytes": sum(n for _, n in gaps),
         "unresolved indirect": sum(len(f.unresolved) for f in p.funcs.values()),
     }
-    found = evidence(data, m.base, gaps, p._literal_values())
+    found = evidence(data, m.base, gaps, p._literal_values(), descent(p))
     return row, [(m.name, a, a - m.base, n, *e) for (a, n), e in zip(gaps, found)], problems
 
 
@@ -273,10 +301,16 @@ def inventory(game, log=print):
         f.write("# " + "\t".join(images[0]) + "\n")
         f.writelines("\t".join(str(v) for v in row.values()) + "\n" for row in images)
     with open(os.path.join(out, "gaps.tsv"), "w", encoding="utf-8") as f:
-        f.write("# module\taddress\toffset\tbytes\tcontent\tprologues\tpointers in\n")
+        f.write("# module\taddress\toffset\tbytes\tcontent\tprologues\tpointers in\tdecodes\n")
         f.writelines("\t".join([m, f"{a:08X}", f"{o:#x}", *map(str, rest)]) + "\n" for m, a, o, *rest in gaps)
 
-    summary = summarise(files, images, problems, build.stale(game))
+    identity = {"build": _json(os.path.join(game.build, "recomp", "inputs.json")),
+                "executable": _sha1_file(game.saturn), "manifest": _sha1_file(inv.manifest),
+                "treatments": _sha1_file(inv.treatments) if inv.treatments else None}
+    with open(os.path.join(out, "identity.json"), "w", encoding="utf-8") as f:
+        json.dump(identity, f, indent=1, sort_keys=True)
+        f.write("\n")
+    summary = summarise(files, images, gaps, problems, build.stale(game))
     with open(os.path.join(out, "summary.txt"), "w", encoding="utf-8") as f:
         f.write("\n".join(summary) + "\n")
     log("\n".join(summary))
@@ -284,7 +318,26 @@ def inventory(game, log=print):
     return files, images, gaps, problems
 
 
-def summarise(files, images, problems, stale):
+def _sha1_file(path):
+    return hashlib.sha1(open(path, "rb").read()).hexdigest() if os.path.exists(path) else None
+
+
+def _json(path):
+    return json.load(open(path)) if os.path.exists(path) else None
+
+
+def gap_kind(content, prologues, pointers, descends):
+    """What a gap's evidence suggests, for the summary."""
+    if prologues:
+        return "prologue"
+    if content in ("text", "zero", "fill"):
+        return content
+    if pointers:
+        return "pointed into"
+    return "decodes" if descends >= 4 else "nothing"
+
+
+def summarise(files, images, gaps, problems, stale):
     lines = ["Disc, by treatment:"]
     for t in TREATMENTS:
         chosen = [x for x in files if x[3] == t]
@@ -295,6 +348,16 @@ def summarise(files, images, problems, stale):
         lines.append(f"  {r['module']:6} {r['instructions']:7,} instructions, {r['omitted']} without a generated line; "
                      f"{2 * r['data halfwords']:>9,} data bytes, {r['unclassified bytes']:>9,} unclassified; "
                      f"from {r['source'] or '?'}" + (f", patched at {r['patches']}" if r["patches"] else ""))
+    lines.append("Unclassified bytes by what is in them (text; zeros; nop or FFFF fill; a prologue; code points"
+                 " into the run; it decodes cleanly to a return, 4 instructions or more; nothing):")
+    kinds = ("text", "zero", "fill", "prologue", "pointed into", "decodes", "nothing")
+    for r in images:
+        by = {k: 0 for k in kinds}
+        for m, _, _, n, *e in gaps:
+            if m == r["module"]:
+                by[gap_kind(*e)] += n
+        if any(by.values()):
+            lines.append(f"  {r['module']:6} " + ", ".join(f"{k} {v:,}" for k, v in by.items()))
     if stale:
         lines.append("The build is stale (" + ", ".join(stale) + "): recompile, then run this again.")
     lines.append("Checks: " + ("all passed" if not problems else f"{len(problems)} failed"))

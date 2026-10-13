@@ -52,7 +52,7 @@ treatments = "inventory.tsv"
 
 def run(g):
     files, images, gaps, problems = inventory(g, log=lambda s: None)
-    return {f[0]: f[3:] for f in files}, {r["module"]: r for r in images}, gaps, problems
+    return {f[0]: f[3:5] for f in files}, {r["module"]: r for r in images}, gaps, problems
 
 
 def test_modules_at_one_base_are_reported_apart_with_their_sources(tmp_path):
@@ -94,3 +94,20 @@ def test_a_ranged_treatment_splits_a_file_and_the_rest_keeps_the_files_own(tmp_p
     files, *_ = run(game(tmp_path, "/MOVIE.CPK@0-1\tinterpreted\ta header\n/MOVIE.CPK\tdata\tthe rest\n"))
     assert files["/MOVIE.CPK@0x0-0x1"] == ("interpreted", "a header")
     assert files["/MOVIE.CPK@0x1-0x3"] == ("data", "the rest")
+
+
+def test_a_file_is_named_by_a_program_or_by_a_page_the_program_names(tmp_path):
+    from saturnrecomp.inventory import naming
+    (tmp_path / "prog.bin").write_bytes(b"\x2f\xe6file://index.htm\0FONT%d\0")
+    (tmp_path / "INDEX.HTM").write_bytes(b"<img src=pic12.gif> <a href=more.htm>")
+    (tmp_path / "PIC12.GIF").write_bytes(b"GIF89a\x01\x02")
+    m = config.Module("PROG", str(tmp_path / "prog.bin"), BASE)
+    found = naming(["/INDEX.HTM", "/PIC12.GIF", "/FONT10B.BMP", "/OTHER.GIF"], [m], str(tmp_path))
+    assert found == {"/INDEX.HTM": ["PROG:full"], "/PIC12.GIF": ["/INDEX.HTM:full"], "/FONT10B.BMP": ["PROG:letters"]}
+
+
+def test_a_named_only_treatment_skips_files_nothing_names(tmp_path):
+    from saturnrecomp.inventory import treatment
+    files, *_ = run(game(tmp_path, "/MOVIE.CPK?named\tdata\tnamed\n"))
+    assert files["/MOVIE.CPK"] == ("unknown", "")
+    assert treatment("/MOVIE.CPK", [("/MOVIE.CPK?named", "data", "named")], named=True) == ("data", "named")

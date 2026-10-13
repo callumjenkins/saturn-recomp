@@ -6,9 +6,13 @@ Reads game.toml's [inventory] and the map the last recompile wrote (BUILD/recomp
 BUILD/inventory:
 
     files.tsv     every file and audio track on the disc, and the system area (IP.BIN): its size,
-                  SHA-1 and treatment. A file a module is made from is "translated", naming the
-                  modules; any other takes the first row of the treatments file that matches it, or
-                  is "unknown".
+                  SHA-1, treatment, the note, and what names it. A file a module is made from is
+                  "translated", naming the modules; any other takes the first row of the treatments
+                  file that matches it, or is "unknown". "Named by" lists the modules, and the text
+                  files something names in turn, that hold a form of the file's name: "full" (the
+                  name), "%d" (its digits as %d), "stem" (no extension) or "letters" (the stem's
+                  leading letters, four or more, alone or with %d). A form other than the full name
+                  counts only as a whole word, and a short word can be a coincidence: weigh it.
     images.tsv    each module: its file's SHA-1, the disc file it comes from, the byte ranges
                   preparation changed or added, and its halfwords by class: instructions, those of them with
                   no generated line, data and unclassified.
@@ -20,6 +24,7 @@ BUILD/inventory:
 
 The treatments file is TAB-separated: PATTERN, TREATMENT, then a note giving the evidence. A pattern
 is a disc path glob ("/BOMSS/*.CPK"), "track NN" for an audio track or "IP.BIN" for the system area.
+A pattern ending in "?named" matches only files something names (files.tsv's last column).
 A glob with "@START-END" (hex byte offsets, END exclusive) treats that part of each file it matches;
 files.tsv then has a row per part, "PATH@START-END", and the bytes no part covers take the file's own
 treatment. A treatment is one of TREATMENTS. Lines starting with # are comments.
@@ -34,6 +39,7 @@ import fnmatch
 import hashlib
 import json
 import os
+import re
 import sys
 
 from . import build, config, sh2
@@ -55,14 +61,66 @@ def read_treatments(path):
     return rows
 
 
-def treatment(name, rows):
+def treatment(name, rows, named=False):
     for pattern, t, note in rows:
-        if "@" not in pattern and fnmatch.fnmatchcase(name, pattern):
+        glob, _, cond = pattern.partition("?")
+        if "@" not in glob and fnmatch.fnmatchcase(name, glob) and (cond != "named" or named):
             return t, note
     return "unknown", ""
 
 
-def parts(path, size, rows):
+WORD = re.compile(rb"[A-Z0-9_%]+")
+
+
+def forms(path):
+    """{the forms of a disc file's name a program can hold, upper case: kind}."""
+    name = os.path.basename(path).upper()
+    stem = os.path.splitext(name)[0]
+    letters = re.match(r"[A-Z_]*", stem).group()
+    out = {}
+    if len(letters) >= 4:
+        out[letters] = out[letters + "%D"] = "letters"
+    out[stem] = "stem"
+    out[re.sub(r"\d+", "%D", name)] = "%d"
+    out[name] = "full"
+    return {k.encode(): v for k, v in out.items()}
+
+
+def text_index(data):
+    upper = data.upper()
+    return upper, set(WORD.findall(upper))
+
+
+def named_by(path, sources):
+    """["SOURCE:KIND"] for each source holding a form of the file's name, the strongest form each."""
+    out = []
+    want = forms(path)
+    full = os.path.basename(path).upper().encode()
+    for source, (upper, words) in sources.items():
+        if full in upper:
+            out.append(f"{source}:full")
+        else:
+            kinds = [want[w] for w in want if w in words]
+            if kinds:
+                out.append(f"{source}:{min(kinds, key=['full', '%d', 'stem', 'letters'].index)}")
+    return out
+
+
+def naming(paths, modules, files):
+    """{disc path: named_by}, with each text file named by something a source in turn, to a fixed point."""
+    sources = {m.name: text_index(open(m.file, "rb").read()) for m in modules}
+    found = {}
+    while True:
+        found = {p: n for p in paths if (n := named_by(p, sources))}
+        more = {p for p in found if p not in sources and os.path.exists(f := os.path.join(files, p.lstrip("/")))
+                and content(open(f, "rb").read()) == "text"}
+        if not more:
+            return found
+        for p in more:
+            sources[p] = text_index(open(os.path.join(files, p.lstrip("/")), "rb").read())
+
+
+def parts(path, size, rows, named=False):
     """[(name, bytes, treatment, note)] for a file: a row per part a ranged pattern treats, in offset
     order, and one per stretch between them with the file's own treatment."""
     ranged = []
@@ -72,15 +130,15 @@ def parts(path, size, rows):
             lo, hi = (int(x, 16) for x in span.split("-"))
             ranged.append((lo, min(hi, size), t, note))
     if not ranged:
-        return [(path, size, *treatment(path, rows))]
+        return [(path, size, *treatment(path, rows, named))]
     out, at = [], 0
     for lo, hi, t, note in sorted(ranged):
         if lo > at:
-            out.append((f"{path}@{at:#x}-{lo:#x}", lo - at, *treatment(path, rows)))
+            out.append((f"{path}@{at:#x}-{lo:#x}", lo - at, *treatment(path, rows, named)))
         out.append((f"{path}@{lo:#x}-{hi:#x}", hi - lo, t, note))
         at = max(at, hi)
     if at < size:
-        out.append((f"{path}@{at:#x}-{size:#x}", size - at, *treatment(path, rows)))
+        out.append((f"{path}@{at:#x}-{size:#x}", size - at, *treatment(path, rows, named)))
     return out
 
 
@@ -199,16 +257,18 @@ def inventory(game, log=print):
     entries = [("IP.BIN", os.path.getsize(ip) if os.path.exists(ip) else None, manifest.get("ip_sha1", ""))]
     entries += [(path, v["size"], v["sha1"]) for path, v in sorted(manifest["files"].items())]
     entries += [(f"track {n}", 2352 * v["frames"], v["sha1"]) for n, v in sorted(manifest.get("audio", {}).items())]
+    names = naming([p for p, _, _ in entries if p.startswith("/")], game.modules, inv.files)
     files = []
     for path, size, sha1 in entries:
+        by = ", ".join(names.get(path, []))
         if path in made_from:
-            files.append((path, size, sha1, "translated", "module " + ", ".join(made_from[path])))
+            files.append((path, size, sha1, "translated", "module " + ", ".join(made_from[path]), by))
         else:
-            files += [(name, n, sha1, t, note) for name, n, t, note in parts(path, size or 0, rows)]
+            files += [(name, n, sha1, t, note, by) for name, n, t, note in parts(path, size or 0, rows, bool(by))]
 
     with open(os.path.join(out, "files.tsv"), "w", encoding="utf-8") as f:
-        f.write("# path\tbytes\tsha1\ttreatment\tnote\n")
-        f.writelines(f"{p}\t{'' if s is None else s}\t{h}\t{t}\t{n}\n" for p, s, h, t, n in files)
+        f.write("# path\tbytes\tsha1\ttreatment\tnote\tnamed by\n")
+        f.writelines(f"{p}\t{'' if s is None else s}\t{h}\t{t}\t{n}\t{b}\n" for p, s, h, t, n, b in files)
     with open(os.path.join(out, "images.tsv"), "w", encoding="utf-8") as f:
         f.write("# " + "\t".join(images[0]) + "\n")
         f.writelines("\t".join(str(v) for v in row.values()) + "\n" for row in images)

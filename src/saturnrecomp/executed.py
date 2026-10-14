@@ -41,17 +41,23 @@ def fold(address):
     return a
 
 
+def names(paths):
+    """A short name for each reference file: its file name, or its directory's where file names repeat."""
+    base = [os.path.basename(p) for p in paths]
+    return [os.path.basename(os.path.dirname(os.path.abspath(p))) if base.count(b) > 1 else b for p, b in zip(paths, base)]
+
+
 def read_runs(paths):
-    """{(cpu, address, opcode): [file names]} over the reference files."""
+    """{(cpu, address, opcode): [run names]} over the reference files."""
     out = collections.defaultdict(list)
-    for path in paths:
+    for path, name in zip(paths, names(paths)):
         for line in open(path, encoding="utf-8"):
             if line.startswith("#") or not line.strip():
                 continue
             cpu, address, opcode, *_ = line.split("\t")
             key = (cpu, int(address, 16), int(opcode, 16))
-            if os.path.basename(path) not in out[key]:
-                out[key].append(os.path.basename(path))
+            if name not in out[key]:
+                out[key].append(name)
     return out
 
 
@@ -131,7 +137,10 @@ def check(game, paths, notes=(), log=print):
     classes = classify(read_runs(paths), modules, mapped)
     out = os.path.join(game.build, "inventory", "executed")
     os.makedirs(out, exist_ok=True)
-    lines = [f"Executed instructions in {len(paths)} reference runs ({', '.join(os.path.basename(p) for p in paths)}):"]
+    shown = names(paths)
+    lines = [f"Executed instructions in {len(paths)} reference runs ({', '.join(shown) if len(shown) <= 10 else 'listed in runs.txt'}):"]
+    with open(os.path.join(out, "runs.txt"), "w", encoding="utf-8") as f:
+        f.write("".join(f"{n}\t{p}\n" for n, p in zip(shown, paths)))
     explained, classes["no module"] = explain(classes.get("no module", []), notes)
     for c in ("translated", "untranslated", "BIOS", "no module", "elsewhere", "68K"):
         rows = classes.get(c, [])

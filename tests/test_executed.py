@@ -1,4 +1,4 @@
-from saturnrecomp.executed import classify, explain, fold, runs
+from saturnrecomp.executed import classify, explain, fold, names, runs
 
 BASE = 0x06004000
 A = bytes.fromhex("7001 000B 0009 7002")          # add #1,r0; rts; nop; add #2,r0
@@ -34,3 +34,7 @@ def test_a_note_explains_the_addresses_in_its_range():
     rows = [("", 0x060EC8B0, ["x"]), ("", 0x060EC8B2, ["x"]), ("", 0x06010000, ["x"])]
     by, rest = explain(rows, [(0x060EC8B0, 0x060F08AF, "the backup library")])
     assert dict(by) == {"the backup library": 2} and rest == [("", 0x06010000, ["x"])]
+
+
+def test_runs_whose_files_share_a_name_go_by_their_directories():
+    assert names(["a/boot/exec.tsv", "b/normal/exec.tsv", "c/x.tsv"]) == ["boot", "normal", "x.tsv"]

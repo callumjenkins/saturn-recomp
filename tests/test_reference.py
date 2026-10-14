@@ -15,7 +15,11 @@ def test_words_come_back_in_the_saturns_byte_order():
 
 def test_a_vblank_is_placed_by_its_tick_and_the_vblanks_since_it_began():
     ticks = {1: 0, 2: 1, 3: 1, 4: 1, 5: 2}
-    assert reference.placed(ticks) == {1: (0, 0), 2: (1, 0), 3: (1, 1), 4: (1, 2), 5: (2, 0)}
+    assert reference.placed(ticks) == {1: (0, 0, 0), 2: (0, 1, 0), 3: (0, 1, 1), 4: (0, 1, 2), 5: (0, 2, 0)}
+
+
+def test_a_tick_that_goes_back_starts_again_after_every_place_before_it():
+    assert reference.placed({1: 7, 2: 8, 3: 0, 4: 1}) == {1: (0, 7, 0), 2: (0, 8, 0), 3: (1, 0, 0), 4: (1, 1, 0)}
 
 
 class FakeCore:
@@ -42,6 +46,14 @@ def test_presses_and_shots_follow_the_tick_through_a_longer_stall():
     # held from the frame after the one its place falls on, as a press of ours holds from its VBlank on
     assert core.seen[6:] == [set(), {"START"}, {"START"}, {"START"}, {"START"}]
     assert end == 11
+
+
+def test_an_event_after_the_tick_resets_waits_for_the_cores_reset():
+    ours = {1: 5, 2: 6, 3: 0, 4: 1}
+    core = FakeCore([5, 6, 7, 8, 9, 0, 1])                # the core takes longer to reach the reset
+    shots = []
+    reference.play_synced(core, 0, ours, {}, [4], 100, lambda v, n: shots.append((v, n)))
+    assert shots == [(4, 7)]
 
 
 def test_a_place_the_core_never_stops_at_comes_on_its_next_frame():

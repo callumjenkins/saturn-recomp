@@ -218,16 +218,27 @@ def swap16(raw):
     return bytes(out)
 
 
+class Place:
+    """Where a run is in the game, as (times the tick has gone back, tick, VBlanks since the tick reached
+    that value). A game's tick stops while it loads, and a core's loads take longer than ours, so an
+    event placed this way happens at the same point of the game on both. A game may reset its tick,
+    as a new mode starts."""
+
+    def __init__(self):
+        self.resets, self.last, self.since = 0, None, 0
+
+    def step(self, tick):
+        if self.last is not None and tick < self.last:
+            self.resets += 1
+        self.since = self.since + 1 if tick == self.last else 0
+        self.last = tick
+        return self.resets, tick, self.since
+
+
 def placed(ticks):
-    """{VBlank: (tick, VBlanks since the tick reached that value)} for our run, from its VBlank: tick.
-    A game's tick stops while it loads, and a core's loads take longer than ours, so an event placed
-    this way happens at the same point of the game on both."""
-    out, since, last = {}, 0, None
-    for v in sorted(ticks):
-        since = since + 1 if ticks[v] == last else 0
-        last = ticks[v]
-        out[v] = (last, since)
-    return out
+    """{VBlank: Place} for our run, from its VBlank: tick."""
+    place = Place()
+    return {v: place.step(ticks[v]) for v in sorted(ticks)}
 
 
 def play_synced(core, tick_addr, ticks, presses_by_vblank, shots, limit, on_shot, writes_by_vblank=None):
@@ -240,15 +251,13 @@ def play_synced(core, tick_addr, ticks, presses_by_vblank, shots, limit, on_shot
     events = sorted([(at[v], v, 0, what) for v, what in presses_by_vblank.items() if v in at]
                     + [(at[v], v, 1, what) for v, what in (writes_by_vblank or {}).items() if v in at]
                     + [(at[v], v, 2, None) for v in shots if v in at])
-    j, last, since = 0, None, 0
+    j, place = 0, Place()
     while j < len(events):
         if core.frames >= limit:
             return None
         core.run()
-        t = core.read32(tick_addr)
-        since = since + 1 if t == last else 0
-        last = t
-        while j < len(events) and (events[j][0][0] < t or (events[j][0][0] == t and since >= events[j][0][1])):
+        now = place.step(core.read32(tick_addr))
+        while j < len(events) and events[j][0] <= now:
             _, v, kind, what = events[j]
             if kind == 0:
                 for port, buttons in what:

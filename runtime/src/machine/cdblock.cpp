@@ -208,10 +208,12 @@ static void play_ended() {
 
 // Mednafen's drive, in its clock of 44 100 x 256 Hz: a play spends 256 000 clocks BUSY, then SEEKs for
 // 12 sectors' time, 26 clocks a sector forward or 28 back, and one sector's time more when it goes back
-// or 150 sectors or more forward.
-uint64_t cd_seek_ns(uint32_t from, uint32_t to, uint64_t* busy_ns) {
+// or 150 sectors or more forward. It reads the target's subcode and plays one sector later, at `rate`
+// sectors a second, and only the sector after that reaches the buffer.
+uint64_t cd_seek_ns(uint32_t from, uint32_t to, int rate, uint64_t* busy_ns) {
     const int64_t clock = 44100 * 256, start = 256000, d = (int64_t)to - (int64_t)from;
-    const int64_t seek = 12 * clock / 150 + (d < 0 ? -d * 28 : d * 26) + (d < 0 || d >= 150 ? clock / 150 : 0);
+    const int64_t seek = 12 * clock / 150 + (d < 0 ? -d * 28 : d * 26) + (d < 0 || d >= 150 ? clock / 150 : 0)
+                         + clock / rate;
     if (busy_ns) *busy_ns = (uint64_t)(start * 1000000000ll / clock);
     return (uint64_t)((start + seek) * 1000000000ll / clock);
 }
@@ -301,11 +303,11 @@ uint64_t cd_fs_read_ns(uint32_t head, uint32_t fad, uint32_t sectors, bool find_
     const uint64_t sector = 1000000000ull / cd_data_rate();
     uint64_t t = 0;
     if (find_root) {
-        t += cd_seek_ns(head, 166, busy_ns) + sector;
+        t += cd_seek_ns(head, 166, 150, busy_ns) + sector;
         head = 167;
     }
     uint64_t busy;
-    t += cd_seek_ns(head, fad, &busy) + sectors * sector;
+    t += cd_seek_ns(head, fad, 150, &busy) + sectors * sector;
     if (!find_root && busy_ns) *busy_ns = busy;
     return t;
 }
@@ -352,7 +354,7 @@ static void start_play(uint32_t start, uint32_t end, int mode) {
     g_fs_done = 0;
     if (g_cfg.accurate_drive) {
         uint64_t busy;
-        g_seek_until = g_play_t0 + cd_seek_ns(head, g_fad, &busy);
+        g_seek_until = g_play_t0 + cd_seek_ns(head, g_fad, g_audio_play ? 75 : 150, &busy);
         g_seek_from = g_play_t0 + busy;
         g_status = ST_BUSY;
     }

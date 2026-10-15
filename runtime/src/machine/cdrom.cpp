@@ -37,6 +37,8 @@ static uint32_t msf(const std::string& s) {
 }
 
 static bool open_image(const std::string& cue, Image& im) {
+    for (CueFile& f : im.files) std::fclose(f.f);
+    im = Image{};
     std::vector<CueFile>& files = im.files;
     std::vector<CueTrack>& tracks = im.tracks;
     std::ifstream in(cue);

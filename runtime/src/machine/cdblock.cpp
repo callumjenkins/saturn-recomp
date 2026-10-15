@@ -11,7 +11,8 @@
 // data port (0x25818000). CD-DA plays at 75 sectors a second; each sector's
 // 588 stereo samples go to the SCSP's external input (cd_audio_sample, taken
 // by sound.cpp once a sample). The file-system commands (0x70-0x75) work on the ISO
-// 9660 directory the way the CD block's own firmware does.
+// 9660 directory the way the CD block's own firmware does. With --accurate-drive, a
+// directory command raises EFLS only once the drive has read the directory, as in Mednafen.
 //
 // Command set and answer layouts: Sega's CD block documentation as used by
 // SBL's CDC library; where the documents leave a value open, the choice is
@@ -70,6 +71,8 @@ static uint32_t g_calcsize;
 // the file system
 struct FsFile { uint32_t fad, size; uint8_t attr, fn; std::string name; };
 static std::vector<FsFile> g_dir;               // 0 '.', 1 '..', then the records
+static uint64_t g_fs_done;                      // --accurate-drive: when the directory read in progress ends
+static bool g_root_known;                       // --accurate-drive: a directory read has found the volume descriptor
 
 // ---- helpers -------------------------------------------------------------------------------
 static void reset_filter(int i) { g_filter[i] = Filter{0, 0xFFFFFFFFu, 0, 0, 0, 0, 0, 0, 0, (uint8_t)i, 0xFF}; }
@@ -217,6 +220,14 @@ int cd_data_rate() { return g_cfg.accurate_drive ? 150 : 300; }
 
 void cd_tick() {
     uint64_t now = sat_now();
+    if (g_fs_done && now >= g_fs_done) {
+        g_fs_done = 0;
+        g_root_known = true;
+        g_status = ST_PAUSE;
+        g_hirq |= EFLS;
+    } else if (g_fs_done && now >= g_seek_from) {
+        g_status = ST_SEEK;
+    }
     if (g_status == ST_BUSY && g_seek_until && now >= g_seek_from) g_status = ST_SEEK;
     if (g_status == ST_SEEK && g_seek_until && now >= g_seek_until) {
         g_status = ST_PLAY;
@@ -284,6 +295,33 @@ static void root_dir() {
     load_dir(150 + lba, size);
 }
 
+// Mednafen's file-system read: when `find_root`, a seek to the volume descriptor at FAD 166 and that
+// sector; then a seek to the directory and its sectors.
+uint64_t cd_fs_read_ns(uint32_t head, uint32_t fad, uint32_t sectors, bool find_root, uint64_t* busy_ns) {
+    const uint64_t sector = 1000000000ull / cd_data_rate();
+    uint64_t t = 0;
+    if (find_root) {
+        t += cd_seek_ns(head, 166, busy_ns) + sector;
+        head = 167;
+    }
+    uint64_t busy;
+    t += cd_seek_ns(head, fad, &busy) + sectors * sector;
+    if (!find_root && busy_ns) *busy_ns = busy;
+    return t;
+}
+
+// --accurate-drive: EFLS waits for the drive to read the directory, which leaves it paused past it.
+static void fs_read(uint32_t fad, uint32_t size) {
+    const uint64_t now = sat_now();
+    const uint32_t n = (size + 2047) / 2048;
+    uint64_t busy;
+    g_fs_done = now + cd_fs_read_ns(g_fad, fad, n, !g_root_known, &busy);
+    g_seek_from = now + busy;
+    g_seek_until = 0;
+    g_fad = fad + n;
+    g_status = ST_BUSY;
+}
+
 static void put_info(const FsFile& f) {
     g_words.push_back((uint16_t)(f.fad >> 16)); g_words.push_back((uint16_t)f.fad);
     g_words.push_back((uint16_t)(f.size >> 16)); g_words.push_back((uint16_t)f.size);
@@ -311,6 +349,7 @@ static void start_play(uint32_t start, uint32_t end, int mode) {
     g_play_t0 = sat_now();
     g_play_done = 0;
     g_seek_until = 0;
+    g_fs_done = 0;
     if (g_cfg.accurate_drive) {
         uint64_t busy;
         g_seek_until = g_play_t0 + cd_seek_ns(head, g_fad, &busy);
@@ -500,12 +539,14 @@ static void command() {
         uint32_t fid = (uint32_t)(cr3 & 0xFF) << 16 | cr4;
         if (fid == 0xFFFFFF || g_dir.empty()) root_dir();
         else if (fid < g_dir.size()) load_dir(g_dir[fid].fad, g_dir[fid].size);
-        report(); g_hirq |= CMOK | EFLS;
+        if (g_cfg.accurate_drive && fid != 0) fs_read(g_dir[0].fad, g_dir[0].size);
+        report(); g_hirq |= CMOK | (g_fs_done ? 0 : EFLS);
         break;
     }
     case 0x71:                                  // Read Directory: the current one, from a file ID; all of it is kept
         if (g_dir.empty()) root_dir();
-        report(); g_hirq |= CMOK | EFLS;
+        if (g_cfg.accurate_drive) fs_read(g_dir[0].fad, g_dir[0].size);
+        report(); g_hirq |= CMOK | (g_fs_done ? 0 : EFLS);
         break;
     case 0x72:                                  // Get File System Scope
         if (g_dir.empty()) root_dir();
@@ -533,7 +574,7 @@ static void command() {
         report(); g_hirq |= CMOK;
         break;
     }
-    case 0x75: g_status = ST_PAUSE; report(); g_hirq |= CMOK | EFLS; break;   // Abort File
+    case 0x75: g_status = ST_PAUSE; g_fs_done = 0; report(); g_hirq |= CMOK | EFLS; break;   // Abort File
     case 0xE0: report(); g_hirq |= CMOK | EFLS | CSCT; break;                 // Authenticate Device
     case 0xE1: answer(status_hi(), 4, 0, 0); g_hirq |= CMOK; break;                 // a Saturn disc
     default:
@@ -564,6 +605,8 @@ void cd_init() {
     g_status = ST_PAUSE;
     g_fad = 150;
     g_seek_until = 0;
+    g_fs_done = 0;
+    g_root_known = false;
     g_repeat = g_repeat_left = 0;
     g_audio_play = false;
     g_cdda.clear();
@@ -622,3 +665,4 @@ void cdblock_state(State& s) {
 }
 
 void cddrive_state(State& s) { s(g_seek_from), s(g_seek_until); }
+void cdfs_state(State& s) { s(g_fs_done), s(g_root_known); }

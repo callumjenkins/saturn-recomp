@@ -92,3 +92,25 @@ TEST(a_boot_copies_ip_bins_header_over_what_a_previous_program_left_in_the_bios_
     CHECK_EQ(sizes_copied, true);
     CHECK_EQ(ld8(0x06000CCC), (uint8_t)' ');
 }
+
+static uint16_t change_to_root() {
+    cd_write(0x90008, 0, 2);                    // HIRQ cleared
+    cd_write(0x90018, 0x7000, 2);
+    cd_write(0x9001C, 0x0000, 2);
+    cd_write(0x90020, 0x00FF, 2);
+    cd_write(0x90024, 0xFFFF, 2);
+    return (uint16_t)cd_read(0x90008, 2);
+}
+
+TEST(a_change_directory_ends_at_once_but_on_the_accurate_drive_only_once_the_drive_has_read_it) {
+    char tmpl[] = "/tmp/cdrom_test_XXXXXX";
+    std::string dir = mkdtemp(tmpl);
+    CHECK_EQ(cdrom_open(disc(dir, "fs", "DATA")), true);
+    const uint16_t CMOK = 0x0001, EFLS = 0x0200;
+    cd_init();
+    CHECK_EQ(change_to_root() & (CMOK | EFLS), CMOK | EFLS);
+    g_cfg.accurate_drive = true;
+    cd_init();
+    CHECK_EQ(change_to_root() & (CMOK | EFLS), CMOK);
+    g_cfg.accurate_drive = false;
+}

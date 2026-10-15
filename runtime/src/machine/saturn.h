@@ -183,6 +183,7 @@ void cd_init();
 void cd_tick();
 uint64_t cd_seek_ns(uint32_t from, uint32_t to, uint64_t* busy_ns);   // a play's seek from FAD to FAD, with --accurate-drive
 int cd_data_rate();                                  // data sectors a second while the drive plays
+uint64_t cd_fs_read_ns(uint32_t head, uint32_t fad, uint32_t sectors, bool find_root, uint64_t* busy_ns);   // a directory read, with --accurate-drive
 uint32_t cd_read(uint32_t off, int size);
 void cd_write(uint32_t off, uint32_t v, int size);
 void cd_audio_sample(int16_t lr[2]);                 // CD-DA at 44 100 Hz, to the SCSP's EXTS

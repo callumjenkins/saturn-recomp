@@ -20,3 +20,15 @@ TEST(the_accurate_drive_reads_at_double_speed) {
     g_cfg.accurate_drive = false;
     CHECK_EQ(cd_data_rate(), 300);
 }
+
+// A sector's time at double speed is 1/150 s.
+TEST(the_first_directory_read_finds_the_volume_descriptor_before_it_seeks_to_the_directory) {
+    g_cfg.accurate_drive = true;
+    uint64_t busy = 0, first_busy = 0;
+    const uint64_t sector = 1000000000ull / 150;
+    CHECK_EQ(cd_fs_read_ns(150, 1000, 2, true, &busy),
+             cd_seek_ns(150, 166, &first_busy) + sector + cd_seek_ns(167, 1000, nullptr) + 2 * sector);
+    CHECK_EQ(busy, first_busy);
+    CHECK_EQ(cd_fs_read_ns(150, 1000, 2, false, nullptr), cd_seek_ns(150, 1000, nullptr) + 2 * sector);
+    g_cfg.accurate_drive = false;
+}

@@ -2,8 +2,10 @@
 //
 // The host writes a command into CR1-CR4 (CR4 last) and reads the answer
 // from the same registers; HIRQ holds the flags (writing clears the bits
-// written as 0). Commands complete at once. The drive delivers sectors of
-// the disc (cdrom.cpp) at double speed while it plays: each goes from the
+// written as 0). Commands complete at once. The drive delivers data sectors
+// of the disc (cdrom.cpp) at 300 a second while it plays, twice a double-speed
+// drive's rate, and starts playing at once. With --accurate-drive it reads 150
+// a second and seeks first, by Mednafen's model (cd_seek_ns). Each goes from the
 // CD device connection through the filters (FAD range, subheader) into a
 // partition of the 200-sector buffer, where the host gets it through the
 // data port (0x25818000). CD-DA plays at 75 sectors a second; each sector's
@@ -50,6 +52,7 @@ static uint32_t g_fad = 150, g_play_end, g_play_start;
 static int g_repeat, g_repeat_left;
 static bool g_audio_play;
 static uint64_t g_play_t0, g_play_done;         // time the play began, sectors read since
+static uint64_t g_seek_from, g_seek_until;      // --accurate-drive: a play's seek, BUSY then SEEK, until PLAY
 static int g_getlen = 2048;
 static std::deque<int16_t> g_cdda;              // the audio played, not yet taken by the SCSP (L, R)
 
@@ -200,10 +203,28 @@ static void play_ended() {
     sat_trace("CD: play ended at FAD %u", g_fad);
 }
 
+// Mednafen's drive, in its clock of 44 100 x 256 Hz: a play spends 256 000 clocks BUSY, then SEEKs for
+// 12 sectors' time, 26 clocks a sector forward or 28 back, and one sector's time more when it goes back
+// or 150 sectors or more forward.
+uint64_t cd_seek_ns(uint32_t from, uint32_t to, uint64_t* busy_ns) {
+    const int64_t clock = 44100 * 256, start = 256000, d = (int64_t)to - (int64_t)from;
+    const int64_t seek = 12 * clock / 150 + (d < 0 ? -d * 28 : d * 26) + (d < 0 || d >= 150 ? clock / 150 : 0);
+    if (busy_ns) *busy_ns = (uint64_t)(start * 1000000000ll / clock);
+    return (uint64_t)((start + seek) * 1000000000ll / clock);
+}
+
+int cd_data_rate() { return g_cfg.accurate_drive ? 150 : 300; }
+
 void cd_tick() {
     uint64_t now = sat_now();
+    if (g_status == ST_BUSY && g_seek_until && now >= g_seek_from) g_status = ST_SEEK;
+    if (g_status == ST_SEEK && g_seek_until && now >= g_seek_until) {
+        g_status = ST_PLAY;
+        g_play_t0 = now;
+        g_seek_until = 0;
+    }
     if (g_status == ST_PLAY) {
-        uint64_t rate = g_audio_play ? 75 : 150 * 2;
+        uint64_t rate = g_audio_play ? 75 : (uint64_t)cd_data_rate();
         uint64_t due = (now - g_play_t0) * rate / 1000000000ull;
         while (g_play_done < due && g_status == ST_PLAY) {
             if (g_fad >= g_play_end) { play_ended(); break; }
@@ -272,6 +293,7 @@ static void put_info(const FsFile& f) {
 
 // ---- commands -------------------------------------------------------------------------------
 static void start_play(uint32_t start, uint32_t end, int mode) {
+    const uint32_t head = g_fad;
     if (start != 0xFFFFFF) {
         if (start & 0x800000) g_fad = start & 0x7FFFFF;
         else if (start) g_fad = track_fad(start >> 8, false);
@@ -288,6 +310,13 @@ static void start_play(uint32_t start, uint32_t end, int mode) {
     g_status = ST_PLAY;
     g_play_t0 = sat_now();
     g_play_done = 0;
+    g_seek_until = 0;
+    if (g_cfg.accurate_drive) {
+        uint64_t busy;
+        g_seek_until = g_play_t0 + cd_seek_ns(head, g_fad, &busy);
+        g_seek_from = g_play_t0 + busy;
+        g_status = ST_BUSY;
+    }
     if (g_audio_play)
         sat_note("CD-DA: play track %d, FAD %u-%u, repeat %d", track_of(g_fad, nullptr), g_fad,
                  g_play_end, g_repeat);
@@ -534,6 +563,7 @@ void cd_init() {
     g_cddev = 0;                                // as the BIOS leaves it after reading the boot files
     g_status = ST_PAUSE;
     g_fad = 150;
+    g_seek_until = 0;
     g_repeat = g_repeat_left = 0;
     g_audio_play = false;
     g_cdda.clear();
@@ -590,3 +620,5 @@ void cdblock_state(State& s) {
     if (s.loading) g_dir.resize(n);
     for (auto& f : g_dir) s(f.fad), s(f.size), s(f.attr), s(f.fn), s.str(f.name);
 }
+
+void cddrive_state(State& s) { s(g_seek_from), s(g_seek_until); }

@@ -60,6 +60,7 @@ void scudsp_state(State& s);
 void onchip_state(State& s);
 void smpc_state(State& s);
 void cdblock_state(State& s);
+void cddrive_state(State& s);
 void video_state(State& s);
 void vdp1_state(State& s);
 void vdp2_state(State& s);

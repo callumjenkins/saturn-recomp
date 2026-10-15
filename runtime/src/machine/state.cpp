@@ -23,11 +23,12 @@
 static const char kMagic[8] = {'S', 'A', 'T', 'S', 'T', 'A', 'T', 'E'};
 static const uint32_t kVersion = 1;
 
-static const struct { const char* name; void (*fn)(State&); } kParts[] = {
+// An optional part may be missing from a dump made before it existed; its fields keep their values.
+static const struct { const char* name; void (*fn)(State&); bool optional; } kParts[] = {
     {"machine", machine_state}, {"video", video_state},     {"core", core_state},       {"mmio", mmio_state},
     {"bios", bios_state},       {"scu", scu_state},         {"scudsp", scudsp_state},   {"onchip", onchip_state},
     {"smpc", smpc_state},       {"cdblock", cdblock_state}, {"vdp1", vdp1_state},       {"vdp2", vdp2_state},
-    {"sound", sound_state},     {"scsp", scsp_state},       {"tasks", tasks_state},
+    {"sound", sound_state},     {"scsp", scsp_state},       {"tasks", tasks_state},     {"cddrive", cddrive_state, true},
 };
 
 static std::string g_loading_path;
@@ -166,6 +167,7 @@ void state_load(const std::string& path) {
     }
     for (auto& p : kParts) {
         auto it = parts.find(p.name);
+        if (it == parts.end() && p.optional) continue;
         if (it == parts.end()) state_fail((std::string("no part ") + p.name).c_str());
         State s;
         s.loading = true;

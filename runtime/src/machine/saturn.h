@@ -36,6 +36,7 @@ struct SaturnConfig {
     std::string out = ".";          // logs, pictures and dumps go here
     std::string save;               // the backup memory's file; "-": none; empty: one per game in the user's data directory
     bool realtime = false;          // host clock; otherwise virtual time from safe points
+    bool accurate_drive = false;    // the CD drive's seeks and double-speed rate (cdblock.cpp); otherwise faster loads
     uint64_t stop_vblanks = 0;      // end the run after this many VBlanks (0: never)
     int stop_starts = 0;            // ... or after this many program starts (0: never)
     bool trace = false;             // events to stderr
@@ -180,6 +181,8 @@ bool cdrom_borrow(const std::string& other_cue, const std::string& files, const 
 std::string cdrom_first_file();                       // the 1st file of the root: the 1st read file
 void cd_init();
 void cd_tick();
+uint64_t cd_seek_ns(uint32_t from, uint32_t to, uint64_t* busy_ns);   // a play's seek from FAD to FAD, with --accurate-drive
+int cd_data_rate();                                  // data sectors a second while the drive plays
 uint32_t cd_read(uint32_t off, int size);
 void cd_write(uint32_t off, uint32_t v, int size);
 void cd_audio_sample(int16_t lr[2]);                 // CD-DA at 44 100 Hz, to the SCSP's EXTS

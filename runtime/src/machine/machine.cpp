@@ -184,6 +184,11 @@ static void writes_due() {
     }
 }
 
+// A dump is taken after its VBlank's writes, so a run loaded from one starts after them.
+static void writes_skip_past() {
+    while (g_write_pos < g_writes.size() && g_writes[g_write_pos].vblank <= sat_vblanks()) ++g_write_pos;
+}
+
 // --cheat MODULE:ADDR=HEX or MODULE:ADDR|=HEX,...: once a VBlank, while that module is active, the
 // bytes written, or or-ed into what is there, through the CPU's stores
 struct Cheat { const SH2Module* module; uint32_t addr; bool or_in; std::vector<uint8_t> bytes; };
@@ -657,6 +662,7 @@ int saturn_main(const SaturnConfig& cfg) {
     state_init();
     if (!cfg.state_in.empty()) {
         state_load(cfg.state_in);
+        writes_skip_past();
         entry = g_master.pc;
         tasks = true;                           // the dump goes on from one PC, on a task's fresh stack
     }

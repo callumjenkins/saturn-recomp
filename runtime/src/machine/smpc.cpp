@@ -278,7 +278,10 @@ static void command(uint8_t cmd) {
     case 0x09: sat_trace("SMPC CDOFF"); break;
     case 0x0A: case 0x0B: sat_trace("SMPC NETLINK%s", cmd == 0x0A ? "ON" : "OFF"); break;
     case 0x0D: sat_stop("SMPC SYSRES: the program reset the system");
-    case 0x0E: case 0x0F: sat_trace("SMPC CKCHG%s", cmd == 0x0E ? "352" : "320"); break;
+    case 0x0E: case 0x0F:
+        sat_trace("SMPC CKCHG%s", cmd == 0x0E ? "352" : "320");
+        onchip_set_clock(cmd == 0x0E);
+        break;
     case 0x10: {                             // INTBACK
         bool status = g_ireg[0] & 1, peri = g_ireg[1] & 8;
         g_peri.clear();

@@ -58,6 +58,7 @@ void bios_state(State& s);
 void scu_state(State& s);
 void scudsp_state(State& s);
 void onchip_state(State& s);
+void clock_state(State& s);
 void smpc_state(State& s);
 void cdblock_state(State& s);
 void cddrive_state(State& s);

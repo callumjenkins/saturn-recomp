@@ -30,12 +30,19 @@ struct OnChip {
     bool wdt_pending;
 };
 static OnChip g_oc[2];
+static uint32_t g_phi_div = 65;             // the master clock's divisor for φ: 65 or 61
+
+uint64_t onchip_phi_clocks(uint64_t ns) {
+    const uint64_t master = bios_pal() ? 1734687500ull : 1746818182ull;
+    return (uint64_t)((unsigned __int128)ns * master / ((uint64_t)g_phi_div * 1000000000ull));
+}
 
 static uint32_t rd(OnChip& o, uint32_t off, int size) { return mem_rd(o.regs, off, size); }
 static void wr(OnChip& o, uint32_t off, uint32_t v, int size) { mem_wr(o.regs, off, v, size); }
 
 void onchip_reset(int cpu) {
     OnChip& o = g_oc[cpu];
+    if (cpu == 0) g_phi_div = 65;
     for (auto& b : o.regs) b = 0;
     o.frc_t0 = sat_now();
     o.frc0 = 0;
@@ -59,7 +66,7 @@ void onchip_reset(int cpu) {
 static uint64_t frc_ticks(const OnChip& o) {
     static const int div[4] = {8, 32, 128, 1};
     int d = div[o.regs[0x16] & 3];
-    uint64_t clocks = (sat_now() - o.frc_t0) * 28636 / 1000000;   // φ = 28.6 MHz
+    uint64_t clocks = onchip_phi_clocks(sat_now() - o.frc_t0);
     return o.frc0 + clocks / d;
 }
 
@@ -78,7 +85,7 @@ static bool wdt_counting(const OnChip& o) { return (o.regs[0x80] & 0x60) == 0x20
 static uint64_t wdt_count(const OnChip& o) {
     static const int div[8] = {2, 64, 128, 256, 512, 1024, 4096, 8192};
     if (!wdt_counting(o)) return o.wtcnt0;
-    uint64_t clocks = (sat_now() - o.wdt_t0) * 28636 / 1000000;
+    uint64_t clocks = onchip_phi_clocks(sat_now() - o.wdt_t0);
     return o.wtcnt0 + clocks / div[o.regs[0x80] & 7];
 }
 
@@ -244,4 +251,41 @@ void onchip_write(SH2Context& c, uint32_t a, uint32_t v, int size) {
     else if (off >= 0x1B0 && off < 0x1B4) { dma(o, 0); dma(o, 1); }
 }
 
+// Raises what the old rate already reached, then counts on from the current values.
+static void rebase(OnChip& o) {
+    const uint64_t now = sat_now();
+    const uint64_t ticks = frc_ticks(o);
+    if (uint32_t period = ocra_period(o)) {
+        if (period == o.frc_period && ticks / period > o.frc_matches) {
+            o.regs[0x11] |= 0x08;
+            if (o.regs[0x10] & 0x08) o.frc_pending = true;
+        }
+        o.frc0 = (uint16_t)(ticks % period);
+        o.frc_period = period;
+    } else {
+        o.frc0 = (uint16_t)ticks;
+    }
+    o.frc_t0 = now;
+    o.frc_matches = 0;
+    if (wdt_counting(o)) {
+        const uint64_t count = wdt_count(o);
+        if (count / 256 > o.wdt_overflows) {
+            o.regs[0x80] |= 0x80;
+            o.wdt_pending = true;
+        }
+        o.wtcnt0 = (uint8_t)count;
+    }
+    o.wdt_t0 = now;
+    o.wdt_overflows = 0;
+}
+
+void onchip_set_clock(bool dots352) {
+    const uint32_t div = dots352 ? 61 : 65;
+    if (div == g_phi_div) return;
+    rebase(g_oc[0]);
+    rebase(g_oc[1]);
+    g_phi_div = div;
+}
+
 void onchip_state(State& s) { s(g_oc); }
+void clock_state(State& s) { s(g_phi_div); }

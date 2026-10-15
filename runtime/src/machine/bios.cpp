@@ -214,6 +214,7 @@ bool bios_call(SH2Context& c, uint32_t addr) {
         break;
     case 0x06000320:                            // SYS_CHGSYSCK(mode)
         st32(0x06000324u, r4);
+        onchip_set_clock(r4 != 0);
         sat_trace("SYS_CHGSYSCK(%u)", r4);
         break;
     case 0x06000330:                            // SYS_TASSEM(n): nonzero when taken

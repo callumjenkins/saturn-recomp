@@ -154,6 +154,13 @@ run with the agent and gives the address; pc-saturnbomberman's `bomberman compar
 What is left after that is the game itself running differently. Some games run tasks on every
 VBlank while they load, so a longer load leaves their state a few frames further on.
 
+`saturnrecomp.audio` compares sound the same way, a window at a time. The runtime's `--wav` records
+a run's samples and the core keeps its own in `Core.audio`. `audio.window` takes a window of ours
+and the reference's sound around the same point in the game. It finds the offset where the two
+correlate best and reports that correlation, both levels, the clipped samples, and whether the
+channels are swapped. Two sound chips emulated separately never give the same bytes, so a window
+counts as a match when its correlation is near 1, not when its samples are equal.
+
 ## Checking a change
 
 `tools/check.sh` runs every check that needs no game data. It's the same thing CI runs on every

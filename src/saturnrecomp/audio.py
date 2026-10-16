@@ -74,21 +74,6 @@ def blocks(x, k):
     return [sum(x[i:i + k]) for i in range(0, len(x) - k + 1, k)]
 
 
-def blocks(x, k):
-    """Sums of k samples at a time: the signal low-passed, at 1/k the rate."""
-    return [sum(x[i:i + k]) for i in range(0, len(x) - k + 1, k)]
-
-
-def slope(points):
-    """The least-squares slope of (x, y) points, or None for fewer than two distinct x."""
-    n = len(points)
-    if n < 2:
-        return None
-    mx, my = sum(x for x, _ in points) / n, sum(y for _, y in points) / n
-    sxx = sum((x - mx) ** 2 for x, _ in points)
-    return sum((x - mx) * (y - my) for x, y in points) / sxx if sxx else None
-
-
 @dataclass
 class Window:
     lag: int                 # samples the reference's sound comes after ours

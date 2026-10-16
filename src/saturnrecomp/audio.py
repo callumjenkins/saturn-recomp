@@ -74,6 +74,11 @@ def blocks(x, k):
     return [sum(x[i:i + k]) for i in range(0, len(x) - k + 1, k)]
 
 
+def blocks(x, k):
+    """Sums of k samples at a time: the signal low-passed, at 1/k the rate."""
+    return [sum(x[i:i + k]) for i in range(0, len(x) - k + 1, k)]
+
+
 def slope(points):
     """The least-squares slope of (x, y) points, or None for fewer than two distinct x."""
     n = len(points)

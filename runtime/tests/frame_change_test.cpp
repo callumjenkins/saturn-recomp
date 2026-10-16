@@ -5,7 +5,7 @@
 
 namespace {
 
-const uint64_t kLineNs = 16683350 / 263;
+const uint64_t kLineNs = video_frame_ns() / 263;
 const int kFBCR = 2;
 
 // Machine time at a line of a frame, counted from power-on.

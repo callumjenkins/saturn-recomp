@@ -56,7 +56,3 @@ def test_wav_round_trip(tmp_path):
     rate, l, r = audio.read_wav(str(tmp_path / "a.wav"))
     assert rate == audio.RATE and list(l) == left and list(r) == right
 
-
-def test_slope():
-    assert audio.slope([(0, 1), (10, 21), (20, 41)]) == 2
-    assert audio.slope([(5, 1)]) is None

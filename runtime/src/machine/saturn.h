@@ -217,6 +217,7 @@ uint32_t video_read(uint32_t a, int size);    // VDP1, VDP2, SCSP (canonical add
 void video_write(uint32_t a, uint32_t v, int size);
 bool video_owns(uint32_t a);
 uint64_t video_frame_changes();
+uint64_t video_frame_ns();                      // one field, 263 lines
 uint64_t video_draws();
 
 // ---- sound (sound.cpp, scsp.cpp through sound.h) ----------------------------------------------

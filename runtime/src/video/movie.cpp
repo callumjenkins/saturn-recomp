@@ -1,7 +1,7 @@
 // saturn-recomp runtime — --video FILE: every field's picture and the run's sound
 // as an MP4, through ffmpeg.
 //
-// Fields go to ffmpeg as raw RGB at 59.94 a second, on a canvas twice the first
+// Fields go to ffmpeg as raw RGB at the raster's 59.826 a second, on a canvas twice the first
 // field's size; a field of another size is scaled to fit it and centred. The
 // sound goes to a WAV beside the video (--wav's, or FILE.wav), and the two are
 // joined when the run ends, a fatal error included.
@@ -39,7 +39,7 @@ void movie_frame(const Frame& f) {
         g_h = f.h * 2;
         g_video = g_cfg.video + ".picture.mp4";
         std::string cmd = "ffmpeg -y -loglevel error -f rawvideo -pix_fmt rgb24 -s " + std::to_string(g_w) + "x" +
-                          std::to_string(g_h) + " -r 60000/1001 -i - -c:v libx264 -preset veryfast -crf 18 "
+                          std::to_string(g_h) + " -r 1000000000/" + std::to_string(video_frame_ns()) + " -i - -c:v libx264 -preset veryfast -crf 18 "
                           "-pix_fmt yuv420p " + quoted(g_video);
         g_pipe = popen(cmd.c_str(), "w");
         if (!g_pipe) sat_fatal("--video: cannot start ffmpeg");

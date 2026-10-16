@@ -1,7 +1,7 @@
 // saturn-recomp runtime — the raster timing that drives the frame, and the video
 // and sound chips' place on the bus (the sound side is sound.cpp's).
 //
-// Timing is NTSC: 263 lines at 59.94 Hz, whatever the disc's area (TVSTAT's
+// Timing is NTSC: 263 lines at 59.826 Hz, whatever the disc's area (TVSTAT's
 // PAL bit reads 0). Each line reached runs the SCU's timer 0 compare and
 // raises HBlank-IN; line 0 raises VBlank-OUT, the first line after the
 // display (224, or 240 with TVMD's VRESO 1; 224 too for VRESO 2, PAL's 256
@@ -22,7 +22,9 @@
 #include <string>
 #include <vector>
 
-static const uint64_t kFrameNs = 16683350;      // 59.94 Hz
+// A line is 1708 cycles of φ at the master clock over 65 (1820 over 61 in 352-dot mode, the same
+// time), as Mednafen counts it.
+static const uint64_t kLineNs = 63556;
 static const int kLines = 263;
 static uint64_t g_line_abs;                      // raster lines since power-on
 static uint64_t g_vblanks;
@@ -30,6 +32,7 @@ static Frame g_frame;
 
 uint64_t sat_vblanks() { return g_vblanks; }
 uint64_t video_frame_changes() { return vdp1_frame_changes(); }
+uint64_t video_frame_ns() { return kLineNs * kLines; }
 uint64_t video_draws() { return vdp1_draws(); }
 
 static uint16_t reg16(const uint8_t* r, uint32_t o) { return (uint16_t)(r[o] << 8 | r[o + 1]); }
@@ -94,12 +97,12 @@ static void vblank_in(uint64_t now) {
 }
 
 void video_tick(uint64_t now) {
-    uint64_t target = now / (kFrameNs / kLines);
+    uint64_t target = now / kLineNs;
     while (g_line_abs < target) {
         ++g_line_abs;
         int line = (int)(g_line_abs % kLines);
         if (line == 0) { vdp1_vblank_out(); scu_raise(IRQ_VBLANK_OUT); scu_frame_event(1); }
-        if (line == display_lines()) vblank_in(g_line_abs * (kFrameNs / kLines));
+        if (line == display_lines()) vblank_in(g_line_abs * kLineNs);
         scu_raise(IRQ_HBLANK_IN);
         scu_line(line);
     }
@@ -130,7 +133,7 @@ uint32_t video_read(uint32_t a, int size) {
     if (off == 0x04 || off == 0x08 || off == 0x0A) {   // TVSTAT, HCNT, VCNT: from the raster
         int line = (int)(g_line_abs % kLines);
         // HBLANK: the last sixth of every line (about 10.9 of NTSC's 63.6 us)
-        const uint64_t line_ns = kFrameNs / kLines;
+        const uint64_t line_ns = kLineNs;
         bool hblank = sat_now() % line_ns >= line_ns - line_ns / 6;
         uint16_t tvstat = (uint16_t)((line >= display_lines() ? 8 : 0) | (hblank ? 4 : 0) | ((g_vblanks & 1) ? 2 : 0));
         set16(g_vdp2_regs, 0x04, tvstat);

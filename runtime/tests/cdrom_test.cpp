@@ -6,6 +6,8 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include <chrono>
+#include <thread>
 
 namespace {
 
@@ -113,4 +115,34 @@ TEST(a_change_directory_ends_at_once_but_on_the_accurate_drive_only_once_the_dri
     cd_init();
     CHECK_EQ(change_to_root() & (CMOK | EFLS), CMOK);
     g_cfg.accurate_drive = false;
+}
+
+// The report's CD-ROM bit clears as a directory read starts its seek and is set again before the read ends.
+TEST(a_directory_read_on_the_accurate_drive_clears_the_cd_rom_bit_until_its_first_sector) {
+    char tmpl[] = "/tmp/cdrom_test_XXXXXX";
+    std::string dir = mkdtemp(tmpl);
+    CHECK_EQ(cdrom_open(disc(dir, "bit", "DATA")), true);
+    const uint16_t EFLS = 0x0200;
+    g_cfg.accurate_drive = true;
+    g_cfg.realtime = true;
+    cd_init();
+    change_to_root();
+    auto bit = [] {
+        cd_write(0x90018, 0x0000, 2), cd_write(0x9001C, 0, 2), cd_write(0x90020, 0, 2), cd_write(0x90024, 0, 2);
+        uint16_t cr1 = (uint16_t)cd_read(0x90018, 2);
+        cd_read(0x90024, 2);
+        return cr1 & 0x80;
+    };
+    bool cleared = false, set_before_efls = false;
+    for (int i = 0; i < 2000 && !(cd_read(0x90008, 2) & EFLS); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        cd_tick();
+        if (!bit()) cleared = true;
+        else if (cleared && !(cd_read(0x90008, 2) & EFLS)) set_before_efls = true;
+    }
+    CHECK_EQ(cleared, true);
+    CHECK_EQ(set_before_efls, true);
+    CHECK_EQ(bit(), 0x80);
+    g_cfg.accurate_drive = false;
+    g_cfg.realtime = false;
 }

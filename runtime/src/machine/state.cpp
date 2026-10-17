@@ -29,7 +29,7 @@ static const struct { const char* name; void (*fn)(State&); bool optional; } kPa
     {"bios", bios_state},       {"scu", scu_state},         {"scudsp", scudsp_state},   {"onchip", onchip_state},
     {"smpc", smpc_state},       {"cdblock", cdblock_state}, {"vdp1", vdp1_state},       {"vdp2", vdp2_state},
     {"sound", sound_state},     {"scsp", scsp_state},       {"tasks", tasks_state},     {"cddrive", cddrive_state, true},
-    {"cdfs", cdfs_state, true},   {"clock", clock_state, true},
+    {"cdfs", cdfs_state, true},   {"clock", clock_state, true}, {"cdpos", cdpos_state, true},
 };
 
 static std::string g_loading_path;

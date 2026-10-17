@@ -52,6 +52,11 @@ static uint8_t g_status = ST_PAUSE;
 static uint32_t g_fad = 150, g_play_end, g_play_start;
 static int g_repeat, g_repeat_left;
 static bool g_audio_play;
+static bool g_is_cdrom = true;                  // the report's CD-ROM bit
+// A play or a directory read clears the CD-ROM bit 500 of Mednafen's drive clocks after its command, so the command's own answer
+// still has it. On --accurate-drive a directory read sets it again as it reads the directory.
+static uint64_t g_cdrom_clear_at, g_fs_data_at;
+static const uint64_t kCdromClearNs = 500ull * 1000000000ull / (44100 * 256);
 static uint64_t g_play_t0, g_play_done;         // time the play began, sectors read since
 static uint64_t g_seek_from, g_seek_until;      // --accurate-drive: a play's seek, BUSY then SEEK, until PLAY
 static int g_getlen = 2048;
@@ -105,7 +110,7 @@ static void report() {
     uint32_t ctrladr;
     int track = track_of(g_fad, &ctrladr);
     uint8_t st = g_status | (g_xfer != X_NONE ? ST_TRNS : 0);
-    g_out[0] = (uint16_t)(st << 8 | (g_repeat & 0xF));
+    g_out[0] = (uint16_t)(st << 8 | (g_is_cdrom ? 0x80 : 0) | (g_repeat & 0xF));
     g_out[1] = (uint16_t)(ctrladr << 8 | track);
     g_out[2] = (uint16_t)(1 << 8 | (g_fad >> 16 & 0xFF));
     g_out[3] = (uint16_t)(g_fad & 0xFFFF);
@@ -168,6 +173,7 @@ static bool filter_pass(const Filter& f, const Block& b) {
 }
 
 static bool deliver_sector() {
+    g_is_cdrom = true;
     if (g_free.empty()) { g_hirq |= BFUL; return false; }
     int bi = g_free.back();
     Block& b = g_block[bi];
@@ -222,6 +228,8 @@ int cd_data_rate() { return g_cfg.accurate_drive ? 150 : 300; }
 
 void cd_tick() {
     uint64_t now = sat_now();
+    if (g_cdrom_clear_at && now >= g_cdrom_clear_at) g_is_cdrom = false, g_cdrom_clear_at = 0;
+    if (g_fs_data_at && now >= g_fs_data_at) g_is_cdrom = true, g_fs_data_at = 0;
     if (g_fs_done && now >= g_fs_done) {
         g_fs_done = 0;
         g_root_known = true;
@@ -322,6 +330,8 @@ static void fs_read(uint32_t fad, uint32_t size) {
     g_seek_until = 0;
     g_fad = fad + n;
     g_status = ST_BUSY;
+    g_cdrom_clear_at = now + kCdromClearNs;
+    g_fs_data_at = g_fs_done - n * (1000000000ull / cd_data_rate());
 }
 
 static void put_info(const FsFile& f) {
@@ -347,6 +357,7 @@ static void start_play(uint32_t start, uint32_t end, int mode) {
     g_repeat_left = g_repeat;
     g_play_start = g_fad;
     g_audio_play = cdrom_is_audio(g_fad);
+    g_cdrom_clear_at = sat_now() + kCdromClearNs;
     g_status = ST_PLAY;
     g_play_t0 = sat_now();
     g_play_done = 0;
@@ -420,7 +431,7 @@ static void command() {
         break;
     case 0x11: {                                // Seek Disc
         uint32_t pos = (uint32_t)(cr1 & 0xFF) << 16 | cr2;
-        if (pos == 0) g_status = ST_STANDBY;
+        if (pos == 0) g_status = ST_STANDBY, g_is_cdrom = true, g_cdrom_clear_at = 0;
         else {                                  // 0xFFFFFF: pause where it is
             if (pos == 0xFFFFFF) {}
             else if (pos & 0x800000) g_fad = pos & 0x7FFFFF;
@@ -611,6 +622,8 @@ void cd_init() {
     g_root_known = false;
     g_repeat = g_repeat_left = 0;
     g_audio_play = false;
+    g_is_cdrom = true;
+    g_cdrom_clear_at = g_fs_data_at = 0;
     g_cdda.clear();
     g_cmd_busy = false;
     g_hirq = CMOK | CSCT | PEND | ESEL | EHST | ECPY | EFLS;
@@ -668,3 +681,4 @@ void cdblock_state(State& s) {
 
 void cddrive_state(State& s) { s(g_seek_from), s(g_seek_until); }
 void cdfs_state(State& s) { s(g_fs_done), s(g_root_known); }
+void cdpos_state(State& s) { s(g_is_cdrom), s(g_cdrom_clear_at), s(g_fs_data_at); }

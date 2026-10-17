@@ -672,8 +672,10 @@ void scsp_sample(int16_t exts_l, int16_t exts_r, int16_t out[2]) {
         r += g_dsp.exts[i] * g_sdl_gain[s.efsdl()] * g_pan_r[s.efpan()];
     }
     float mv = g_mvol[g_com[0] & 15];
-    out[0] = (int16_t)std::clamp((int32_t)(l * mv), -32768, 32767);
-    out[1] = (int16_t)std::clamp((int32_t)(r * mv), -32768, 32767);
+    // 27/32 of the mix, as Mednafen scales the SCSP's output.
+    auto dac = [](float v) { return (int16_t)((std::clamp((int32_t)v, -32768, 32767) * 27 + 16) >> 5); };
+    out[0] = dac(l * mv);
+    out[1] = dac(r * mv);
 }
 
 // An LFO's tables by their number among the tables of their kind.

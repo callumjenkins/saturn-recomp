@@ -64,6 +64,15 @@ def test_modules_at_one_base_are_reported_apart_with_their_sources(tmp_path):
     assert gaps == [("A", BASE + 6, 6, 2, "other", 0, 0, 0)]
 
 
+def test_an_instruction_two_functions_hold_counts_once(tmp_path):
+    g = game(tmp_path)
+    generate([("A", g.module("A").file, BASE, [BASE, BASE + 2])], str(tmp_path / "build" / "recomp"), log=lambda s: None)
+    rows = [line.split("\t")[0] for line in open(tmp_path / "build" / "recomp" / "map" / "A.tsv")]
+    assert rows.count(f"{BASE + 2:08X}") == 2
+    _, images, _, problems = run(g)
+    assert problems == [] and images["A"]["instructions"] == 3
+
+
 def test_a_prepared_modules_changed_bytes_are_its_patches(tmp_path):
     _, images, _, _ = run(game(tmp_path, patch=True))
     assert images["B"]["patches"] == "0x0+2"

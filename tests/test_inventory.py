@@ -1,7 +1,7 @@
 import hashlib
 import json
 
-from conftest import BASE, assemble
+from conftest import BASE, assemble, sound_program
 
 from saturnrecomp import config
 from saturnrecomp.inventory import evidence, inventory
@@ -14,7 +14,7 @@ B = assemble(RTS, ADD1)                          # another program at the same b
 
 def game(tmp_path, treatments="", patch=False):
     disc = tmp_path / "disc"
-    disc.mkdir()
+    disc.mkdir(exist_ok=True)
     (disc / "A.BIN").write_bytes(A)
     (disc / "B.BIN").write_bytes(b"\xFF\xFF" + B)
     (disc / "MOVIE.CPK").write_bytes(b"cpk")
@@ -51,7 +51,7 @@ treatments = "inventory.tsv"
 
 
 def run(g):
-    files, images, gaps, problems = inventory(g, log=lambda s: None)
+    files, images, gaps, problems, _ = inventory(g, log=lambda s: None)
     return {f[0]: f[3:5] for f in files}, {r["module"]: r for r in images}, gaps, problems
 
 
@@ -133,3 +133,61 @@ def test_a_gap_that_decodes_cleanly_to_a_return_counts_its_instructions():
     p = discover.Program(sh2.Image(code, BASE), [BASE])
     count = descent(p)
     assert (count(BASE + 4, 12), count(BASE + 0x10, 6)) == (5, 0)
+
+
+SND = sound_program(0x4E75, 0x7001)              # rts, then a word nothing reaches
+
+
+def sound_game(tmp_path, treatments, copy=False, program=SND):
+    (tmp_path / "disc").mkdir()
+    (tmp_path / "disc" / "SND.BIN").write_bytes(b"HDR!" + program)
+    sound = '[[inventory.sound]]\nname = "SND"\nsource = "/SND.BIN"\noffset = 4\n'
+    if copy:
+        (tmp_path / "disc" / "COPY.BIN").write_bytes(SND)
+        sound += '[[inventory.sound]]\nname = "COPY"\nsource = "/COPY.BIN"\n'
+    game(tmp_path, treatments)
+    with open(tmp_path / "game.toml", "a") as f:
+        f.write(sound)
+    return config.load(str(tmp_path / "game.toml"))
+
+
+def test_each_68000_program_has_a_region_report_from_its_part_of_the_disc(tmp_path):
+    g = sound_game(tmp_path, "/SND.BIN@4-408\tinterpreted\tthe driver\n/SND.BIN\tdata\tits header\n")
+    *_, problems, sound = inventory(g, log=lambda s: None)
+    assert problems == []
+    row = sound[0]
+    assert (row["source"], row["bytes"], row["entries"], row["instructions"]) == ("/SND.BIN+0x4", 0x404, "400", 1)
+    assert (row["code bytes"], row["data bytes"], row["unclassified bytes"], row["bad"]) == (2, 0x400, 2, "")
+    report = (tmp_path / "build" / "inventory" / "sound.tsv").read_text().splitlines()
+    assert report[0].startswith("# program\tsource\tbytes") and report[1].startswith("SND\t/SND.BIN+0x4\t1028\t")
+    gaps = (tmp_path / "build" / "inventory" / "sound-gaps.tsv").read_text().splitlines()[1:]
+    assert gaps == ["SND\t00402\t0x406\t2\tother\t0\t0\t0"]
+
+
+def test_the_summary_counts_a_68000_gap_with_a_return_in_it_as_returns(tmp_path):
+    g = sound_game(tmp_path, "/SND.BIN@4-40a\tinterpreted\tthe driver\n/SND.BIN\tdata\tits header\n",
+                   program=sound_program(0x4E75, 0x7001, 0x4E75))
+    lines = []
+    inventory(g, log=lines.append)
+    assert "  SND    text 0, zero 0, fill 0, returns 4, pointed into 0, decodes 0, nothing 0" in lines[0].splitlines()
+
+
+def test_a_68000_program_its_part_does_not_treat_as_interpreted_is_a_problem(tmp_path):
+    g = sound_game(tmp_path, "/SND.BIN@4-408\tdata\tmisread\n")
+    assert inventory(g, log=lambda s: None)[3] == ["SND: /SND.BIN@0x4-0x408 is treated as data, not interpreted"]
+
+
+def test_a_68000_program_with_no_part_of_its_own_is_a_problem(tmp_path):
+    g = sound_game(tmp_path, "/SND.BIN\tinterpreted\tthe header too\n")
+    assert inventory(g, log=lambda s: None)[3] == ["SND: the treatments file has no part /SND.BIN@0x4-0x408"]
+
+
+def test_identical_68000_programs_are_counted_once_in_the_totals(tmp_path):
+    g = sound_game(tmp_path, "/SND.BIN@4-408\tinterpreted\tthe driver\n/SND.BIN\tdata\tits header\n"
+                             "/COPY.BIN\tinterpreted\tthe driver again\n", copy=True)
+    lines = []
+    *_, problems, _ = inventory(g, log=lines.append)
+    assert problems == []
+    summary = lines[0].splitlines()
+    assert "68000 programs, interpreted on Musashi (1 different, 1,028 bytes counted once):" in summary
+    assert any(s.startswith("  COPY ") and s.endswith("from /COPY.BIN+0x0, the same bytes as SND") for s in summary)

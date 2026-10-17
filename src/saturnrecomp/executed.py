@@ -15,18 +15,30 @@ image has OPCODE there (two programs can load at one address; the bytes say whic
                      or a program game.toml does not list
     elsewhere        any other address (on-chip RAM, cartridge, ...)
 
-A notes file explains "no module" addresses: TAB-separated FIRST, LAST (hex, folded addresses,
-inclusive) and a note with the evidence; the summary splits "no module" into explained, by note, and
-unexplained. 68000 addresses are counted, not placed. Writes BUILD/inventory/executed/summary.txt and, for every
-class but translated and BIOS, a TSV of its addresses (module, first and last address of each run,
-instructions in it, and the reference files that executed it).
+A 68000 address is folded onto sound RAM's 512 KB and placed the same way among the programs game.toml's
+[[inventory.sound]] lists (saturnrecomp.m68k), which load at 0:
+
+    68K interpreted  a program that holds it has it among the instructions its descent finds
+    68K undiscovered a program holds it, but the descent never found it: its region report is wrong,
+                     or other code with the same bytes there ran
+
+Either 68K class can hold code from elsewhere whose bytes happen to match a program's.
+    68K no image     no program has these bytes there: the BIOS's own sound program, or code written
+                     at run time
+
+A notes file explains "no module" and "68K no image" addresses: TAB-separated FIRST, LAST (hex, folded
+addresses, inclusive) and a note with the evidence. The two classes cannot meet in one row: an SH-2
+address below 0x00080000 is the BIOS's, and every 68000 address is below it. The summary splits each
+into explained, by note, and unexplained. Writes BUILD/inventory/executed/summary.txt and, for every
+class but the translated, interpreted and BIOS ones, a TSV of its addresses (module, first and last address
+of each run, instructions in it, and the reference files that executed it).
 """
 import argparse
 import collections
 import os
 import sys
 
-from . import config
+from . import config, m68k
 
 
 def fold(address):
@@ -66,13 +78,20 @@ def read_mapped(path):
     return {int(line.split("\t", 1)[0], 16) for line in open(path, encoding="utf-8") if not line.startswith("#")}
 
 
-def classify(executed, modules, mapped):
-    """{class: [(module or "", folded address, files)]} for the SH-2 instructions in `executed`.
-    `modules`: [(name, base, bytes)]; `mapped`: {name: addresses in its map}."""
+def classify(executed, modules, mapped, sound=()):
+    """{class: [(module or "", folded address, files)]} for the instructions in `executed`.
+    `modules`: [(name, base, bytes)]; `mapped`: {name: addresses in its map}; `sound`: [(name, m68k.Program)]."""
     out = collections.defaultdict(list)
     for (cpu, address, opcode), files in sorted(executed.items()):
         if cpu == "68K":
-            out["68K"].append(("", address, files))
+            a = address & 0x7FFFF
+            holders = [(name, p) for name, p in sound if a + 2 <= len(p.img) and p.img.u16(a) == opcode]
+            if not holders:
+                out["68K no image"].append(("", a, files))
+            elif found := [name for name, p in holders if a in p.code]:
+                out["68K interpreted"].append((found[0], a, files))
+            else:
+                out["68K undiscovered"].append(("/".join(name for name, _ in holders), a, files))
             continue
         a = fold(address)
         if a < 0x00080000:
@@ -126,6 +145,13 @@ def explain(rows, notes):
     return by, rest
 
 
+NOTED = ("no module", "68K no image")
+
+
+def failed(classes):
+    return any(classes.get(c) for c in ("untranslated", "68K undiscovered", *NOTED))
+
+
 def check(game, paths, notes=(), log=print):
     modules = [(m.name, m.base, open(m.file, "rb").read()) for m in game.modules]
     mapped = {}
@@ -134,20 +160,27 @@ def check(game, paths, notes=(), log=print):
         if not os.path.exists(path):
             raise SystemExit(f"no map at {path}; recompile first")
         mapped[m.name] = read_mapped(path)
-    classes = classify(read_runs(paths), modules, mapped)
+    sound = []
+    if game.inventory and game.inventory.sound:
+        lib = m68k.library(os.path.join(game.build, "m68kdasm"))
+        sound = [(s.name, m68k.Program(m68k.Image(s.read(game.inventory.files), lib))) for s in game.inventory.sound]
+    classes = classify(read_runs(paths), modules, mapped, sound)
     out = os.path.join(game.build, "inventory", "executed")
     os.makedirs(out, exist_ok=True)
     shown = names(paths)
     lines = [f"Executed instructions in {len(paths)} reference runs ({', '.join(shown) if len(shown) <= 10 else 'listed in runs.txt'}):"]
     with open(os.path.join(out, "runs.txt"), "w", encoding="utf-8") as f:
         f.write("".join(f"{n}\t{p}\n" for n, p in zip(shown, paths)))
-    explained, classes["no module"] = explain(classes.get("no module", []), notes)
-    for c in ("translated", "untranslated", "BIOS", "no module", "elsewhere", "68K"):
+    explained = {}
+    for c in NOTED:
+        explained[c], classes[c] = explain(classes.get(c, []), notes)
+    for c in ("translated", "untranslated", "BIOS", "no module", "elsewhere",
+              "68K interpreted", "68K undiscovered", "68K no image"):
         rows = classes.get(c, [])
-        lines.append(f"  {c:13} {len(rows):8,}" + (" unexplained" if c == "no module" else ""))
-        if c == "no module":
-            lines += [f"  {'':13} {n:8,} {note}" for note, n in explained.most_common()]
-        if c in ("translated", "BIOS") or not rows:
+        lines.append(f"  {c:16} {len(rows):8,}" + (" unexplained" if c in NOTED else ""))
+        if c in NOTED:
+            lines += [f"  {'':16} {n:8,} {note}" for note, n in explained[c].most_common()]
+        if c in ("translated", "BIOS", "68K interpreted") or not rows:
             continue
         with open(os.path.join(out, c.replace(" ", "-") + ".tsv"), "w", encoding="utf-8") as f:
             f.write("# module\tfirst\tlast\tinstructions\truns\n")
@@ -155,6 +188,9 @@ def check(game, paths, notes=(), log=print):
                 f.write(f"{module}\t{first:08X}\t{last:08X}\t{n}\t{','.join(sorted(files))}\n")
     per = collections.Counter(m for m, _, _ in classes.get("translated", []))
     lines.append("Translated, by module: " + ", ".join(f"{m} {n:,}" for m, n in sorted(per.items())))
+    per = collections.Counter(m for m, _, _ in classes.get("68K interpreted", []))
+    if per:
+        lines.append("Interpreted, by 68000 program: " + ", ".join(f"{m} {n:,}" for m, n in sorted(per.items())))
     with open(os.path.join(out, "summary.txt"), "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
     log("\n".join(lines))
@@ -168,7 +204,7 @@ def main(argv=None):
     ap.add_argument("--notes", help="explanations of addresses no module holds")
     a = ap.parse_args(argv)
     classes = check(config.load(a.config), a.runs, read_notes(a.notes) if a.notes else ())
-    sys.exit(1 if classes.get("untranslated") or classes.get("no module") else 0)
+    sys.exit(1 if failed(classes) else 0)
 
 
 if __name__ == "__main__":

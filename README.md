@@ -41,11 +41,14 @@ python -m saturnrecomp.learn game.toml -- --cue GAME.cue --headless --vblanks 36
     # run; while it stops at code discovery missed, add the seed, recompile and run again
 python -m saturnrecomp.analysis.resume game.toml --check   # where the game's tasks can resume
 python -m saturnrecomp.inventory game.toml      # every disc file and what became of it, each module's
-    # bytes by class, and a check that every discovered instruction has a generated line
+    # bytes by class, and a check that every discovered instruction has a generated line; each 68000
+    # program in [[inventory.sound]] gets the same split from a descent from its vectors
+python -m saturnrecomp.m68k FILE.BIN --offset 44   # one 68000 program's descent, or --at ADDR to disassemble
 python -m saturnrecomp.native game.toml         # each instruction's native address ranges, from line
     # tables of a second build whose code must equal the built executable's
 python -m saturnrecomp.executed game.toml RUN.tsv ...   # whether every instruction a reference run
-    # executed (CPU, address, opcode a line) is translated; fails if one a module holds is not
+    # executed (CPU, address, opcode a line) is translated; fails if one a module holds is not, if a
+    # 68000 program holds one its descent did not find, or if no note explains one nothing holds
 ```
 
 A program can also play a run, which is how a bot or a test plays a game it cannot script ahead of

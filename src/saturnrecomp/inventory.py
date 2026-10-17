@@ -26,6 +26,15 @@ BUILD/inventory:
                   literals in discovered code that point into it, and how many instructions a descent
                   from its start (past fill, at a boundary) decodes cleanly within it before it
                   returns: an uncalled function with no frame, or a record that happens to decode.
+    sound.tsv     each 68000 program [[inventory.sound]] lists, which the runtime interprets on
+                  Musashi: where on the disc it comes from, its SHA-1, the vectors the descent starts
+                  from, its bytes by class (instructions, data, unclassified), the jump tables read,
+                  the jumps through a register left unresolved, and where a path ended badly
+                  (saturnrecomp.m68k).
+    sound-gaps.tsv each of those programs' unclassified runs: program, address, file offset, length,
+                  content, the rts and rte words in it, the addresses discovered code names in it,
+                  and how many instructions a clean descent from its first word past fill decodes
+                  to a return.
     summary.txt   the totals, each module's unclassified bytes by what the gap report found in them,
                   and each check that failed.
 
@@ -37,6 +46,7 @@ files.tsv then has a row per part, "PATH@START-END", and the bytes no part cover
 treatment. A treatment is one of TREATMENTS. Lines starting with # are comments.
 
 Instructions are counted once per address however many functions hold them, delay slots included.
+A 68000 program whose bytes the treatments file does not treat as one part, "interpreted", is reported.
 A module whose image no disc file holds, at its source offset or whole, is reported, as is one whose
 map was made from other bytes or other seeds than this run discovers with.
 """
@@ -49,7 +59,7 @@ import os
 import re
 import sys
 
-from . import build, config, sh2
+from . import build, config, m68k, sh2
 from .recomp import discover
 
 TREATMENTS = ("translated", "interpreted", "data", "replaced", "excluded", "unknown")
@@ -261,6 +271,31 @@ def image(m, seeds, files, by_sha1, map_dir):
     return row, [(m.name, a, a - m.base, n, *e) for (a, n), e in zip(gaps, found)], problems
 
 
+def sound_image(s, files, rows, lib):
+    """One 68000 program's row for sound.tsv, its gaps, and the problems found. `rows`: files.tsv's."""
+    data = s.read(files)
+    p = m68k.Program(m68k.Image(data, lib))
+    code = p.code_bytes()
+    gaps = m68k.evidence(p)
+    end = s.offset + len(data)
+    part = f"{s.source}@{s.offset:#x}-{end:#x}"
+    found = [r for r in rows if r[0] == part or r[0] == s.source and s.offset == 0 and r[1] == end]
+    problems = []
+    if not found:
+        problems.append(f"{s.name}: the treatments file has no part {part}")
+    elif found[0][3] != "interpreted":
+        problems.append(f"{s.name}: {found[0][0]} is treated as {found[0][3]}, not interpreted")
+    row = {
+        "program": s.name, "source": f"{s.source}+{s.offset:#x}", "bytes": len(data),
+        "sha1": hashlib.sha1(data).hexdigest(), "entries": " ".join(f"{e:X}" for e in p.entries),
+        "instructions": len(p.code), "code bytes": len(code), "data bytes": len(p.data - code),
+        "code and data": len(code & p.data), "unclassified bytes": sum(n for _, n, *_ in gaps),
+        "tables": len(p.tables), "unresolved indirect": len(p.unresolved),
+        "bad": ",".join(f"{a:X}" for a in sorted(p.bad)),
+    }
+    return row, [(s.name, a, a + s.offset, n, *e) for a, n, *e in gaps], problems
+
+
 def inventory(game, log=print):
     inv = game.inventory
     if not inv:
@@ -294,6 +329,21 @@ def inventory(game, log=print):
         else:
             files += [(name, n, sha1, t, note, by) for name, n, t, note in parts(path, size or 0, rows, bool(by))]
 
+    sound, sound_gaps = [], []
+    if inv.sound:
+        lib = m68k.library(os.path.join(game.build, "m68kdasm"))
+        for s in inv.sound:
+            row, g, p = sound_image(s, inv.files, files, lib)
+            sound.append(row)
+            sound_gaps += g
+            problems += p
+        with open(os.path.join(out, "sound.tsv"), "w", encoding="utf-8") as f:
+            f.write("# " + "\t".join(sound[0]) + "\n")
+            f.writelines("\t".join(str(v) for v in row.values()) + "\n" for row in sound)
+        with open(os.path.join(out, "sound-gaps.tsv"), "w", encoding="utf-8") as f:
+            f.write("# program\taddress\toffset\tbytes\tcontent\treturns\tpointers in\tdecodes\n")
+            f.writelines("\t".join([m, f"{a:05X}", f"{o:#x}", *map(str, rest)]) + "\n" for m, a, o, *rest in sound_gaps)
+
     with open(os.path.join(out, "files.tsv"), "w", encoding="utf-8") as f:
         f.write("# path\tbytes\tsha1\ttreatment\tnote\tnamed by\n")
         f.writelines(f"{p}\t{'' if s is None else s}\t{h}\t{t}\t{n}\t{b}\n" for p, s, h, t, n, b in files)
@@ -310,12 +360,12 @@ def inventory(game, log=print):
     with open(os.path.join(out, "identity.json"), "w", encoding="utf-8") as f:
         json.dump(identity, f, indent=1, sort_keys=True)
         f.write("\n")
-    summary = summarise(files, images, gaps, problems, build.stale(game))
+    summary = summarise(files, images, gaps, problems, build.stale(game), sound, sound_gaps)
     with open(os.path.join(out, "summary.txt"), "w", encoding="utf-8") as f:
         f.write("\n".join(summary) + "\n")
     log("\n".join(summary))
     log(f"written to {out}")
-    return files, images, gaps, problems
+    return files, images, gaps, problems, sound
 
 
 def _sha1_file(path):
@@ -337,7 +387,7 @@ def gap_kind(content, prologues, pointers, descends):
     return "decodes" if descends >= 4 else "nothing"
 
 
-def summarise(files, images, gaps, problems, stale):
+def summarise(files, images, gaps, problems, stale, sound=(), sound_gaps=()):
     lines = ["Disc, by treatment:"]
     for t in TREATMENTS:
         chosen = [x for x in files if x[3] == t]
@@ -358,6 +408,29 @@ def summarise(files, images, gaps, problems, stale):
                 by[gap_kind(*e)] += n
         if any(by.values()):
             lines.append(f"  {r['module']:6} " + ", ".join(f"{k} {v:,}" for k, v in by.items()))
+    if sound:
+        same = {}
+        for r in sound:
+            same.setdefault(r["sha1"], []).append(r["program"])
+        lines.append(f"68000 programs, interpreted on Musashi ({len(same)} different, "
+                     f"{sum(r['bytes'] for r in {r['sha1']: r for r in sound}.values()):,} bytes counted once):")
+        for r in sound:
+            first = same[r["sha1"]][0]
+            lines.append(f"  {r['program']:6} {r['instructions']:7,} instructions in {r['code bytes']:,} bytes; "
+                         f"{r['data bytes']:,} data bytes, {r['unclassified bytes']:,} unclassified; {r['tables']} tables, "
+                         f"{r['unresolved indirect']} unresolved, {len(r['bad'].split(',')) if r['bad'] else 0} bad; "
+                         f"from {r['source']}" + (f", the same bytes as {first}" if first != r["program"] else ""))
+        lines.append("Unclassified 68000 bytes by what is in them (text; zeros; nop, FFFF or zero fill; an rts or rte;"
+                     " code points into the run; it decodes cleanly to a return, 4 instructions or more; nothing):")
+        kinds = ("text", "zero", "fill", "returns", "pointed into", "decodes", "nothing")
+        for r in sound:
+            by = {k: 0 for k in kinds}
+            for m, _, _, n, *e in sound_gaps:
+                if m == r["program"]:
+                    k = gap_kind(*e)
+                    by["returns" if k == "prologue" else k] += n
+            if any(by.values()):
+                lines.append(f"  {r['program']:6} " + ", ".join(f"{k} {v:,}" for k, v in by.items()))
     if stale:
         lines.append("The build is stale (" + ", ".join(stale) + "): recompile, then run this again.")
     lines.append("Checks: " + ("all passed" if not problems else f"{len(problems)} failed"))
@@ -369,7 +442,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("config")
     a = ap.parse_args(argv)
-    *_, problems = inventory(config.load(a.config))
+    problems = inventory(config.load(a.config))[3]
     sys.exit(1 if problems else 0)
 
 

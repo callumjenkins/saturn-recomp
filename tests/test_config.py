@@ -126,3 +126,13 @@ def test_a_task_switch_can_name_the_calls_that_reach_it(tmp_path):
 def test_a_task_switch_key_has_to_be_a_register(tmp_path):
     with pytest.raises(SystemExit, match="r0 to r15"):
         load(tmp_path, TOML + SWITCH.replace('"r1"', '"r16"'))
+
+
+def test_a_sound_program_reads_from_its_offset_to_its_length_or_the_files_end(tmp_path):
+    (tmp_path / "x").mkdir()
+    (tmp_path / "x" / "S.BIN").write_bytes(bytes(range(8)))
+    (tmp_path / "game.toml").write_text('[inventory]\nmanifest = "disc.json"\nfiles = "x"\n'
+                                        '[[inventory.sound]]\nname = "A"\nsource = "/S.BIN"\noffset = 2\nbytes = 3\n'
+                                        '[[inventory.sound]]\nname = "B"\nsource = "/S.BIN"\noffset = 5\n')
+    g = config.load(str(tmp_path / "game.toml"))
+    assert [s.read(g.inventory.files) for s in g.inventory.sound] == [bytes([2, 3, 4]), bytes([5, 6, 7])]

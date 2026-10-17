@@ -22,6 +22,12 @@
     files = "build/extract"         # the disc's files, extracted
     treatments = "inventory.tsv"    # what became of the files no module is made from
 
+    [[inventory.sound]]             # optional: a 68000 program the game loads into sound RAM
+    name = "SND"
+    source = "/BOMSS/PROGRAM.BIN"   # the disc file holding it ...
+    offset = 0x44                   # ... where in it (default 0) ...
+    bytes = 0x63D4                  # ... and how long (default to the file's end)
+
     [tasks]                         # optional: a game that switches its own tasks
     module = "KRNL"
     setjmp = "krnl_setjmp"
@@ -98,10 +104,25 @@ class Module:
 
 
 @dataclass
+class Sound:
+    name: str
+    source: str
+    offset: int = 0
+    bytes: int = 0             # 0: to the file's end
+
+    def read(self, files):
+        """The program's bytes, from the extracted disc files at `files`."""
+        with open(os.path.join(files, self.source.lstrip("/")), "rb") as f:
+            data = f.read()[self.offset:]
+        return data[:self.bytes] if self.bytes else data
+
+
+@dataclass
 class Inventory:
     manifest: str
     files: str
     treatments: str = ""
+    sound: list[Sound] = field(default_factory=list)
 
 
 @dataclass
@@ -354,7 +375,8 @@ def load(path):
     if "inventory" in t:
         i = t["inventory"]
         inventory = Inventory(os.path.join(root, i["manifest"]), os.path.join(root, i["files"]),
-                              os.path.join(root, i["treatments"]) if "treatments" in i else "")
+                              os.path.join(root, i["treatments"]) if "treatments" in i else "",
+                              [Sound(s["name"], s["source"], s.get("offset", 0), s.get("bytes", 0)) for s in i.get("sound", [])])
     return Game(game.get("name", os.path.basename(root)), root, os.path.join(root, game.get("build", "build")),
                 os.path.join(root, game.get("seeds", "seeds.json")), modules, symbols, tasks, hooks,
                 list(game.get("cmake", [])), playtest, _checkpoint(t["checkpoint"], symbols) if "checkpoint" in t else None,

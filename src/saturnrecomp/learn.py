@@ -14,14 +14,18 @@ from . import build, config
 
 MISSED = re.compile(r"FATAL\] (?:call to ([0-9A-F]{8}), not an entry of an active module"
                     r"|no function at ([0-9A-F]{8})|task at ([0-9A-F]{8}): no function there)")
+EXITED = "saturn-recomp: the run exited with status"
 
 
 def run(game, args, out, timeout=900):
-    """One run of the current build into `out`, which it empties first; its log, also in out/log.txt."""
+    """One run of the current build into `out`, which it empties first; its log, also in out/log.txt.
+    A run that exits with an error ends its log with an EXITED line."""
     shutil.rmtree(out, ignore_errors=True)
     os.makedirs(out)
     p = subprocess.run([game.saturn, "--out", out, *args], capture_output=True, text=True, timeout=timeout)
     log = p.stdout + p.stderr
+    if p.returncode:
+        log += ("" if log.endswith("\n") or not log else "\n") + f"{EXITED} {p.returncode}\n"
     with open(os.path.join(out, "log.txt"), "w") as f:
         f.write(log)
     return log

@@ -172,8 +172,12 @@ push:
 - the recompiler's instruction self-test
 - the runtime's unit tests
 
-All of these build without SDL. A change to the runtime should also pass each game's own frame
-tests, which need the game's disc.
+All of these build without SDL. With `SATURN_SDL` set to an SDL3 install, it also builds the
+self-test's program on the SDL host. CI runs it so on Linux with Clang and with GCC, on Windows with
+Clang, and on macOS. On Windows it also checks that `saturn.exe` needs no DLL a fresh Windows lacks.
+The tests of what runs only on Linux skip elsewhere: building from a disc, the agent and the research
+tools. Elsewhere only release builds run. A change to the runtime should also pass each game's own
+frame tests, which need the game's disc.
 
 ## Layers
 

@@ -5,7 +5,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
-#include <thread>
 #include <vector>
 
 // Mednafen's drive, worked by hand: 256 000 clocks BUSY, 12 sectors' time, then 28 clocks a sector back
@@ -73,10 +72,11 @@ void data_disc() {
     cd_init();
 }
 
-// Ticks the drive every millisecond until `done`, for at most `ms`; whether it came.
+// Ticks the drive until `done`, for at most `ms` of the host's time; whether it came. It ticks without sleeping:
+// a play clears the CD-ROM bit for only a few milliseconds, less than a sleep can last.
 template <class F> bool tick_until(F done, int ms) {
-    for (int i = 0; i < ms; ++i) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+    while (std::chrono::steady_clock::now() < end) {
         cd_tick();
         if (done()) return true;
     }

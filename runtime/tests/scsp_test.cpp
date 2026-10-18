@@ -298,7 +298,7 @@ TEST(the_y_register_lasts_into_the_next_sample) {
     temp(0x7F, 0x123400);
     mems(0, 0x123400);
     put(0, {.ysel = 3, .zero = 1});             // TEMP 0 x Y's bits 4-15, 0x340
-    put(1, {.yrl = 1, .ewt = 1});
+    put(1, {.ewt = 1, .yrl = 1});
     sample();
     CHECK_EQ(efreg(0), 0);
     sample();

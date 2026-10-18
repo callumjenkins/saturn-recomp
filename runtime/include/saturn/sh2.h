@@ -62,12 +62,6 @@ void     sh2_mmio_write(uint32_t a, uint32_t v, int size);
 #define SH2_POLL(c) do { if (SH2_UNLIKELY(--(c).budget < 0)) sh2_poll(c); } while (0)
 // After a call: the callee's rts must have come back here.
 #define SH2_RET(c, a) do { if (SH2_UNLIKELY((c).pc != (a))) sh2_bad_return(c, a); } while (0)
-// The cycles each CPU has spent: SH2_CYCLES counts a straight run of instructions' issue cycles and the extra
-// cycles of its reads and writes, and the runtime adds its own costs. The extra cycles are fitted to Beetle Saturn.
-extern uint64_t g_sh2_cycles[2];
-constexpr uint32_t kSh2ReadCycles = 0, kSh2WriteCycles = 1;
-#define SH2_CYCLES(c, n, reads, writes) \
-    (g_sh2_cycles[(c).cpu] += (uint64_t)(n) + (reads) * kSh2ReadCycles + (writes) * kSh2WriteCycles)
 
 // ---- memory -------------------------------------------------------------------------
 // The work RAMs directly, at their cached (0x0...) and cache-through (0x2...)

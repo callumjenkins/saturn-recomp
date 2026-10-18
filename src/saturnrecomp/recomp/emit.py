@@ -17,15 +17,11 @@ into a C++ function:
   target analysis expects and otherwise dispatch: a wrong guess costs a
   lookup, never a wrong call;
 * safe points (SH2_POLL) at loop back-edges, before calls and after
-  `ldc ...,sr`;
-* each straight run of instructions starts with SH2_CYCLES: its issue cycles
-  and its reads and writes of memory.
+  `ldc ...,sr`.
 
 Every multi-statement instruction is its own block, so a `goto` never
 crosses an initialisation.
 """
-
-import re
 
 
 class Unsupported(Exception):
@@ -259,35 +255,6 @@ def stmt(ins, literal=None):
 
 BRANCHES = {"bt", "bf", "bt/s", "bf/s", "bra", "bsr", "jmp", "jsr", "braf", "bsrf", "rts", "rte"}
 
-# Issue cycles, from the SH7604's instruction tables, the least where a range is given; 1 otherwise. A taken
-# bt or bf costs 2 more, a taken bt/s or bf/s 1 more. rte's reads and trapa's writes go uncounted: a read costs
-# nothing extra, and trapa ends the run.
-_CYCLES = {"bra": 2, "bsr": 2, "braf": 2, "bsrf": 2, "jmp": 2, "jsr": 2, "rts": 2, "rte": 4,
-           "ldc.l": 3, "stc.l": 2, "mul.l": 2, "dmuls.l": 2, "dmulu.l": 2, "mac.w": 2, "mac.l": 2,
-           "and.b": 3, "or.b": 3, "xor.b": 3, "tst.b": 3, "tas.b": 4, "trapa": 8, "sleep": 3}
-_READ_WRITE = {"and.b", "or.b", "xor.b", "tas.b"}
-
-
-def cost(ins):
-    """(issue cycles, reads, writes) of one instruction."""
-    op = ins.op
-    if op in BRANCHES:
-        return _CYCLES.get(op, 1), 0, 0
-    if op in ("mac.w", "mac.l"):
-        return _CYCLES[op], 2, 0
-    if op in _READ_WRITE:
-        return _CYCLES[op], 1, 1
-    if op == "tst.b":
-        return _CYCLES[op], 1, 0
-    cycles = _CYCLES.get(op, 1)
-    if op in ("mov.w", "mov.l") and ins.target is not None:      # from the literal pool
-        return cycles, 1, 0
-    args = re.split(r",(?![^(]*\))", ins.text.split(None, 1)[1]) if " " in ins.text else []   # not inside @(...)
-    if any("@" in a for a in args):
-        last = args[-1]
-        return (cycles, 0, 1) if "@" in last and not any("@" in a for a in args[:-1]) else (cycles, 1, 0)
-    return cycles, 0, 0
-
 
 class Body:
     """One discovered function as C++.
@@ -435,7 +402,7 @@ class Body:
         if op not in BRANCHES:
             return self._stmt(ins), a + 2
         if op in ("bt", "bf"):
-            return "if (%sc.t) { SH2_CYCLES(c, 2, 0, 0); %s }" % ("" if op == "bt" else "!", self._goto(ins.target, a)), a + 2
+            return "if (%sc.t) { %s }" % ("" if op == "bt" else "!", self._goto(ins.target, a)), a + 2
         slot = self._stmt(self.img.insn(a + 2))
         if slot == ";":
             slot = ""
@@ -443,7 +410,7 @@ class Body:
         ret = _h(a + 4)
         check = "if (c.pc != %s) return;" % ret if self.unwind_returns else "SH2_RET(c, %s);" % ret
         if op in ("bt/s", "bf/s"):
-            return ("{ const bool k = %sc.t; %sif (k) { SH2_CYCLES(c, 1, 0, 0); %s } }"
+            return ("{ const bool k = %sc.t; %sif (k) { %s } }"
                     % ("" if op == "bt/s" else "!", s, self._goto(ins.target, a)), a + 4)
         if op == "bra":
             return s + self._goto(ins.target, a), None
@@ -463,33 +430,6 @@ class Body:
                     "c.r[15] += 4; %sc.pc = x; return; }" % s), None
         raise Unsupported(ins.text)
 
-    def _succ(self, a):
-        """Where this function's code goes on after the line for `a`, or None."""
-        op = self.ops[a].op
-        if op not in BRANCHES or op in ("bt", "bf"):
-            return a + 2
-        if op in ("bt/s", "bf/s", "bsr", "jsr", "bsrf"):
-            return a + 4
-        return None
-
-    def _runs(self, order, labels):
-        """{first address of each straight run: SH2_CYCLES's arguments}: a run starts at the entry, a
-        label, an address a line goes on to by a goto, after a branch, and wherever the line before goes
-        elsewhere."""
-        runs, start = {}, None
-        nxt = dict(zip(order, order[1:]))
-        entered = {self._succ(a) for a in order if self._succ(a) is not None and self._succ(a) != nxt.get(a)}
-        for i, a in enumerate(order):
-            prev = order[i - 1] if i else None
-            if prev is None or a in labels or a in entered or self.ops[prev].op in BRANCHES or self._succ(prev) != a:
-                start = a
-                runs[a] = [0, 0, 0]
-            ins = self.ops[a]
-            parts = [cost(ins)] + ([cost(self.img.insn(a + 2))] if ins.delay and ins.op in BRANCHES else [])
-            for k in range(3):
-                runs[start][k] += sum(p[k] for p in parts)
-        return runs
-
     def emit(self):
         """The C++ function, as a list of lines."""
         labels = self.labels()
@@ -500,12 +440,9 @@ class Body:
             labels.add(self.f.entry)
             lines.append("    goto L_%08X;" % self.f.entry)
         late = set()
-        runs = self._runs(order, labels)
         for i, a in enumerate(order):
             if a in labels or a in late:
                 lines.append("L_%08X:" % a)
-            if a in runs:
-                lines.append("    SH2_CYCLES(c, %d, %d, %d);" % tuple(runs[a]))
             text, succ = self._insn(a)
             ins = self.ops[a]
             if self.comments:

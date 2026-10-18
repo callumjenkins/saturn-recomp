@@ -55,10 +55,6 @@ static const int32_t kBudget = 256;             // safe points between polls
 static const uint64_t kNsPerSafePoint = 400;    // virtual time: ~11 instructions at 28.6 MHz
 static const uint32_t kIntPC = 0xFFFFFFE4u;     // the PC an interrupt pushes: where rte must go
 static const int kSlaveSlice = 64;              // polls the slave runs before it gives the CPU back
-static const int32_t kAccurateBudget = 32;      // --accurate-cpu: safe points between polls, so time moves in smaller steps;
-                                                // the slave's slices of kSlaveSlice polls shrink with them
-
-static int32_t budget() { return g_cfg.accurate_cpu ? kAccurateBudget : kBudget; }
 
 struct ProgramStart { uint32_t addr; };
 struct RunStop {};
@@ -375,7 +371,7 @@ static void slave_main() {
             s.vbr = 0x06000400u;
             s.imask = 15;
             s.r[15] = 0x06001000u;
-            s.budget = budget();
+            s.budget = kBudget;
             uint32_t entry = ld32(0x06000250u);
             sat_trace("slave boots at %08X", entry);
             g_slave_idle = false;
@@ -533,17 +529,13 @@ void master_poll_devices() {
 }
 
 void sh2_poll(SH2Context& c) {
-    c.budget = budget();
+    c.budget = kBudget;
     if (c.cpu == 1) {
         if (++g_slave_polls >= kSlaveSlice) to_master();
         return;
     }
     g_poll_ring[g_poll_pos++ % 4096] = __builtin_return_address(0);
-    if (g_cfg.accurate_cpu) {
-        g_vtime += onchip_cpu_ns(g_sh2_cycles[0]);
-    } else {
-        g_vtime += kBudget * kNsPerSafePoint;
-    }
+    g_vtime += kBudget * kNsPerSafePoint;
     master_poll_devices();
     scu_deliver(c);
     onchip_deliver(c);
@@ -651,7 +643,7 @@ int saturn_main(const SaturnConfig& cfg) {
         g_modem = std::make_unique<Modem>(std::move(line));
     }
     g_master = SH2Context{};
-    g_master.budget = budget();
+    g_master.budget = kBudget;
     video_init();
     sound_init();
     cd_init();

@@ -8,7 +8,6 @@
 
 alignas(64) uint8_t g_wram_l[0x100000 + 8];     // +8: a word read at the last byte stays inside
 alignas(64) uint8_t g_wram_h[0x100000 + 8];
-uint64_t g_sh2_cycles[2];
 
 // ---- the address map outside the fast paths ------------------------------------------
 // Areas by the top three bits: 0 cached, 1 cache-through (the same 27-bit

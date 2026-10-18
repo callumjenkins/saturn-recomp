@@ -2,7 +2,7 @@
 // build and runs it, in a window or headless.
 //
 //     saturn --cue GAME.cue [--out DIR] [--headless] [--fullscreen] [--scale N]
-//            [--vblanks N] [--starts N] [--trace] [--realtime] [--accurate-drive] [--accurate-cpu] [--input VBLANK:BUTTONS,...|@FILE]
+//            [--vblanks N] [--starts N] [--trace] [--realtime] [--accurate-drive] [--input VBLANK:BUTTONS,...|@FILE]
 //            [--record-input FILE] [--resume N] [--shot N,...] [--dump N,...] [--peek ADDR[:WORDS],...] [--watch LO:HI]
 //            [--watch-vblanks FROM:TO] [--wav FILE] [--interp] [--hook ADDR:rN=VALUE ...]
 //            [--tasks SETJMP:LONGJMP] [--multitap N] [--clock YYYY-MM-DDTHH:MM:SS] [--agent FD]
@@ -12,8 +12,7 @@
 //            [--modem line|dial=HOST:PORT[,listen=PORT]]
 //
 // --accurate-drive seeks before each read and reads at double speed, as the hardware's drive does
-// (cdblock.cpp), for comparing with Beetle Saturn; loads take longer. --accurate-cpu, for the same, gives
-// the master SH-2 the time its instructions' cycles take, at φ, rather than 400 ns a safe point.
+// (cdblock.cpp), for comparing with Beetle Saturn; loads take longer.
 // --vblanks and --starts end the run after that many VBlanks or program
 // starts; the log of the hardware touched goes to DIR/hw-log.txt. --shot
 // saves the picture at those VBlank-INs (DIR/shot-N.png), --dump the video
@@ -125,7 +124,6 @@ static int parse_args(SaturnConfig& cfg, bool& launcher, int argc, char** argv) 
         }
         else if (!std::strcmp(a, "--realtime")) cfg.realtime = true;
         else if (!std::strcmp(a, "--accurate-drive")) cfg.accurate_drive = true;
-        else if (!std::strcmp(a, "--accurate-cpu")) cfg.accurate_cpu = true;
         else if (!std::strcmp(a, "--input") && more) cfg.input = argv[++i];
         else if (!std::strcmp(a, "--record-input") && more) cfg.record_input = argv[++i];
         else if (!std::strcmp(a, "--resume") && more) cfg.resume = std::strtoull(argv[++i], nullptr, 10);
@@ -186,7 +184,7 @@ static int parse_args(SaturnConfig& cfg, bool& launcher, int argc, char** argv) 
         }
         else {
             std::fprintf(stderr, "usage: saturn --cue GAME.cue [--out DIR] [--headless] [--fullscreen] [--scale N] [--settings FILE]\n"
-                                 "             [--vblanks N] [--starts N] [--trace] [--realtime] [--accurate-drive] [--accurate-cpu] [--input VBLANK:BUTTONS,...|@FILE]\n"
+                                 "             [--vblanks N] [--starts N] [--trace] [--realtime] [--accurate-drive] [--input VBLANK:BUTTONS,...|@FILE]\n"
                                  "             [--record-input FILE] [--resume N] [--shot N,...] [--dump N,...] [--peek ADDR[:WORDS],...] [--watch LO:HI]\n"
                                  "             [--wav FILE] [--hook ADDR:rN=VALUE ...] [--tasks SETJMP:LONGJMP] [--multitap N]\n"
                                  "             [--clock YYYY-MM-DDTHH:MM:SS] [--agent FD] [--write VBLANK:ADDR=HEX,...] [--video FILE]\n"

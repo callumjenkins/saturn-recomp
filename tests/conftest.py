@@ -5,7 +5,7 @@ import sys
 BASE = 0x06004000
 
 # Building from a disc, the agent and the research tools run on Linux alone; elsewhere only release builds do.
-LINUX_ONLY = {"test_agent.py", "test_learn.py", "test_m68k.py", "test_prereqs.py"}
+LINUX_ONLY = {"test_agent.py", "test_executed.py", "test_inventory.py", "test_learn.py", "test_m68k.py", "test_prereqs.py"}
 
 
 def pytest_configure(config):

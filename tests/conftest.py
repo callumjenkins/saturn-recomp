@@ -1,7 +1,23 @@
 import pytest
 import struct
+import sys
 
 BASE = 0x06004000
+
+# Building from a disc, the agent and the research tools run on Linux alone; elsewhere only release builds do.
+LINUX_ONLY = {"test_agent.py", "test_learn.py", "test_m68k.py", "test_prereqs.py"}
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "linux_only: a test of a tool that runs on Linux alone")
+
+
+def pytest_collection_modifyitems(config, items):
+    if sys.platform == "linux":
+        return
+    for item in items:
+        if item.path.name in LINUX_ONLY or item.get_closest_marker("linux_only"):
+            item.add_marker(pytest.mark.skip(reason="a tool that runs on Linux alone"))
 
 
 def assemble(*words):
@@ -14,6 +30,8 @@ def assemble(*words):
 
 @pytest.fixture(scope="session")
 def m68k_lib(tmp_path_factory):
+    if sys.platform != "linux":
+        pytest.skip("a tool that runs on Linux alone")
     from saturnrecomp import m68k
     return m68k.library(str(tmp_path_factory.mktemp("m68kdasm")))
 

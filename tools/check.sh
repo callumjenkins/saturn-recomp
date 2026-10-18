@@ -31,5 +31,7 @@ if [ -n "${SATURN_SDL:-}" ]; then
     cmake -S $B/optest -B $B/optest-sdl -G Ninja -DCMAKE_CXX_COMPILER="${CXX:-clang++}" -DSATURN_REQUIRE_SDL=ON \
         -DCMAKE_PREFIX_PATH="$SATURN_SDL" > /dev/null
     ninja -C $B/optest-sdl saturn > /dev/null
-    $B/optest-sdl/saturn --help 2>&1 | grep -q "usage: saturn"     # it starts, and answers a bad argument
+    # it starts, and answers a bad argument with its usage
+    usage=$($B/optest-sdl/saturn --help 2>&1 || true)
+    grep -q "usage: saturn" <<< "$usage"
 fi

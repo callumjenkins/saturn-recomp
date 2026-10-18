@@ -9,7 +9,7 @@ import zipfile
 
 import pytest
 
-from saturnrecomp.playtest import coverage, disc_image, review, session, upload
+from saturnrecomp.playtest import coverage, disc_image, paths, review, session, upload
 
 FAKE_SATURN = """#!{python}
 import sys, time
@@ -21,6 +21,18 @@ print("[  10.000 M] pad: FFF7")
 print("[  12.500 FATAL] call to 06012345, not an entry of an active module (from pr 06010004)")
 sys.exit(1)
 """
+
+
+def fake_saturn(tmp_path):
+    """FAKE_SATURN as something the launcher can run: the script itself, or on Windows a batch file that runs it."""
+    script = tmp_path / "saturn.py"
+    script.write_text(FAKE_SATURN.format(python=sys.executable))
+    if sys.platform == "win32":
+        saturn = tmp_path / "saturn.bat"
+        saturn.write_text(f'@"{sys.executable}" "{script}" %*\r\n')
+        return saturn
+    script.chmod(script.stat().st_mode | stat.S_IEXEC)
+    return script
 
 
 class Receiver(http.server.BaseHTTPRequestHandler):
@@ -47,11 +59,9 @@ def endpoint():
 
 
 def test_a_session_is_sent_while_playing_and_once_more_when_it_ends(tmp_path, monkeypatch, endpoint):
-    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    monkeypatch.setattr(paths, "data_dir", lambda: str(tmp_path / "data"))
     monkeypatch.setattr(session, "SEND_AFTER_CHECKPOINT", 0.1)
-    saturn = tmp_path / "saturn"
-    saturn.write_text(FAKE_SATURN.format(python=sys.executable))
-    saturn.chmod(saturn.stat().st_mode | stat.S_IEXEC)
+    saturn = fake_saturn(tmp_path)
 
     out = session.play(str(saturn), "disc.cue", {"product": "MK-81070_V1.003", "build": "20261007-abcdef12"}, endpoint, "code")
 
@@ -169,6 +179,7 @@ def test_a_bundle_offers_the_other_disc_with_its_manifest(tmp_path):
     assert json.loads((out / "other-disc.json").read_text())["product"] == "T-1"
 
 
+@pytest.mark.linux_only
 def test_a_replay_plays_with_this_machines_copy_of_the_other_disc(tmp_path):
     from saturnrecomp.playtest.__main__ import replay_args
     game = other_disc_game(tmp_path)

@@ -4,13 +4,58 @@ on:
   push:
   pull_request:
 
+env:
+  SDL_TAG: release-3.4.18
+
 jobs:
   check:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, cxx: clang++, cc: clang }
+          - { os: ubuntu-latest, cxx: g++, cc: gcc }
+          - { os: windows-latest, cxx: clang++, cc: clang }
+          - { os: macos-14, cxx: clang++, cc: clang }
+    name: check (${{ matrix.os }}, ${{ matrix.cxx }})
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      CXX: ${{ matrix.cxx }}
+      CC: ${{ matrix.cc }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
+      - name: Put MSVC's libraries where clang looks
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
       - name: Install the build tools
-        run: sudo apt-get update && sudo apt-get install -y clang ninja-build
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          # clang and ninja, then SDL's docs/README-linux.md list, less its test and optional input-method packages
+          sudo apt-get install -y clang ninja-build pkg-config libasound2-dev libpulse-dev libaudio-dev libjack-dev \
+            libsndio-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev \
+            libxtst-dev libxkbcommon-dev libdrm-dev libgbm-dev libgl1-mesa-dev libgles2-mesa-dev libegl1-mesa-dev \
+            libdbus-1-dev libudev-dev libpipewire-0.3-dev libwayland-dev libdecor-0-dev
+      - name: Install ninja
+        if: runner.os != 'Linux'
+        run: uv tool install ninja && echo "$(uv tool dir --bin)" >> "$GITHUB_PATH"
+      - uses: actions/cache@v4
+        id: sdl
+        with:
+          path: ${{ runner.temp }}/sdl
+          key: sdl-${{ env.SDL_TAG }}-${{ matrix.os }}-${{ matrix.cc }}
+      - name: Build SDL3, static
+        if: steps.sdl.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch "$SDL_TAG" https://github.com/libsdl-org/SDL.git "$RUNNER_TEMP/sdl-src"
+          cmake -S "$RUNNER_TEMP/sdl-src" -B "$RUNNER_TEMP/sdl-build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER="$CC" -DSDL_SHARED=OFF -DSDL_STATIC=ON -DSDL_TEST_LIBRARY=OFF \
+            -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/sdl"
+          cmake --build "$RUNNER_TEMP/sdl-build"
+          cmake --install "$RUNNER_TEMP/sdl-build"
       - run: uv sync
-      - run: tools/check.sh
+      - run: SATURN_SDL="$RUNNER_TEMP/sdl" tools/check.sh

@@ -1,5 +1,7 @@
 """Two recordings of the same sound compared window by window: the offset that lines them up, how alike
-they are there, their levels and clipping, and whether the channels are the right way round.
+they are there, their levels and clipping, and whether the channels are the right way round. Within a
+window that matches, its 10 ms parts are compared too, so a click or a dropout too short to move the
+window shows. And a recording of what a sound device was given is lined up with the samples the run made.
 
 Two sound implementations scheduled independently never give the same samples, so a window is judged by
 its normalized correlation at the best offset rather than by equal bytes.
@@ -105,3 +107,100 @@ def window(ours, ref, max_lag):
     straight = correlation(l, rl[at]) + correlation(r, rr[at])
     crossed = correlation(l, rr[at]) + correlation(r, rl[at])
     return Window(lag, corr, level, level_ref, clipped(l, r), clipped(mid[1], mid[2]), crossed > straight + 0.2)
+
+
+PART = 441             # samples: 10 ms
+
+
+@dataclass
+class Part:
+    start: int               # samples into the window
+    corr: float              # 0 when one side is quieter than the floor
+    level: float
+    level_ref: float
+
+
+def parts(ours, ref, max_lag, lag, floor, search=2):
+    """The window's 10 ms parts where either side is louder than `floor` (RMS of full scale), each
+    against the reference's at `lag`, give or take `search` samples. ours and ref are as window's."""
+    (l, r), (rl, rr) = ours, ref
+    mono = [x + y for x, y in zip(l, r)]
+    ref_mono = [x + y for x, y in zip(rl, rr)]
+    out = []
+    for start in range(0, len(mono) - PART + 1, PART):
+        a = mono[start:start + PART]
+        at = max_lag + lag + start
+        level, level_ref = rms(a) / 2, rms(ref_mono[at:at + PART]) / 2
+        if level < floor and level_ref < floor:
+            continue
+        corr = 0.0 if level < floor or level_ref < floor else max(
+            correlation(a, ref_mono[at + d:at + d + PART]) for d in range(-search, search + 1)
+            if 0 <= at + d and at + d + PART <= len(ref_mono))
+        out.append(Part(start, corr, level, level_ref))
+    return out
+
+
+@dataclass
+class Live:
+    offset: int | None       # frames the device's first sound comes after the run's; None when either is silent
+    shifts: list             # (frame of the run's, frames): silence put in (+) or samples left out (-) there
+    unmatched: list          # frames of the run's where no placement nearby matches
+    compared: int            # frames of the run's found equal on the device, silence after the first sound included
+    ended: int | None        # frame of the run's where the device's recording ran out, if it did
+
+
+def live(run, device, block=PART, reach=RATE):
+    """The device's recording, interleaved 16-bit stereo, against the run's own samples: where the device
+    went silent for a while or skipped some, searching `reach` frames either way, and where it played
+    something else. The run's silent stretches are passed over, since they line up anywhere."""
+    def first(x):
+        return next((i // 2 for i, s in enumerate(x) if s), None)
+
+    def find(needle, hay, near):
+        """The nearest d within reach where hay holds needle at frame near + d."""
+        return next((d for d in sorted(range(-reach, reach + 1), key=abs)
+                     if 0 <= near + d and 2 * (near + d) + len(needle) <= len(hay)
+                     and hay[2 * (near + d):2 * (near + d) + len(needle)] == needle), None)
+
+    w0, d0 = first(run), first(device)
+    if w0 is None or d0 is None:
+        return Live(None, [], [], 0, None)
+    n, m, b = len(run) // 2, len(device) // 2, 2 * block
+    quiet = array.array("h", bytes(b * 2))
+    off, i, shifts, unmatched, compared = d0 - w0, w0, [], [], 0
+    while i + block <= n:
+        j = i + off
+        if j + block > m:
+            return Live(d0 - w0, shifts, unmatched, compared, i)
+        mine = run[2 * i:2 * i + b]
+        theirs = device[2 * j:2 * j + b] if j >= 0 else array.array("h")
+        if theirs == mine:
+            compared += block
+            i += block
+            continue
+        if mine == quiet:
+            i += block
+            continue
+        k = next((t // 2 for t in range(min(len(theirs), b)) if theirs[t] != mine[t]), 0)
+        compared += k
+        i, j = i + k, j + k
+        mine = run[2 * i:2 * i + b]
+        theirs = device[2 * j:2 * j + b] if j >= 0 else array.array("h")
+        if mine == quiet:
+            i += block
+            continue
+        put_in = find(mine, device, j)
+        if put_in is not None and put_in > 0 and any(device[2 * j:2 * (j + put_in)]):
+            put_in = None                         # what the device played before them is not silence put in
+        left_out = None if theirs == quiet or len(theirs) < b else find(theirs, run, i)
+        if left_out is not None and left_out > 0 and (put_in is None or left_out <= abs(put_in)):
+            shifts.append((i, -left_out))
+            i += left_out
+            off -= left_out
+        elif put_in is not None:
+            shifts.append((i, put_in))
+            off += put_in
+        else:
+            unmatched.append(i)
+            i += block
+    return Live(d0 - w0, shifts, unmatched, compared, None)

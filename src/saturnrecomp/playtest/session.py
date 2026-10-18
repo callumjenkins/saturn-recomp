@@ -20,6 +20,8 @@ from .paths import game_dir
 
 CHECKPOINT = 600
 SEND_AFTER_CHECKPOINT = 15              # seconds for the runtime to finish writing the coverage
+# saturn.exe is a console program, so Windows would open a console window behind the game's
+NO_CONSOLE = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def exit_reason(log_path, code):
@@ -60,7 +62,7 @@ def play(saturn, cue, info, endpoint=None, token=None, args=(), on_sent=None):
                "--coverage", os.path.join(out, "coverage.txt"), "--checkpoint", str(CHECKPOINT), *args]
     log_path = os.path.join(out, "log.txt")
     with open(log_path, "w") as log:
-        process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT)
+        process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, creationflags=NO_CONSOLE)
     stop = threading.Event()
     sender = None
     if token:

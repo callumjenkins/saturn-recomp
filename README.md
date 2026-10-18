@@ -162,7 +162,14 @@ a run's samples and the core keeps its own in `Core.audio`. `audio.window` takes
 and the reference's sound around the same point in the game. It finds the offset where the two
 correlate best and reports that correlation, both levels, the clipped samples, and whether the
 channels are swapped. Two sound chips emulated separately never give the same bytes, so a window
-counts as a match when its correlation is near 1, not when its samples are equal.
+counts as a match when its correlation is near 1, not when its samples are equal. In a window that
+matches, `audio.parts` compares each 10 ms part at the window's offset, so a click or a dropout too
+short to move a whole second shows.
+
+`audio.live` checks the other end: what a sound device was given, against the run's own `--wav`. SDL's
+disk driver (`SDL_AUDIO_DRIVER=disk`) writes the device's samples to a file. `audio.live` lines the two
+up and reports where the device went silent for a while, where it skipped samples, and where it played
+anything else. Those samples should be equal, so they are compared exactly.
 
 ## Checking a change
 

@@ -6,6 +6,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 B=build/check
 CMAKE=(-G Ninja -DCMAKE_CXX_COMPILER="${CXX:-clang++}" -DSATURN_NO_SDL=ON)
+case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) WINDOWS=1 ;; *) WINDOWS= ;; esac
+# Microsoft's C runtime linked in, since a fresh Windows has no vcruntime140.dll or msvcp140.dll
+CRT=(-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded)
+CMAKE+=("${CRT[@]}")
 mkdir -p $B
 
 # A step's output only when it fails.
@@ -33,9 +37,13 @@ $B/runtime-tests-gpl/runtime_tests
 if [ -n "${SATURN_SDL:-}" ]; then
     echo "== the SDL host"
     quiet cmake -S $B/optest -B $B/optest-sdl -G Ninja -DCMAKE_CXX_COMPILER="${CXX:-clang++}" -DSATURN_REQUIRE_SDL=ON \
-        -DCMAKE_PREFIX_PATH="$SATURN_SDL"
+        -DCMAKE_PREFIX_PATH="$SATURN_SDL" "${CRT[@]}"
     quiet ninja -C $B/optest-sdl saturn
     # it starts, and answers a bad argument with its usage
     usage=$($B/optest-sdl/saturn --help 2>&1 || true)
     grep -q "usage: saturn" <<< "$usage"
+    if [ -n "$WINDOWS" ] && llvm-objdump -p $B/optest-sdl/saturn.exe | grep -iE "DLL Name: (vcruntime|msvcp)"; then
+        echo "saturn.exe needs Microsoft's C++ redistributable"
+        exit 1
+    fi
 fi

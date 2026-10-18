@@ -47,13 +47,13 @@ jobs:
         id: sdl
         with:
           path: ${{ runner.temp }}/sdl
-          key: sdl-${{ env.SDL_TAG }}-${{ matrix.os }}-${{ matrix.cc }}
+          key: sdl-${{ env.SDL_TAG }}-${{ matrix.os }}-${{ matrix.cc }}-static-crt
       - name: Build SDL3, static
         if: steps.sdl.outputs.cache-hit != 'true'
         run: |
           git clone --depth 1 --branch "$SDL_TAG" https://github.com/libsdl-org/SDL.git "$RUNNER_TEMP/sdl-src"
           cmake -S "$RUNNER_TEMP/sdl-src" -B "$RUNNER_TEMP/sdl-build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_COMPILER="$CC" -DSDL_SHARED=OFF -DSDL_STATIC=ON -DSDL_TEST_LIBRARY=OFF \
+            -DCMAKE_C_COMPILER="$CC" -DSDL_SHARED=OFF -DSDL_STATIC=ON -DSDL_TEST_LIBRARY=OFF -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded \
             -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/sdl"
           cmake --build "$RUNNER_TEMP/sdl-build"
           cmake --install "$RUNNER_TEMP/sdl-build"

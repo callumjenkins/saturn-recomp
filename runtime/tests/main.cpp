@@ -29,6 +29,7 @@ int main() {
         bool ok = g_failures == before;
         failed += !ok;
         std::printf("%-6s %s\n", ok ? "ok" : "FAIL", t->name);
+        std::fflush(stdout);                // a crash in the next test keeps this line
     }
     std::printf("%d tests, %d failed\n", total, failed);
     return failed ? 1 : 0;

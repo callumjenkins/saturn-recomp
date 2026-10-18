@@ -60,8 +60,7 @@ uint16_t cd_rom_bit() { return ask(0x0000) & 0x80; }
 
 // A MODE1/2048 disc of zeros, FAD 150 to 409, opened, and the CD block reset on the host's clock.
 void data_disc() {
-    char tmpl[] = "/tmp/cdblock_test_XXXXXX";
-    std::string dir = mkdtemp(tmpl);
+    std::string dir = test_dir("cdblock_test");
     std::vector<uint8_t> img(260 * 2048);
     FILE* f = std::fopen((dir + "/d.bin").c_str(), "wb");
     std::fwrite(img.data(), 1, img.size(), f);

@@ -2,6 +2,7 @@
 #pragma once
 #include <cstdint>
 #include <cstdio>
+#include <string>
 
 struct Test {
     const char* name;
@@ -10,6 +11,7 @@ struct Test {
     Test(const char* n, void (*f)());
 };
 void check_failed(const char* file, int line, const char* expr, uint64_t got, uint64_t want);
+std::string test_dir(const char* name);     // a new empty directory in the system's temporary one
 
 #define TEST(name)                                       \
     static void name();                                  \

@@ -32,9 +32,16 @@ struct OnChip {
 static OnChip g_oc[2];
 static uint32_t g_phi_div = 65;             // the master clock's divisor for φ: 65 or 61
 
+// Long division in 16-bit steps of b, since MSVC's runtime, which clang links on Windows, has no 128-bit divide.
+uint64_t sat_mul_div(uint64_t a, uint32_t b, uint64_t c) {
+    uint64_t q = a / c, r = a % c;
+    uint64_t x = r * (b >> 16);
+    return q * b + (x / c << 16) + ((x % c << 16) + r * (b & 0xFFFF)) / c;
+}
+
 uint64_t onchip_phi_clocks(uint64_t ns) {
-    const uint64_t master = bios_pal() ? 1734687500ull : 1746818182ull;
-    return (uint64_t)((unsigned __int128)ns * master / ((uint64_t)g_phi_div * 1000000000ull));
+    const uint32_t master = bios_pal() ? 1734687500u : 1746818182u;
+    return sat_mul_div(ns, master, (uint64_t)g_phi_div * 1000000000ull);
 }
 
 static uint32_t rd(OnChip& o, uint32_t off, int size) { return mem_rd(o.regs, off, size); }

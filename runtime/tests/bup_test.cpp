@@ -13,6 +13,20 @@ namespace {
 const uint32_t kDir = 0x06010000, kData = 0x06011000, kOut = 0x06012000, kName = 0x06013000;
 const uint32_t kWrite = 4, kRead = 5, kDelete = 6, kDirList = 7;
 
+// Points sat_data_dir into `root` through the platform's own variable, and returns the directory it then gives.
+fs::path use_data_dir(const fs::path& root) {
+#if defined(_WIN32)
+    _putenv_s("APPDATA", root.string().c_str());
+    return root;
+#elif defined(__APPLE__)
+    setenv("HOME", root.c_str(), 1);
+    return root / "Library" / "Application Support";
+#else
+    setenv("XDG_DATA_HOME", root.c_str(), 1);
+    return root;
+#endif
+}
+
 fs::path scratch() {
     fs::path p = fs::temp_directory_path() / "saturn-bup-test";
     fs::remove_all(p);
@@ -107,7 +121,7 @@ TEST(a_run_that_saves_nothing_writes_no_file) {
 TEST(save_dash_keeps_saves_for_the_run_alone) {
     fs::path dir = scratch();
     fs::create_directories(dir);
-    setenv("XDG_DATA_HOME", dir.c_str(), 1);
+    use_data_dir(dir);
     run("-");
     CHECK_EQ(write("RUN_ONLY", 10, 1), 0);
     CHECK_EQ(read_back("RUN_ONLY", 10, 1), 0);
@@ -117,8 +131,7 @@ TEST(save_dash_keeps_saves_for_the_run_alone) {
 }
 
 TEST(saves_default_to_a_folder_per_disc_in_the_data_directory) {
-    fs::path dir = scratch();
-    setenv("XDG_DATA_HOME", dir.c_str(), 1);
+    fs::path dir = use_data_dir(scratch());
     run("");
     CHECK_EQ(write("DEFAULT", 10, 3), 0);
     CHECK_EQ(fs::exists(dir / "saturn-recomp" / "T-1234H_V1.001" / "backup.bin"), 1);

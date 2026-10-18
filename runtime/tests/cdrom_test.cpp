@@ -52,8 +52,7 @@ std::string disc(const std::string& dir, const char* stem, const std::string& da
 }  // namespace
 
 TEST(a_borrowed_file_is_read_from_the_other_disc_past_this_ones_lead_out) {
-    char tmpl[] = "/tmp/cdrom_test_XXXXXX";
-    std::string dir = mkdtemp(tmpl);
+    std::string dir = test_dir("cdrom_test");
     std::string other_data(3000, 'o');
     std::memcpy(&other_data[0], "OTHER", 5);
     CHECK_EQ(cdrom_open(disc(dir, "mine", "MINE")), true);
@@ -70,8 +69,7 @@ TEST(a_borrowed_file_is_read_from_the_other_disc_past_this_ones_lead_out) {
 }
 
 TEST(a_boot_copies_ip_bins_header_over_what_a_previous_program_left_in_the_bios_area) {
-    char tmpl[] = "/tmp/cdrom_test_XXXXXX";
-    std::string dir = mkdtemp(tmpl);
+    std::string dir = test_dir("cdrom_test");
     std::string cue = disc(dir, "ip", "FIRST");
     uint8_t ip[0x100];
     std::memset(ip, ' ', sizeof ip);
@@ -105,8 +103,7 @@ static uint16_t change_to_root() {
 }
 
 TEST(a_change_directory_ends_at_once_but_on_the_accurate_drive_only_once_the_drive_has_read_it) {
-    char tmpl[] = "/tmp/cdrom_test_XXXXXX";
-    std::string dir = mkdtemp(tmpl);
+    std::string dir = test_dir("cdrom_test");
     CHECK_EQ(cdrom_open(disc(dir, "fs", "DATA")), true);
     const uint16_t CMOK = 0x0001, EFLS = 0x0200;
     cd_init();
@@ -119,8 +116,7 @@ TEST(a_change_directory_ends_at_once_but_on_the_accurate_drive_only_once_the_dri
 
 // The report's CD-ROM bit clears as a directory read starts its seek and is set again before the read ends.
 TEST(a_directory_read_on_the_accurate_drive_clears_the_cd_rom_bit_until_its_first_sector) {
-    char tmpl[] = "/tmp/cdrom_test_XXXXXX";
-    std::string dir = mkdtemp(tmpl);
+    std::string dir = test_dir("cdrom_test");
     CHECK_EQ(cdrom_open(disc(dir, "bit", "DATA")), true);
     const uint16_t EFLS = 0x0200;
     g_cfg.accurate_drive = true;

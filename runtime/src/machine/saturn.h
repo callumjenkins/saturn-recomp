@@ -207,6 +207,7 @@ void onchip_input_capture(int cpu);   // SINIT/MINIT: the FRT's input-capture fl
 void onchip_reset(int cpu);
 void onchip_set_clock(bool dots352);   // SMPC's CKCHG: φ at 352 dots' rate or 320's
 uint64_t onchip_phi_clocks(uint64_t ns);   // φ's clocks in `ns`: the FRT's and the watchdog's time base
+uint64_t sat_mul_div(uint64_t a, uint32_t b, uint64_t c);   // a * b / c, rounded down, for c below 2^47
 bool onchip_deliver(SH2Context& c);   // the watchdog's interval interrupt, if due and above c's mask; taken?
 
 // ---- video (video.cpp; vdp1.cpp, vdp2.cpp, host.cpp through video.h and host.h) --------------------------

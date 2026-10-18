@@ -1,4 +1,6 @@
 #include "test.h"
+#include <filesystem>
+#include <random>
 
 static Test* g_tests;
 static int g_failures;
@@ -9,6 +11,13 @@ void check_failed(const char* file, int line, const char* expr, uint64_t got, ui
     std::fprintf(stderr, "  %s:%d: %s is %llX, expected %llX\n", file, line, expr,
                  (unsigned long long)got, (unsigned long long)want);
     ++g_failures;
+}
+
+std::string test_dir(const char* name) {
+    static std::mt19937_64 rng{std::random_device{}()};
+    std::filesystem::path p = std::filesystem::temp_directory_path() / (std::string(name) + "-" + std::to_string(rng()));
+    std::filesystem::create_directories(p);
+    return p.string();
 }
 
 int main() {

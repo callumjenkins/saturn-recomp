@@ -69,4 +69,5 @@ void vdp1_state(State& s);
 void vdp2_state(State& s);
 void sound_state(State& s);
 void scsp_state(State& s);
+void scspdsp_state(State& s);
 void tasks_state(State& s);

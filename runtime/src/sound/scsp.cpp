@@ -34,14 +34,18 @@
 // enabled (bits 8-10 take bit 7's level).
 //
 // The envelope, LFO and DSP follow MAME's scsp.cpp and scspdsp.cpp: the
-// envelope times in milliseconds, the key-rate scaling, the LFO tables and
-// scales, the FM scaling, and the DSP step with its floating-point
-// PACK/UNPACK of the ring buffer. Those parts are derived from MAME's code:
+// envelope times in milliseconds, the LFO tables and scales, the FM scaling,
+// and the DSP's fields and floating-point PACK/UNPACK of the ring buffer.
+// Those parts are derived from MAME's code:
 //   Copyright (c) ElSemi, R. Belmont (thanks-to kingshriek), BSD-3-Clause;
 //   the licence's text is in THIRD_PARTY.md at the root of saturn-recomp.
-// The timers' behaviour (free-running, loaded at the next count) is the
-// hardware's as Mednafen documents it. Not done: MIDI (its input reads empty), the DSP's
-// ring-buffer writes on even steps.
+// These follow Mednafen: the timers (free-running, loaded at the next count),
+// the key-rate scaling, MADRS at 0x780-0x7BF alone, RBP's 7 bits, and the DSP
+// step's order and registers. All 128 steps run, NOFL is bit 8 of a step's last
+// word, the accumulator has 26 bits, EFREG keeps what was last written, ADRS
+// is signed, and the registers last from one sample to the next. Any step can
+// read or write sound RAM, a step later (dsp_access).
+// Not done: MIDI (its input reads empty).
 #include "saturn.h"
 #include "state.h"
 #include "sound.h"
@@ -120,7 +124,20 @@ struct Dsp {
     int32_t temp[128], mems[32], mixs[16];
     int16_t exts[2], efreg[16];
     uint32_t dec;
-    int last_step;                              // steps to run (0: stopped)
+    int last_step;                              // 1 + the last step that is not all 0
+};
+
+// The DSP's registers that last from one step to the next and from one sample to the next. A state part
+// of their own lets a dump made before them load.
+struct DspCarry {
+    int32_t acc, frc, yreg;                     // acc: the shifter's input, 26 bits
+    uint32_t adrs;
+    int32_t inputs;                             // IRA 0x32-0x3F leave it as it was
+    int32_t read;                               // the last value read, for IWT
+    uint32_t addr;                              // a word of sound RAM, the access asked for
+    uint8_t reading;                            // 1: a float to unpack, 2: NOFL
+    bool writing;
+    uint16_t value;
 };
 
 Slot g_slot[32];
@@ -132,6 +149,7 @@ uint32_t g_samples;                             // since reset
 int32_t g_stack[64];                            // the sound stack (0x600): the slots' last outputs
 unsigned g_stack_pos;
 Dsp g_dsp;
+DspCarry g_carry;
 uint32_t g_noise = 1;
 
 // ---- tables ------------------------------------------------------------------------------
@@ -208,9 +226,10 @@ uint32_t step_of(const Slot& s) {
     return sh >= 0 ? fn << sh : fn >> -sh;
 }
 
+// Key scaling adds KRS + OCT, from 0 to 15, to a rate of 0-31, which the tables hold at every other step
 void compute_eg(Slot& s) {
-    int base = s.krs() == 15 ? 0 : s.oct() + 2 * s.krs() + (s.fns() >> 9 & 1);
-    auto rate = [&](int r, const int32_t* table) { return r ? table[std::clamp(base + 2 * r, 0, 63)] : 0; };
+    int scale = s.krs() == 15 ? 0 : std::clamp(s.krs() + s.oct(), 0, 15);
+    auto rate = [&](int r, const int32_t* table) { return r ? table[2 * std::min(r + scale, 31)] : 0; };
     s.ar = rate(s.ar_r(), g_ar_step);
     s.d1r = rate(s.d1r_r(), g_dr_step);
     s.d2r = rate(s.d2r_r(), g_dr_step);
@@ -328,7 +347,7 @@ int32_t slot_sample(Slot& s) {
     return (int32_t)(v * eg_step(s));
 }
 
-// ---- the DSP (after MAME's scspdsp.cpp) -----------------------------------------------------
+// ---- the DSP ------------------------------------------------------------------------------
 int32_t sext(int32_t v, int bits) { return (int32_t)((uint32_t)v << (32 - bits)) >> (32 - bits); }
 
 uint16_t dsp_pack(int32_t val) {
@@ -352,13 +371,27 @@ int32_t dsp_unpack(uint16_t v) {
 
 uint32_t g_rbl = 8192, g_rbp;                   // ring buffer: length in words, start in 8 KB units
 
+// The read or write the step before asked for, done after this step's IWT. A word past the end of sound
+// RAM reads as 0, and a write there is lost.
+void dsp_access() {
+    DspCarry& c = g_carry;
+    uint32_t at = c.addr << 1;
+    if (c.reading) {
+        uint16_t w = at < sizeof g_sound_ram ? (uint16_t)(g_sound_ram[at] << 8 | g_sound_ram[at + 1]) : 0;
+        c.read = c.reading == 2 ? (int16_t)w << 8 : dsp_unpack(w);
+        c.reading = 0;
+    } else if (c.writing) {
+        if (at < sizeof g_sound_ram) g_sound_ram[at] = (uint8_t)(c.value >> 8), g_sound_ram[at + 1] = (uint8_t)c.value;
+        c.writing = false;
+    }
+}
+
 void dsp_step() {
     Dsp& d = g_dsp;
-    std::memset(d.efreg, 0, sizeof d.efreg);
-    if (!d.last_step) { std::memset(d.mixs, 0, sizeof d.mixs); return; }
-    int32_t acc = 0, memval = 0, frc = 0, yreg = 0;
-    uint32_t adrs = 0;
-    for (int st = 0; st < d.last_step; ++st) {
+    DspCarry& c = g_carry;
+    // The steps of 0s after the last one all set the accumulator alike, and the first does an access the
+    // step before asked for, so that one stands for them all.
+    for (int st = 0; st < std::min(d.last_step + 1, 128); ++st) {
         const uint16_t* ip = d.mpro + st * 4;
         uint32_t tra = ip[0] >> 8 & 0x7F, twt = ip[0] >> 7 & 1, twa = ip[0] & 0x7F;
         uint32_t xsel = ip[1] >> 15 & 1, ysel = ip[1] >> 13 & 3, ira = ip[1] >> 6 & 0x3F, iwt = ip[1] >> 5 & 1,
@@ -366,51 +399,35 @@ void dsp_step() {
         uint32_t table = ip[2] >> 15 & 1, mwt = ip[2] >> 14 & 1, mrd = ip[2] >> 13 & 1, ewt = ip[2] >> 12 & 1,
                  ewa = ip[2] >> 8 & 15, adrl = ip[2] >> 7 & 1, frcl = ip[2] >> 6 & 1, shift = ip[2] >> 4 & 3,
                  yrl = ip[2] >> 3 & 1, negb = ip[2] >> 2 & 1, zero = ip[2] >> 1 & 1, bsel = ip[2] & 1;
-        uint32_t nofl = ip[3] >> 15 & 1, coef = ip[3] >> 9 & 0x3F, masa = ip[3] >> 2 & 0x1F, adreb = ip[3] >> 1 & 1,
+        uint32_t nofl = ip[3] >> 8 & 1, coef = ip[3] >> 9 & 0x3F, masa = ip[3] >> 2 & 0x1F, adreb = ip[3] >> 1 & 1,
                  nxadr = ip[3] & 1;
-        int32_t in;
-        if (ira <= 0x1F) in = d.mems[ira];
-        else if (ira <= 0x2F) in = d.mixs[ira - 0x20] << 4;
-        else if (ira <= 0x31) in = d.exts[ira - 0x30] << 8;
-        else break;
-        in = sext(in, 24);
-        if (iwt) {
-            d.mems[iwa] = memval;
-            if (ira == iwa) in = memval;
-        }
+        if (ira <= 0x1F) c.inputs = sext(d.mems[ira], 24);
+        else if (ira <= 0x2F) c.inputs = sext(d.mixs[ira - 0x20] << 4, 24);
+        else if (ira <= 0x31) c.inputs = sext(d.exts[ira - 0x30] << 8, 24);
+        int32_t in = c.inputs, acc = c.acc;
         int32_t b = 0;
         if (!zero) {
             b = bsel ? acc : sext(d.temp[(tra + d.dec) & 0x7F], 24);
             if (negb) b = -b;
         }
         int32_t x = xsel ? in : sext(d.temp[(tra + d.dec) & 0x7F], 24);
-        int32_t y = ysel == 0 ? frc : ysel == 1 ? d.coef[coef] >> 3 : ysel == 2 ? (yreg >> 11) & 0x1FFF : (yreg >> 4) & 0x0FFF;
-        if (yrl) yreg = in;
+        int32_t y = ysel == 0 ? c.frc : ysel == 1 ? d.coef[coef] >> 3 : ysel == 2 ? (c.yreg >> 11) & 0x1FFF : (c.yreg >> 4) & 0x0FFF;
+        if (yrl) c.yreg = in;
         int32_t shifted = shift == 0 ? std::clamp(acc, -0x800000, 0x7FFFFF)
                         : shift == 1 ? std::clamp(acc * 2, -0x800000, 0x7FFFFF)
                         : shift == 2 ? sext(acc * 2, 24) : sext(acc, 24);
-        acc = (int32_t)(((int64_t)x * sext(y, 13)) >> 12) + b;
+        c.acc = sext((int32_t)(((int64_t)x * sext(y, 13)) >> 12) + b, 26);
         if (twt) d.temp[(twa + d.dec) & 0x7F] = shifted;
-        if (frcl) frc = shift == 3 ? shifted & 0x0FFF : (shifted >> 11) & 0x1FFF;
-        if ((mrd || mwt) && (st & 1)) {
-            uint32_t addr = d.madrs[masa];
-            if (!table) addr += d.dec;
-            if (adreb) addr += adrs & 0x0FFF;
-            if (nxadr) ++addr;
-            addr &= table ? 0xFFFF : g_rbl - 1;
-            addr = ((addr + (g_rbp << 12)) << 1) & 0x7FFFE;
-            if (mrd) {
-                uint16_t w = (uint16_t)(g_sound_ram[addr] << 8 | g_sound_ram[addr + 1]);
-                memval = nofl ? w << 8 : dsp_unpack(w);
-            }
-            if (mwt) {
-                uint16_t w = nofl ? (uint16_t)(shifted >> 8) : dsp_pack(shifted);
-                g_sound_ram[addr] = (uint8_t)(w >> 8);
-                g_sound_ram[addr + 1] = (uint8_t)w;
-            }
-        }
-        if (adrl) adrs = shift == 3 ? (shifted >> 12) & 0xFFF : (uint32_t)(in >> 16);
-        if (ewt) d.efreg[ewa] = (int16_t)(d.efreg[ewa] + (shifted >> 8));
+        if (frcl) c.frc = shift == 3 ? shifted & 0x0FFF : (shifted >> 11) & 0x1FFF;
+        if (ewt) d.efreg[ewa] = (int16_t)(shifted >> 8);
+        if (iwt) d.mems[iwa] = c.read;
+        dsp_access();
+        uint32_t addr = (uint32_t)(d.madrs[masa] + nxadr + (adreb ? sext((int32_t)c.adrs, 12) : 0)) & 0xFFFF;
+        if (!table) addr = (addr + d.dec) & (g_rbl - 1);
+        c.addr = (addr + (g_rbp << 12)) & 0x7FFFF;      // every step's, so a write left waiting goes to the next's
+        if (mrd) c.reading = nofl ? 2 : 1;
+        if (mwt) c.writing = true, c.value = nofl ? (uint16_t)(shifted >> 8) : dsp_pack(shifted);
+        if (adrl) c.adrs = shift == 3 ? (shifted >> 12) & 0xFFF : (uint32_t)(in >> 16) & 0xFFF;
     }
     --d.dec;
     std::memset(d.mixs, 0, sizeof d.mixs);
@@ -496,7 +513,7 @@ uint16_t read16(uint32_t off) {
     }
     if (off >= 0x600 && off < 0x680) return (uint16_t)g_stack[(off - 0x600) >> 1];
     if (off >= 0x700 && off < 0x780) return (uint16_t)g_dsp.coef[(off - 0x700) >> 1];
-    if (off >= 0x780 && off < 0x800) return g_dsp.madrs[(off - 0x780) >> 1 & 31];
+    if (off >= 0x780 && off < 0x7C0) return g_dsp.madrs[(off - 0x780) >> 1];
     if (off >= 0x800 && off < 0xC00) return g_dsp.mpro[(off - 0x800) >> 1];
     auto half = [&](int32_t v) { return (uint16_t)(off & 2 ? v & 0xFFFF : (uint32_t)v >> 16); };
     if (off >= 0xC00 && off < 0xE00) return half(g_dsp.temp[(off >> 2) & 0x7F]);
@@ -538,7 +555,7 @@ void write16(uint32_t off, uint16_t v, uint16_t mask) {
         uint16_t& r = g_com[(off - 0x400) >> 1];
         uint16_t nv = (uint16_t)((r & ~mask) | (v & mask));
         switch (off) {
-        case 0x402: r = nv; g_rbl = 8192u << (nv >> 7 & 3); g_rbp = nv & 0x3F; return;
+        case 0x402: r = nv; g_rbl = 8192u << (nv >> 7 & 3); g_rbp = nv & 0x7F; return;
         case 0x408: r = nv & 0xF800; return;
         case 0x416: r = nv; if (nv & 0x1000) dma(); return;
         case 0x418: case 0x41A: case 0x41C: {
@@ -566,7 +583,7 @@ void write16(uint32_t off, uint16_t v, uint16_t mask) {
     auto merge = [&](uint16_t old) { return (uint16_t)((old & ~mask) | (v & mask)); };
     if (off >= 0x600 && off < 0x680) { int32_t& x = g_stack[(off - 0x600) >> 1]; x = (int16_t)merge((uint16_t)x); return; }
     if (off >= 0x700 && off < 0x780) { int16_t& x = g_dsp.coef[(off - 0x700) >> 1]; x = (int16_t)merge((uint16_t)x); return; }
-    if (off >= 0x780 && off < 0x800) { uint16_t& x = g_dsp.madrs[(off - 0x780) >> 1 & 31]; x = merge(x); return; }
+    if (off >= 0x780 && off < 0x7C0) { uint16_t& x = g_dsp.madrs[(off - 0x780) >> 1]; x = merge(x); return; }
     if (off >= 0x800 && off < 0xC00) {
         uint16_t& x = g_dsp.mpro[(off - 0x800) >> 1];
         x = merge(x);
@@ -598,6 +615,7 @@ void scsp_reset() {
     g_samples = 0;
     std::memset(g_stack, 0, sizeof g_stack);
     g_dsp = Dsp{};
+    g_carry = DspCarry{};
     g_rbl = 8192;
     g_rbp = 0;
     g_cpu_level = 0;
@@ -686,6 +704,10 @@ static void lfo_table(State& s, const int*& p, int (&tables)[N][256]) {
         if (p == tables[i]) k = (int8_t)i;
     s(k);
     if (s.loading) p = k < 0 ? nullptr : tables[k];
+}
+
+void scspdsp_state(State& s) {
+    s(g_carry);
 }
 
 void scsp_state(State& s) {

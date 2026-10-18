@@ -122,8 +122,10 @@ void fiber_main(mco_coro*) {
         }
     } catch (...) {
         g_exc = std::current_exception();
-        switch_to(&g_main);
     }
+    // Outside the handler: on Windows a handler left by switching stacks stays in the thread's exception state,
+    // and the fiber's stack it points into is dropped by tasks_reset.
+    switch_to(&g_main);
 }
 
 // Starts `t` over at `pc`, dropping whatever its stack held.

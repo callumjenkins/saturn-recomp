@@ -30,8 +30,6 @@ def assemble(*words):
 
 @pytest.fixture(scope="session")
 def m68k_lib(tmp_path_factory):
-    if sys.platform != "linux":
-        pytest.skip("a tool that runs on Linux alone")
     from saturnrecomp import m68k
     return m68k.library(str(tmp_path_factory.mktemp("m68kdasm")))
 

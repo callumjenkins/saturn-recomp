@@ -2,7 +2,7 @@
 #include "test.h"
 
 // The expected values are a * b // c in Python's integers.
-TEST(mul_div_is_exact_where_the_product_overflows_64_bits) {
+TEST(mul_div_is_exact_including_products_past_64_bits) {
     CHECK_EQ(sat_mul_div(1000000000ull, 1746818182u, 65000000000ull), 26874125ull);
     CHECK_EQ(sat_mul_div(9223372036854788153ull, 1746818182u, 65000000000ull), 247870061128127969ull);
     CHECK_EQ(sat_mul_div(18446744073709551615ull, 1734687500u, 61000000000ull), 524579284596115374ull);

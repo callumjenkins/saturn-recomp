@@ -35,7 +35,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          # clang and ninja, then SDL's docs/README-linux.md list, less its test and optional input-method packages
+          # clang and ninja, then the packages playtest-release.yml installs for building SDL
           sudo apt-get install -y clang ninja-build pkg-config libasound2-dev libpulse-dev libaudio-dev libjack-dev \
             libsndio-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev \
             libxtst-dev libxkbcommon-dev libdrm-dev libgbm-dev libgl1-mesa-dev libgles2-mesa-dev libegl1-mesa-dev \

@@ -43,10 +43,7 @@ if [ -n "${SATURN_SDL:-}" ]; then
     usage=$($B/optest-sdl/saturn --help 2>&1 || true)
     grep -q "usage: saturn" <<< "$usage"
     if [ -n "$WINDOWS" ]; then
-        if llvm-objdump -p $B/optest-sdl/saturn.exe | grep -iE "DLL Name: (vcruntime|msvcp)"; then
-            echo "saturn.exe needs Microsoft's C++ redistributable"
-            exit 1
-        fi
+        tools/windows-imports.sh $B/optest-sdl/saturn.exe
         video=$($B/optest-sdl/saturn --video out.mp4 2>&1 || true)
         grep -q -- "--video: not available on Windows" <<< "$video"
     fi

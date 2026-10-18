@@ -142,3 +142,37 @@ TEST(a_directory_read_on_the_accurate_drive_clears_the_cd_rom_bit_until_its_firs
     g_cfg.accurate_drive = false;
     g_cfg.realtime = false;
 }
+
+// A disc's name as a dump names it, in a folder with spaces: the .cue's FILE line and the paths both carry them.
+TEST(a_disc_path_with_spaces_and_parentheses_opens) {
+    std::string dir = test_dir("cdrom test (spaced)");
+    CHECK_EQ(cdrom_open(disc(dir, "Saturn Disc (USA) (1S)", "DATA")), true);
+    uint32_t fad = 0, size = 0;
+    CHECK_EQ(cdrom_find("A.BIN", &fad, &size), true);
+    CHECK_EQ(size, 4);
+}
+
+// IP.BIN's areas decide the master clock: Europe alone is PAL's 1 734 687 500 Hz, and φ is a 65th of it.
+TEST(the_on_chip_timers_count_at_pal_rate_on_a_pal_disc) {
+    std::string dir = test_dir("cdrom_test");
+    std::string cue = disc(dir, "pal", "DATA");
+    uint8_t ip[0x100] = {};
+    std::memcpy(ip, "SEGA SEGASATURN ", 16);
+    std::memcpy(ip + 0x40, "E         ", 10);
+    ip[0xE3] = 0x00, ip[0xE2] = 0x01;                          // its size: 0x100
+    ip[0xF0] = 0x06, ip[0xF1] = 0x00, ip[0xF2] = 0x40;          // the 1st read file at 06004000
+    FILE* f = std::fopen((dir + "/pal.bin").c_str(), "r+b");
+    std::fwrite(ip, 1, sizeof ip, f);
+    std::fclose(f);
+    CHECK_EQ(cdrom_open(cue), true);
+    bios_boot();
+    CHECK_EQ(bios_pal(), true);
+    onchip_reset(0);
+    CHECK_EQ(onchip_phi_clocks(1000000000ull), 26687500ull);
+    std::memcpy(ip + 0x40, "U         ", 10);              // NTSC again, for the tests after
+    f = std::fopen((dir + "/pal.bin").c_str(), "r+b");
+    std::fwrite(ip, 1, sizeof ip, f);
+    std::fclose(f);
+    bios_boot();
+    CHECK_EQ(bios_pal(), false);
+}

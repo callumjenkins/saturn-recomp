@@ -7,7 +7,6 @@
 #include <string>
 #include <vector>
 #include <chrono>
-#include <thread>
 
 namespace {
 
@@ -130,8 +129,9 @@ TEST(a_directory_read_on_the_accurate_drive_clears_the_cd_rom_bit_until_its_firs
         return cr1 & 0x80;
     };
     bool cleared = false, set_before_efls = false;
-    for (int i = 0; i < 2000 && !(cd_read(0x90008, 2) & EFLS); ++i) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    // Ticked without sleeping: the bit is set for less than a sleep can last before the read ends.
+    auto end = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (std::chrono::steady_clock::now() < end && !(cd_read(0x90008, 2) & EFLS)) {
         cd_tick();
         if (!bit()) cleared = true;
         else if (cleared && !(cd_read(0x90008, 2) & EFLS)) set_before_efls = true;

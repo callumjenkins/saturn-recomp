@@ -49,7 +49,9 @@ struct SaturnConfig {
     std::string input;              // the pad: "VBLANK:BUTTON+BUTTON,..." (or "@FILE" holding that)
     std::string record_input;       // a file: the host's pad, written as an --input script
     uint64_t resume = 0;            // with input: the host's pads take over at this VBlank, which the run reaches unpaced
-    std::string virtual_input;      // an --input script pressed on SDL virtual gamepads, a player each (host.cpp)
+    std::string virtual_input;      // an --input script pressed on virtual gamepads, a player each (host.cpp)
+    std::string virtual_pads = "sdl";   // ... SDL's own, or "uinput": the kernel's, on Linux
+    std::string virtual_unplug;     // ... PAD:FROM-TO,...: unplugged between those VBlanks
     std::string dump;               // N,... : the video memories to out/dump-N.bin at VBlank-IN N
     std::string shots;              // N,... : the picture to out/shot-N.png at VBlank-IN N
     bool headless = false;          // no window

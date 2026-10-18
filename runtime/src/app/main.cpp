@@ -28,7 +28,9 @@
 // can, without sound, a card saying how far it has got in place of the picture (--resume-label TEXT says
 // what it is getting to), then hands the pads to the host's controllers; with
 // --record-input, the script's presses are written too, so the file plays the whole run. --virtual-input SCRIPT, for tests, presses the
-// script's pads on SDL virtual gamepads instead, a player each, through the window's input. --interp draws the fields between the game's frames with
+// script's pads on virtual gamepads instead, a player each, through the window's input. They are SDL's,
+// or the kernel's on Linux with --virtual-pads uinput. --virtual-unplug PAD:FROM-TO,... unplugs pad PAD
+// from VBlank FROM to TO. --interp draws the fields between the game's frames with
 // everything moved part of the way (vdp1.cpp), one frame behind. --tasks names
 // the game's setjmp and longjmp when it switches its own tasks with them
 // (tasks.cpp); the build hooks both addresses. --multitap puts 6-player
@@ -133,6 +135,8 @@ static int parse_args(SaturnConfig& cfg, bool& launcher, int argc, char** argv) 
         else if (!std::strcmp(a, "--progress") && more) cfg.progress = argv[++i];
         else if (!std::strcmp(a, "--progress-keep") && more) cfg.progress_keep = argv[++i];
         else if (!std::strcmp(a, "--virtual-input") && more) cfg.virtual_input = argv[++i];
+        else if (!std::strcmp(a, "--virtual-pads") && more) cfg.virtual_pads = argv[++i];
+        else if (!std::strcmp(a, "--virtual-unplug") && more) cfg.virtual_unplug = argv[++i];
         else if (!std::strcmp(a, "--dump") && more) cfg.dump = argv[++i];
         else if (!std::strcmp(a, "--shot") && more) cfg.shots = argv[++i];
         else if (!std::strcmp(a, "--headless")) cfg.headless = true;

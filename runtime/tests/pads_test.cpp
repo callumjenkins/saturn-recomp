@@ -1,6 +1,7 @@
 // The pads: which player each controller drives, and what INTBACK reports for each port.
 #include "saturn.h"
 #include "pad_slots.h"
+#include "unplugs.h"
 #include "test.h"
 #include <string>
 #include <vector>
@@ -70,6 +71,37 @@ TEST(a_controller_beyond_the_last_player_drives_nothing) {
     s.connect(11, "pad");
     CHECK_EQ(s.connect(12, "pad"), -1);
     CHECK_EQ(s.disconnect(12), -1);
+}
+
+TEST(an_unplug_spec_gives_each_plug_in_vblank_order) {
+    std::vector<PlugStep> p;
+    CHECK_EQ(parse_unplugs("2:500-900,1:100-600", p), true);
+    CHECK_EQ(p.size(), 4);
+    CHECK_EQ(p[0].vblank, 100);
+    CHECK_EQ(p[0].pad, 0);
+    CHECK_EQ(p[0].plugged, false);
+    CHECK_EQ(p[1].vblank, 500);
+    CHECK_EQ(p[1].pad, 1);
+    CHECK_EQ(p[1].plugged, false);
+    CHECK_EQ(p[2].vblank, 600);
+    CHECK_EQ(p[2].pad, 0);
+    CHECK_EQ(p[2].plugged, true);
+    CHECK_EQ(p[3].vblank, 900);
+    CHECK_EQ(p[3].pad, 1);
+    CHECK_EQ(p[3].plugged, true);
+    CHECK_EQ(parse_unplugs("1:200-300,1:100-200", p), true);
+    CHECK_EQ(p.size(), 4);
+    CHECK_EQ(p[1].plugged, true);
+    CHECK_EQ(p[2].plugged, false);
+    CHECK_EQ(parse_unplugs("", p), true);
+    CHECK_EQ(p.size(), 0);
+}
+
+TEST(an_unplug_spec_that_does_not_read_or_overlaps_is_refused) {
+    std::vector<PlugStep> p;
+    for (const char* bad : {"1:100", "0:100-200", "1:200-100", "1:100-100", "1:100-", "x:1-2", "1:100-200,", "1:100-200x",
+                            "1:100--5", "1: 100-200", "+1:100-200", "1:200-300,1:250-400", "1:100-300,1:200-250", "13:1-2"})
+        CHECK_EQ(parse_unplugs(bad, p), false);
 }
 
 // These run in order: a script's pad stays plugged in once named.

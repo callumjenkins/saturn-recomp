@@ -36,6 +36,8 @@
 #include "pad_slots.h"
 #include "settings.h"
 #include "touch_pad.h"
+#include "uinput_pad.h"
+#include "unplugs.h"
 #include "ui.h"
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -291,9 +293,16 @@ static void read_pads() {
     }
 }
 
+static bool virtual_owns(SDL_JoystickID id);
+
 static void pad_added(SDL_JoystickID id) {
     SDL_Gamepad* pad = SDL_OpenGamepad(id);
     if (!pad) return;
+    if (!virtual_owns(id)) {
+        sat_note("gamepad: %s, not used: --virtual-input plays on its own pads", SDL_GetGamepadName(pad));
+        SDL_CloseGamepad(pad);
+        return;
+    }
     char guid[33];
     SDL_GUIDToString(SDL_GetGamepadGUIDForID(id), guid, sizeof guid);
     int s = g_slots.connect(id, guid);
@@ -350,46 +359,157 @@ static void save_shot() {
     sat_note("picture saved: %s%s", g_cfg.out.c_str(), name);
 }
 
-// --virtual-input: SDL virtual gamepads, plugged in a player each in order, pressed by a script, so a
-// test reaches the game through SDL and the slots as a player's controllers do
-static std::vector<SDL_Joystick*> g_virtual;
+// --virtual-input: virtual gamepads, plugged in a player each in order, pressed by a script, so a
+// test reaches the game through SDL and the slots as a player's controllers do. They are SDL's own, or
+// with --virtual-pads uinput the kernel's (uinput_pad.h), half with an Xbox 360 pad's USB IDs and half
+// a pad's SDL does not know. A kernel pad presses each step's directions on the d-pad and the left stick
+// by turns. --virtual-unplug unplugs them for a while.
+struct VirtualPad {
+    SDL_JoystickID id = 0;                      // while plugged in
+    UinputPad uinput;
+    uint16_t held = 0;                          // the script's buttons, plugged in or not
+    bool stick = false;                         // the uinput pad's last directions were on the stick
+};
+static std::vector<VirtualPad> g_virtual;
 static std::vector<PadStep> g_virtual_steps;
 static size_t g_virtual_pos;
+static std::vector<PlugStep> g_plugs;
+static size_t g_plug_pos;
+static bool g_uinput;
+static void on_event(const SDL_Event& e);
 
-static void virtual_open() {
-    g_virtual_steps = smpc_parse_script(g_cfg.virtual_input);
-    int n = 0;
-    for (auto& s : g_virtual_steps) n = std::max(n, s.pad + 1);
-    for (int k = 0; k < n; ++k) {
+static const OpenPad* open_pad(SDL_JoystickID id) {
+    for (auto& p : g_pads)
+        if (p.id == id) return &p;
+    return nullptr;
+}
+
+// With --virtual-input, the run's own pads drive the players, whatever else is plugged in, another
+// run's kernel pads included.
+static bool virtual_owns(SDL_JoystickID id) {
+    if (g_cfg.virtual_input.empty()) return true;
+    if (g_cfg.virtual_pads != "uinput") return SDL_IsJoystickVirtual(id);
+    const char* path = SDL_GetGamepadPathForID(id);
+    for (auto& v : g_virtual)
+        if (path && v.uinput.path == path) return true;
+    return false;
+}
+
+// Pumps the events until done says the host has seen the change.
+template <typename F> static void virtual_wait(int k, const char* what, F done) {
+    for (Uint64 end = SDL_GetTicks() + 5000; !done();) {
+        if (SDL_GetTicks() > end) sat_fatal("--virtual-input: pad %d %s, but the host never saw it", k + 1, what);
+        SDL_Event e;
+        while (SDL_PollEvent(&e)) on_event(e);
+        SDL_Delay(1);
+    }
+}
+
+static void virtual_send(VirtualPad& v);
+
+// Presses each Saturn button alone and reads it back through the pad's bindings, before the next read of
+// the pads, so the game sees none of it. A kernel pad presses the directions on the d-pad, then the stick.
+static void virtual_check(VirtualPad& v, int k) {
+    const OpenPad* p = open_pad(v.id);
+    VirtualPad was = v;
+    for (bool stick : {false, true})
+        for (uint16_t bit : {B_UP, B_DOWN, B_LEFT, B_RIGHT, B_START, B_A, B_B, B_C, B_X, B_Y, B_Z, B_L, B_R}) {
+            v.held = bit;
+            v.stick = stick;
+            virtual_send(v);
+            SDL_Event e;
+            while (SDL_PollEvent(&e)) on_event(e);
+            if (uint16_t got = gamepad_buttons(p->pad, p->map); got != bit)
+                sat_fatal("--virtual-input: pad %d pressed %04X and the host read %04X", k + 1, bit, got);
+        }
+    v.held = was.held;
+    v.stick = was.stick;
+}
+
+static void virtual_plug(int k) {
+    VirtualPad& v = g_virtual[k];
+    if (g_uinput) {
+        std::string error;
+        v.uinput = uinput_pad_open(k % 2 ? 0x3537 : 0x045E, k % 2 ? 0x0575 : 0x028E, error);
+        if (v.uinput.fd < 0) sat_fatal("--virtual-pads uinput: %s", error.c_str());
+        virtual_wait(k, "was plugged in", [&] {
+            for (auto& p : g_pads)
+                if (const char* path = SDL_GetGamepadPath(p.pad); path && v.uinput.path == path) return v.id = p.id, true;
+            return false;
+        });
+    } else {
         SDL_VirtualJoystickDesc d;
         SDL_INIT_INTERFACE(&d);
         d.type = SDL_JOYSTICK_TYPE_GAMEPAD;
         d.naxes = SDL_GAMEPAD_AXIS_COUNT;
         d.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
         d.name = "saturn-recomp virtual pad";
-        SDL_JoystickID id = SDL_AttachVirtualJoystick(&d);
-        if (!id) sat_fatal("--virtual-input: %s", SDL_GetError());
-        SDL_Joystick* j = SDL_OpenJoystick(id);
-        SDL_SetJoystickVirtualAxis(j, SDL_GAMEPAD_AXIS_LEFT_TRIGGER, SDL_JOYSTICK_AXIS_MIN);
-        SDL_SetJoystickVirtualAxis(j, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, SDL_JOYSTICK_AXIS_MIN);
-        g_virtual.push_back(j);
+        v.id = SDL_AttachVirtualJoystick(&d);
+        if (!v.id) sat_fatal("--virtual-input: %s", SDL_GetError());
+        virtual_wait(k, "was plugged in", [&] { return open_pad(v.id) != nullptr; });
     }
+    int s = g_slots.slot_of(v.id);
+    if (s != k) sat_fatal("--virtual-input: pad %d drives player %d", k + 1, s + 1);
+    virtual_check(v, k);
+    virtual_send(v);
+}
+
+static void virtual_unplug(int k) {
+    VirtualPad& v = g_virtual[k];
+    if (g_uinput) uinput_pad_close(v.uinput);
+    else SDL_DetachVirtualJoystick(v.id);
+    virtual_wait(k, "was unplugged", [&] { return open_pad(v.id) == nullptr; });
+    v.id = 0;
+}
+
+static void virtual_open() {
+    g_virtual_steps = smpc_parse_script(g_cfg.virtual_input);
+    if (!parse_unplugs(g_cfg.virtual_unplug, g_plugs)) sat_fatal("--virtual-unplug %s: not PAD:FROM-TO,... with pads 1 to %d and no pad out twice at once", g_cfg.virtual_unplug.c_str(), kHostSlots);
+    if (g_cfg.virtual_pads != "sdl" && g_cfg.virtual_pads != "uinput") sat_fatal("--virtual-pads %s: sdl or uinput", g_cfg.virtual_pads.c_str());
+    g_uinput = g_cfg.virtual_pads == "uinput";
+    int n = 0;
+    for (auto& s : g_virtual_steps) n = std::max(n, s.pad + 1);
+    for (auto& p : g_plugs) n = std::max(n, p.pad + 1);
+    if (n > kHostSlots) sat_fatal("--virtual-input: %d pads, more than the %d players", n, kHostSlots);
+    g_virtual.resize(n);
+    for (int k = 0; k < n; ++k) virtual_plug(k);
+}
+
+static void virtual_send(VirtualPad& v) {
+    uint16_t b = v.held;
+    if (!g_uinput) {
+        static const struct { uint16_t bit; SDL_GamepadButton btn; } kButtons[] = {
+            {B_RIGHT, SDL_GAMEPAD_BUTTON_DPAD_RIGHT}, {B_LEFT, SDL_GAMEPAD_BUTTON_DPAD_LEFT},
+            {B_DOWN, SDL_GAMEPAD_BUTTON_DPAD_DOWN}, {B_UP, SDL_GAMEPAD_BUTTON_DPAD_UP},
+            {B_START, SDL_GAMEPAD_BUTTON_START}, {B_A, SDL_GAMEPAD_BUTTON_WEST}, {B_B, SDL_GAMEPAD_BUTTON_SOUTH},
+            {B_C, SDL_GAMEPAD_BUTTON_EAST}, {B_X, SDL_GAMEPAD_BUTTON_NORTH},
+            {B_L, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER}, {B_R, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER}};
+        SDL_Joystick* j = SDL_GetJoystickFromID(v.id);
+        for (auto& m : kButtons) SDL_SetJoystickVirtualButton(j, m.btn, (b & m.bit) != 0);
+        // a trigger at rest is the axis's minimum: 0 is half pulled
+        SDL_SetJoystickVirtualAxis(j, SDL_GAMEPAD_AXIS_LEFT_TRIGGER, b & B_Y ? SDL_JOYSTICK_AXIS_MAX : SDL_JOYSTICK_AXIS_MIN);
+        SDL_SetJoystickVirtualAxis(j, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, b & B_Z ? SDL_JOYSTICK_AXIS_MAX : SDL_JOYSTICK_AXIS_MIN);
+        return;
+    }
+    int x = (b & B_RIGHT ? 1 : 0) - (b & B_LEFT ? 1 : 0), y = (b & B_DOWN ? 1 : 0) - (b & B_UP ? 1 : 0);
+    auto on = [&](uint16_t bit) { return (b & bit) != 0; };
+    UinputState s = {on(B_B), on(B_C), on(B_A), on(B_X), on(B_L), on(B_R), on(B_START), on(B_Y), on(B_Z),
+                     v.stick ? 0 : x, v.stick ? 0 : y, v.stick ? x : 0, v.stick ? y : 0};
+    uinput_pad_set(v.uinput, s);
 }
 
 static void virtual_press() {
-    static const struct { uint16_t bit; SDL_GamepadButton btn; } kButtons[] = {
-        {B_RIGHT, SDL_GAMEPAD_BUTTON_DPAD_RIGHT}, {B_LEFT, SDL_GAMEPAD_BUTTON_DPAD_LEFT},
-        {B_DOWN, SDL_GAMEPAD_BUTTON_DPAD_DOWN}, {B_UP, SDL_GAMEPAD_BUTTON_DPAD_UP},
-        {B_START, SDL_GAMEPAD_BUTTON_START}, {B_A, SDL_GAMEPAD_BUTTON_WEST}, {B_B, SDL_GAMEPAD_BUTTON_SOUTH},
-        {B_C, SDL_GAMEPAD_BUTTON_EAST}, {B_X, SDL_GAMEPAD_BUTTON_NORTH},
-        {B_L, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER}, {B_R, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER}};
+    for (; g_plug_pos < g_plugs.size() && g_plugs[g_plug_pos].vblank <= sat_vblanks(); ++g_plug_pos) {
+        const PlugStep& p = g_plugs[g_plug_pos];
+        if (p.plugged) virtual_plug(p.pad);
+        else virtual_unplug(p.pad);
+    }
     for (; g_virtual_pos < g_virtual_steps.size() && g_virtual_steps[g_virtual_pos].vblank <= sat_vblanks(); ++g_virtual_pos) {
         const PadStep& s = g_virtual_steps[g_virtual_pos];
-        SDL_Joystick* j = g_virtual[s.pad];
-        for (auto& m : kButtons) SDL_SetJoystickVirtualButton(j, m.btn, (s.pressed & m.bit) != 0);
-        // a trigger at rest is the axis's minimum: 0 is half pulled
-        SDL_SetJoystickVirtualAxis(j, SDL_GAMEPAD_AXIS_LEFT_TRIGGER, s.pressed & B_Y ? SDL_JOYSTICK_AXIS_MAX : SDL_JOYSTICK_AXIS_MIN);
-        SDL_SetJoystickVirtualAxis(j, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, s.pressed & B_Z ? SDL_JOYSTICK_AXIS_MAX : SDL_JOYSTICK_AXIS_MIN);
+        VirtualPad& v = g_virtual[s.pad];
+        v.held = s.pressed;
+        if (s.pressed & (B_UP | B_DOWN | B_LEFT | B_RIGHT)) v.stick = !v.stick;
+        if (v.id) virtual_send(v);
     }
 }
 

@@ -53,7 +53,7 @@ if(SDL3_FOUND)
     list(APPEND _font_headers ${_fonts}/inter_${f}.h)
   endforeach()
   add_library(saturn_host OBJECT ${_src}/host/host.cpp ${_src}/host/launcher.cpp ${_src}/host/settings.cpp ${_src}/host/ui.cpp
-      ${_font_headers})
+      ${_src}/host/uinput_pad.cpp ${_font_headers})
   target_include_directories(saturn_host PRIVATE ${_fonts} ${_rt}/third_party/stb)
   target_link_libraries(saturn_host PUBLIC SDL3::SDL3 saturn_imgui)
 else()

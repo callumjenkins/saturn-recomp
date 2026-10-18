@@ -169,6 +169,7 @@ TEST(the_on_chip_timers_count_at_pal_rate_on_a_pal_disc) {
     CHECK_EQ(bios_pal(), true);
     onchip_reset(0);
     CHECK_EQ(onchip_phi_clocks(1000000000ull), 26687500ull);
+    CHECK_EQ(onchip_phi_ns(1000), 37470ull);                    // 1000 * 65e9 // 1734687500
     std::memcpy(ip + 0x40, "U         ", 10);              // NTSC again, for the tests after
     f = std::fopen((dir + "/pal.bin").c_str(), "r+b");
     std::fwrite(ip, 1, sizeof ip, f);

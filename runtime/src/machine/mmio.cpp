@@ -43,11 +43,14 @@ static std::map<std::pair<uint32_t, uint32_t>, uint64_t> g_calls;
 struct ModemLog { uint64_t n = 0, first = 0, last = 0; std::set<uint32_t> values; };
 static std::map<std::tuple<uint32_t, char, uint32_t>, ModemLog> g_modem_log;
 
-// A register access costs the CPU a safe point of time: a loop that waits on a
-// device (a status register, the CD block's answers) lets time move on.
+// A register access is a safe point, so a loop that waits on a device (a status
+// register, the CD block's answers) lets time move on. It also counts kRegCycles of
+// the CPU's cycles, which --accurate-cpu charges; the value is fitted to Beetle Saturn.
+static const uint32_t kRegCycles = 8;
 static void log_reg(uint32_t a, int size, char rw) {
     ++g_regs[{a, size, rw}];
     --g_cpu->budget;
+    g_sh2_cycles[g_cpu->cpu] += kRegCycles;
 }
 // --watch LO:HI: every address in the range, one by one
 static std::map<std::pair<uint32_t, char>, uint64_t> g_watch;

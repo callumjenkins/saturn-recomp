@@ -39,6 +39,22 @@ uint64_t sat_mul_div(uint64_t a, uint32_t b, uint64_t c) {
     return q * b + (x / c << 16) + ((x % c << 16) + r * (b & 0xFFFF)) / c;
 }
 
+uint64_t onchip_phi_ns(uint64_t clocks) {
+    const uint32_t master = bios_pal() ? 1734687500u : 1746818182u;
+    return sat_mul_div(clocks * g_phi_div, 1000000000u, master);
+}
+
+// Counted from the cycles at the last change of φ, so no call's rounding is lost
+uint64_t onchip_cpu_ns(uint64_t cycles) {
+    static uint64_t from, last, given;
+    static uint32_t div;
+    if (div != g_phi_div) from = last, given = 0, div = g_phi_div;
+    uint64_t ns = onchip_phi_ns(cycles - from) - given;
+    given += ns;
+    last = cycles;
+    return ns;
+}
+
 uint64_t onchip_phi_clocks(uint64_t ns) {
     const uint32_t master = bios_pal() ? 1734687500u : 1746818182u;
     return sat_mul_div(ns, master, (uint64_t)g_phi_div * 1000000000ull);

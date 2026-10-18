@@ -36,6 +36,7 @@ struct SaturnConfig {
     std::string out = ".";          // logs, pictures and dumps go here
     std::string save;               // the backup memory's file; "-": none; empty: one per game in the user's data directory
     bool realtime = false;          // host clock; otherwise virtual time from safe points
+    bool accurate_cpu = false;      // the master SH-2's time from the cycles its code issues (machine.cpp); otherwise 400 ns a safe point
     bool accurate_drive = false;    // the CD drive's seeks and double-speed rate (cdblock.cpp); otherwise faster loads
     uint64_t stop_vblanks = 0;      // end the run after this many VBlanks (0: never)
     int stop_starts = 0;            // ... or after this many program starts (0: never)
@@ -208,6 +209,8 @@ void onchip_write(SH2Context& c, uint32_t a, uint32_t v, int size);
 void onchip_input_capture(int cpu);   // SINIT/MINIT: the FRT's input-capture flag
 void onchip_reset(int cpu);
 void onchip_set_clock(bool dots352);   // SMPC's CKCHG: φ at 352 dots' rate or 320's
+uint64_t onchip_phi_ns(uint64_t clocks);   // the time `clocks` of φ take: the SH-2s' cycles
+uint64_t onchip_cpu_ns(uint64_t cycles);   // the time since the last call of the master's `cycles`, a running count
 uint64_t onchip_phi_clocks(uint64_t ns);   // φ's clocks in `ns`: the FRT's and the watchdog's time base
 uint64_t sat_mul_div(uint64_t a, uint32_t b, uint64_t c);   // a * b / c, rounded down, for c below 2^47
 bool onchip_deliver(SH2Context& c);   // the watchdog's interval interrupt, if due and above c's mask; taken?

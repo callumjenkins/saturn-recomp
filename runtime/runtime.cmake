@@ -59,6 +59,9 @@ if(SDL3_FOUND)
 else()
   add_library(saturn_host OBJECT ${_src}/host/host_null.cpp ${_src}/host/settings.cpp)
 endif()
+if(WIN32)
+  target_sources(saturn_host INTERFACE ${_src}/host/windows/saturn.manifest)   # merged into each executable's
+endif()
 enable_language(C)
 set(_m68k ${_rt}/third_party/musashi)
 add_library(saturn_m68k STATIC

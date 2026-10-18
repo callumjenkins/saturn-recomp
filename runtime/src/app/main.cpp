@@ -142,7 +142,14 @@ static int parse_args(SaturnConfig& cfg, bool& launcher, int argc, char** argv) 
         else if (!std::strcmp(a, "--settings") && more) cfg.settings = argv[++i];
         else if (!std::strcmp(a, "--after") && more) cfg.after = argv[++i];
         else if (!std::strcmp(a, "--wav") && more) cfg.wav = argv[++i];
-        else if (!std::strcmp(a, "--video") && more) cfg.video = argv[++i];
+        else if (!std::strcmp(a, "--video") && more) {
+#if defined(_WIN32)
+            std::fprintf(stderr, "--video: not available on Windows\n");     // movie.cpp quotes for a POSIX shell
+            return 2;
+#else
+            cfg.video = argv[++i];
+#endif
+        }
         else if (!std::strcmp(a, "--interp")) cfg.interp = true;
         else if (!std::strcmp(a, "--multitap") && more) cfg.multitap = std::atoi(argv[++i]);
         else if (!std::strcmp(a, "--modem") && more) cfg.modem = argv[++i];

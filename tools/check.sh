@@ -42,8 +42,12 @@ if [ -n "${SATURN_SDL:-}" ]; then
     # it starts, and answers a bad argument with its usage
     usage=$($B/optest-sdl/saturn --help 2>&1 || true)
     grep -q "usage: saturn" <<< "$usage"
-    if [ -n "$WINDOWS" ] && llvm-objdump -p $B/optest-sdl/saturn.exe | grep -iE "DLL Name: (vcruntime|msvcp)"; then
-        echo "saturn.exe needs Microsoft's C++ redistributable"
-        exit 1
+    if [ -n "$WINDOWS" ]; then
+        if llvm-objdump -p $B/optest-sdl/saturn.exe | grep -iE "DLL Name: (vcruntime|msvcp)"; then
+            echo "saturn.exe needs Microsoft's C++ redistributable"
+            exit 1
+        fi
+        video=$($B/optest-sdl/saturn --video out.mp4 2>&1 || true)
+        grep -q -- "--video: not available on Windows" <<< "$video"
     fi
 fi

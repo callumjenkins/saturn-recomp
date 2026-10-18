@@ -305,10 +305,11 @@ class Game:
     checkpoint: Checkpoint | None = None
     task_switches: list[TaskSwitch] = field(default_factory=list)
     inventory: Inventory | None = None
+    executable: str = ""                # runs use this in place of the build's own, when set
 
     @property
     def saturn(self):
-        return os.path.join(self.build, "recomp-build", "saturn")
+        return self.executable or os.path.join(self.build, "recomp-build", "saturn")
 
     def module(self, name):
         return next(m for m in self.modules if m.name == name)

@@ -75,6 +75,18 @@ uint32_t read_back(const char* save_name, uint32_t size, uint8_t seed) {
 
 }  // namespace
 
+// The path as argv gives it, in UTF-8; the check names the file by its characters.
+TEST(a_save_under_a_non_ascii_directory_opens) {
+    fs::path file = scratch() / fs::path(u8"s\u00e4ve \u2713") / "backup.bin";
+    std::u8string utf8 = file.u8string();
+    std::string narrow(utf8.begin(), utf8.end());
+    run(narrow);
+    CHECK_EQ(write("UTF8_PATH", 10, 1), 0);
+    CHECK_EQ(fs::exists(file), 1);
+    run(narrow);
+    CHECK_EQ(read_back("UTF8_PATH", 10, 1), 0);
+}
+
 TEST(a_save_is_read_back_by_the_next_run) {
     fs::path dir = scratch(), file = dir / "nested" / "backup.bin";
     run(file.string());

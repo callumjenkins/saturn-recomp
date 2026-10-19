@@ -133,6 +133,7 @@ static const HostFn* host_function(const void* p) {
 static void watch_report(uint32_t a, uint32_t v, int size, const void* host) {
     if (sat_vblanks() < g_cfg.watch_from || sat_vblanks() > g_cfg.watch_to) return;
     const HostFn* f = host_function(host);
+    if (size < 4) v &= (1u << size * 8) - 1;
     sat_note("store%d %08X = %0*X in %s:%08X (pr %08X, VBlank %llu)", size * 8, a, size * 2, v,
              f ? f->mod : "?", f ? f->addr : 0, g_cpu->pr, (unsigned long long)sat_vblanks());
 }

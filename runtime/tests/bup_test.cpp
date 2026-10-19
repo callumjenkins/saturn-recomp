@@ -11,7 +11,7 @@ namespace fs = std::filesystem;
 namespace {
 
 const uint32_t kDir = 0x06010000, kData = 0x06011000, kOut = 0x06012000, kName = 0x06013000;
-const uint32_t kWrite = 4, kRead = 5, kDelete = 6, kDirList = 7;
+const uint32_t kStat = 3, kWrite = 4, kRead = 5, kDelete = 6, kDirList = 7;
 
 // Points sat_data_dir into `root` through the platform's own variable, and returns the directory it then gives.
 fs::path use_data_dir(const fs::path& root) {
@@ -100,6 +100,37 @@ TEST(a_save_is_read_back_by_the_next_run) {
     CHECK_EQ(ld32(0x06015000 + 28), 300);
 }
 
+// The BIOS's own figures on Beetle Saturn, before and after Bomberman's 12-byte save.
+TEST(stat_counts_free_space_as_the_bios_does) {
+    run("-");
+    const uint32_t stat = 0x06014000;
+    CHECK_EQ(bup(kStat, 0, 0, stat), 0);
+    CHECK_EQ(ld32(stat + 0), 0x8000);
+    CHECK_EQ(ld32(stat + 4), 0x200);
+    CHECK_EQ(ld32(stat + 8), 0x40);
+    CHECK_EQ(ld32(stat + 12), 0x736E);
+    CHECK_EQ(ld32(stat + 16), 0x1FE);
+    CHECK_EQ(ld32(stat + 20), 0x1FE);
+    CHECK_EQ(write("BOMBERSS_01", 12, 1), 0);
+    CHECK_EQ(bup(kStat, 0, 0, stat), 0);
+    CHECK_EQ(ld32(stat + 12), 0x7334);
+    CHECK_EQ(ld32(stat + 16), 0x1FD);
+    CHECK_EQ(ld32(stat + 20), 0x1FD);
+    name(kName, "BOMBERSS_01");
+    CHECK_EQ(bup(kDirList, 0, kName, 4, 0x06015000), 1);
+    CHECK_EQ(ld16(0x06015000 + 32), 1);
+}
+
+TEST(stat_gives_no_free_bytes_on_a_full_card) {
+    run("-");
+    CHECK_EQ(write("FULL", 510 * 58 - 30, 1), 0);
+    const uint32_t stat = 0x06014000;
+    CHECK_EQ(bup(kStat, 0, 0, stat), 0);
+    CHECK_EQ(ld32(stat + 12), 0);
+    CHECK_EQ(ld32(stat + 16), 0);
+    CHECK_EQ(ld32(stat + 20), 0);
+}
+
 TEST(saves_are_kept_by_name) {
     fs::path file = scratch() / "backup.bin";
     run(file.string());
@@ -172,4 +203,18 @@ TEST(a_write_over_a_save_needs_r7_zero) {
     CHECK_EQ(read_back("SAME", 10, 1), 0);
     CHECK_EQ(write("SAME", 10, 3), 0);
     CHECK_EQ(read_back("SAME", 10, 3), 0);
+}
+
+// Bomberman takes its save's comment from address 0, so the comment is the reset vector's top byte, " ".
+TEST(the_bios_rom_starts_with_the_reset_vectors) {
+    CHECK_EQ(bios_rom_read(0, 4), 0x20000200);
+    CHECK_EQ(bios_rom_read(4, 4), 0x06002000);
+    CHECK_EQ(bios_rom_read(0, 1), 0x20);
+    CHECK_EQ(bios_rom_read(1, 1), 0);
+    CHECK_EQ(bios_rom_read(6, 2), 0x2000);
+    CHECK_EQ(bios_rom_read(8, 4), 0x20000200);
+    CHECK_EQ(bios_rom_read(12, 4), 0x06002000);
+    CHECK_EQ(bios_rom_read(14, 4), 0x20000000);
+    CHECK_EQ(bios_rom_read(16, 4), 0);
+    CHECK_EQ(bios_rom_read(0x5E4, 4), 0x000025E4);
 }

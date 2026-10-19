@@ -161,9 +161,15 @@ void bios_dispatch(SH2Context& c, uint32_t vec) {
 // IP.BIN's 1st read address, with its master stack, without the area check.
 static const uint32_t kRomLogo = 0x00002000;
 
+// The ROM starts with the power-on and then the manual reset vectors, each a PC then an SP.
+static const uint8_t kResetVectors[16] = {0x20, 0x00, 0x02, 0x00, 0x06, 0x00, 0x20, 0x00,
+                                          0x20, 0x00, 0x02, 0x00, 0x06, 0x00, 0x20, 0x00};
+
 uint32_t bios_rom_read(uint32_t a, int size) {
     if (size == 4 && (a == 0x5E4 || a == 0x5E8 || a == 0x5EC)) return kRomLogo + a;
-    return 0;
+    uint32_t v = 0;
+    for (int i = 0; i < size; ++i) v = v << 8 | (a + i < sizeof kResetVectors ? kResetVectors[a + i] : 0);
+    return v;
 }
 
 bool bios_call(SH2Context& c, uint32_t addr) {
@@ -378,7 +384,10 @@ static uint32_t days_in(uint32_t y, uint32_t m) {
     return m == 2 && y % 4 == 0 && (y % 100 || y % 400 == 0) ? 29 : md[(m - 1) % 12];
 }
 
-static uint32_t blocks(uint32_t size) { return (size + 34 + kBupBlock - 1) / kBupBlock + 1; }
+// A block gives 4 bytes to its header and 2 to its entry in the save's block list, and the first
+// block 30 more to the name, comment, language, date and size, as the BIOS counts them.
+static const uint32_t kBupBlockData = kBupBlock - 6, kBupSaveHeader = 30;
+static uint32_t blocks(uint32_t size) { return (size + kBupSaveHeader + kBupBlockData - 1) / kBupBlockData; }
 
 // BupDir: filename[12], comment[11], language, date, datasize, blocksize (u16)
 static void put_dir(uint32_t a, const std::string& name, const BupFile& b) {
@@ -412,8 +421,8 @@ static bool bup_call(SH2Context& c, uint32_t k) {
         if (r4 != 0) { c.r[0] = 1; return true; }
         uint32_t total = kBupSize / kBupBlock, freeb = total - 2 - used;
         st32(r6 + 0, kBupSize); st32(r6 + 4, total); st32(r6 + 8, kBupBlock);
-        st32(r6 + 12, freeb * kBupBlock); st32(r6 + 16, freeb);
-        st32(r6 + 20, r5 ? freeb / blocks(r5) : 0);
+        st32(r6 + 12, freeb ? freeb * kBupBlockData - kBupSaveHeader : 0); st32(r6 + 16, freeb);
+        st32(r6 + 20, freeb / blocks(r5));
         c.r[0] = 0;
         return true;
     }

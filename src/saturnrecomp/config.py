@@ -49,6 +49,11 @@
     module = "KRNL"
     at = "bomber_hit_flag"
 
+    [[replace]]                     # optional: a function the game layer supplies, in place of the recompiled one
+    module = "KRNL"
+    at = "0x0600665C"               # its entry
+    symbol = "decomp_f0600665C"     # void symbol(SH2Context&), linked in through SATURN_EXTRA; the build then sets pc = pr
+
     [playtest]                      # optional: builds for playtesters (saturnrecomp.playtest)
     endpoint = "https://saturn-playtest.example.workers.dev"
     repo = "OWNER/NAME"             # the GitHub repository whose releases hold the builds
@@ -86,6 +91,7 @@ relative to the file.
 """
 import json
 import os
+import re
 import tomllib
 from dataclasses import dataclass, field
 
@@ -306,6 +312,7 @@ class Game:
     task_switches: list[TaskSwitch] = field(default_factory=list)
     inventory: Inventory | None = None
     executable: str = ""
+    replaces: dict[str, dict[int, str]] = field(default_factory=dict)   # {module: {entry: symbol}}
 
     @property
     def saturn(self):
@@ -361,6 +368,12 @@ def load(path):
         switches.append(sw)
     for h in t.get("hook", []):
         hooks.setdefault(known(h["module"], "a [[hook]]"), []).append(_addr(h["at"], symbols))
+    replaces = {}
+    for r in t.get("replace", []):
+        mod = known(r["module"], "a [[replace]]")
+        if not re.fullmatch(r"[A-Za-z_]\w*", r["symbol"]):
+            raise SystemExit(f"{path}: [[replace]] symbol {r['symbol']!r} is not a C identifier")
+        replaces.setdefault(mod, {})[_addr(r["at"], symbols)] = r["symbol"]
     game = t.get("game", {})
     playtest = None
     if "playtest" in t:
@@ -381,7 +394,7 @@ def load(path):
     return Game(game.get("name", os.path.basename(root)), root, os.path.join(root, game.get("build", "build")),
                 os.path.join(root, game.get("seeds", "seeds.json")), modules, symbols, tasks, hooks,
                 list(game.get("cmake", [])), playtest, _checkpoint(t["checkpoint"], symbols) if "checkpoint" in t else None,
-                switches, inventory)
+                switches, inventory, replaces=replaces)
 
 
 def _register(name):

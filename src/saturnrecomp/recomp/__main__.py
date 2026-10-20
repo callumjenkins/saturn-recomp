@@ -114,8 +114,9 @@ def volatile_literals(prog):
 
 class Module:
     def __init__(self, name, path, base, seeds=(), hooks=(), runtime_literals=False, callable_entry=False,
-                 unwind_returns=False):
+                 unwind_returns=False, replaces=None):
         self.name, self.path, self.base = name, path, base
+        self.replaces = replaces or {}
         self.hooks = frozenset(hooks)
         self.runtime_literals = runtime_literals
         self.callable_entry = callable_entry
@@ -156,15 +157,21 @@ class Module:
 
         for i, e in enumerate(self.entries):
             fn = prog.funcs[e]
-            body = E.Body(prog, fn, entries, volatile, comments, self.hooks & set(fn.code), self.unwind_returns)
-            lines = body.emit()
-            lines.insert(1, "    ran[%d] = 1;" % i)              # for --coverage: this function has run
-            buf.append("\n".join(lines))
-            places.append((e, [(a, k + (k >= 1), kind) for a, k, kind in body.locations]))
-            for k, v in body.sites.items():
-                self.sites[k] = self.sites.get(k, 0) + v
-            self.unknown += [(t, e) for t in body.unknown]
-            self.n_calls += sum(1 for a in fn.code if body.ops[a].op == "bsr")
+            if e in self.replaces:                                 # the game layer's function stands in
+                lines = ["void %s(SH2Context& c) {" % E.fname(e), "    ran[%d] = 1;" % i,
+                         "    ::%s(c);" % self.replaces[e], "    c.pc = c.pr;", "}"]
+                buf.append("\n".join(lines))
+                places.append((e, []))
+            else:
+                body = E.Body(prog, fn, entries, volatile, comments, self.hooks & set(fn.code), self.unwind_returns)
+                lines = body.emit()
+                lines.insert(1, "    ran[%d] = 1;" % i)          # for --coverage: this function has run
+                buf.append("\n".join(lines))
+                places.append((e, [(a, k + (k >= 1), kind) for a, k, kind in body.locations]))
+                for k, v in body.sites.items():
+                    self.sites[k] = self.sites.get(k, 0) + v
+                self.unknown += [(t, e) for t in body.unknown]
+                self.n_calls += sum(1 for a in fn.code if body.ops[a].op == "bsr")
             count += len(fn.code)
             self.n_ins += len(fn.code)
             if count >= per_file:
@@ -178,7 +185,10 @@ class Module:
             f.write("".join("%08X\t%08X\t%s\t%s\t%d\n" % r for r in sorted(self.rows)))
 
         with Out(os.path.join(out, self.ns + "_funcs.h")) as f:
-            f.write('#pragma once\n#include "saturn/sh2.h"\n\nnamespace %s {\n' % self.ns)
+            f.write('#pragma once\n#include "saturn/sh2.h"\n\n')
+            for sym in sorted(set(self.replaces.values())):
+                f.write("void %s(SH2Context& c);\n" % sym)      # the game layer's, outside the namespace
+            f.write("\nnamespace %s {\n" % self.ns)
             for e in self.entries:
                 f.write("void %s(SH2Context& c);\n" % E.fname(e))
             f.write("extern uint8_t ran[];\nextern const SH2Module module;\n}  // namespace %s\n" % self.ns)
@@ -256,10 +266,12 @@ endif()
 
 
 def generate(specs, out, per_file=8000, comments=True, optest=False, log=print, hooks=None, tasks=None,
-             runtime_literals=None, callable_entries=None, unwind_returns=None, task_switches=()):
+             runtime_literals=None, callable_entries=None, unwind_returns=None, task_switches=(), replaces=None):
     """hooks: {program name: [address, ...]}, see --hook. tasks: (setjmp, longjmp), see --tasks.
+    replaces: {program name: {entry: symbol}}: that function's body calls `void symbol(SH2Context&)`, then returns.
     task_switches: [(save, save_key, resume_sp, switch, switch_key)], config.TaskSwitch's fields."""
     hooks = hooks or {}
+    replaces = replaces or {}
     runtime_literals = runtime_literals or set()
     callable_entries = callable_entries or set()
     unwind_returns = unwind_returns or set()
@@ -273,8 +285,11 @@ def generate(specs, out, per_file=8000, comments=True, optest=False, log=print, 
     for name, path, base, seeds in specs:
         t = time.time()
         m = Module(name, path, base, seeds, hooks.get(name, ()), name in runtime_literals,
-                   name in callable_entries, name in unwind_returns)
+                   name in callable_entries, name in unwind_returns, replaces.get(name))
         m.generate(out, per_file, comments, log)
+        stray = set(m.replaces) - set(m.prog.funcs)
+        if stray:
+            raise SystemExit("%s: replace at %s, not a function entry" % (name, ", ".join("%08X" % a for a in sorted(stray))))
         missing = m.hooks - {a for f in m.prog.funcs.values() for a in f.code}
         if missing:
             raise SystemExit("%s: hook at %s, not in any function's code" % (name, ", ".join("%08X" % a for a in sorted(missing))))

@@ -4,7 +4,7 @@
     name = "Saturn Bomberman (USA)"
     seeds = "tools/seeds.json"      # seeds the learning loop found, by module
     build = "build"
-    cmake = ["SATURN_VDP1_GPL=ON"]  # optional: the runtime's build options (runtime/runtime.cmake)
+    cmake = ["SATURN_VDP1_GPL=ON"]  # optional: the runtime's build options (runtime/runtime.cmake); {root} is the game's folder
 
     [symbols]
     krnl_setjmp = 0x060061C4

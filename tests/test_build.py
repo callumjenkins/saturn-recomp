@@ -82,3 +82,16 @@ def test_a_build_option_is_a_change(tmp_path):
     g = game(tmp_path, TOML.replace('name = "Test"', 'name = "Test"\ncmake = ["SATURN_VDP1_GPL=ON"]'))
     assert g.cmake == ["SATURN_VDP1_GPL=ON"]
     assert build.stale(g) == ["game.toml"]
+
+
+def test_a_cmake_option_can_name_the_games_folder(tmp_path, monkeypatch):
+    g = game(tmp_path, TOML.replace('name = "Test"', 'name = "Test"\ncmake = ["SATURN_EXTRA={root}/x.cmake"]'))
+    seen = []
+    monkeypatch.setattr(build, "_run", lambda what, cmd, cwd: seen.append(cmd))
+    monkeypatch.setattr(build, "build", lambda game: None)
+    monkeypatch.setattr(build.prereqs, "check", lambda log: [])
+    monkeypatch.setattr(build, "generate", lambda specs, out, **k: os.makedirs(out))
+    monkeypatch.setattr(build, "specs", lambda game, log: [])
+    monkeypatch.setattr(build, "inputs", lambda game: {})
+    build.recompile(game=g, log=lambda s: None)
+    assert "-DSATURN_EXTRA=%s/x.cmake" % tmp_path in seen[0]

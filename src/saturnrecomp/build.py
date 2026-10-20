@@ -86,7 +86,7 @@ def recompile(game, log=print):
     if os.path.exists(os.path.join(build_dir, "CMakeCache.txt")):
         os.remove(os.path.join(build_dir, "CMakeCache.txt"))
     _run("configuring the build", ["cmake", "-S", out, "-B", build_dir, "-G", "Ninja",
-                                   "-DCMAKE_CXX_COMPILER=clang++", *(f"-D{o}" for o in game.cmake)], build_dir)
+                                   "-DCMAKE_CXX_COMPILER=clang++", *(f"-D{o.replace('{root}', game.root)}" for o in game.cmake)], build_dir)
     build(game)
     with open(_stamp(game), "w") as f:
         json.dump(made_from, f, indent=1, sort_keys=True)

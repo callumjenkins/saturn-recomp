@@ -12,7 +12,8 @@
 // 588 stereo samples go to the SCSP's external input (cd_audio_sample, taken
 // by sound.cpp once a sample). The file-system commands (0x70-0x75) work on the ISO
 // 9660 directory the way the CD block's own firmware does. With --accurate-drive, a
-// directory command raises EFLS only once the drive has read the directory, as in Mednafen.
+// directory command raises EFLS only once the drive has read the directory, as in Mednafen, and
+// Seek Disc to pause answers BUSY until the drive's status check reports it.
 //
 // Command set and answer layouts: Sega's CD block documentation as used by
 // SBL's CDC library; where the documents leave a value open, the choice is
@@ -59,6 +60,7 @@ static uint64_t g_cdrom_clear_at, g_fs_data_at;
 static const uint64_t kCdromClearNs = 500ull * 1000000000ull / (44100 * 256);
 static uint64_t g_play_t0, g_play_done;         // time the play began, sectors read since
 static uint64_t g_seek_from, g_seek_until;      // --accurate-drive: a play's seek, BUSY then SEEK, until PLAY
+static uint64_t g_pause_at;                     // --accurate-drive: a pause's BUSY, until PAUSE
 static int g_getlen = 2048;
 static std::deque<int16_t> g_cdda;              // the audio played, not yet taken by the SCSP (L, R)
 
@@ -226,6 +228,15 @@ uint64_t cd_seek_ns(uint32_t from, uint32_t to, int rate, uint64_t* busy_ns) {
 
 int cd_data_rate() { return g_cfg.accurate_drive ? 150 : 300; }
 
+// Mednafen's drive reads a sector at `t0` and every sector's time after, and checks its status 17 712 of
+// its clocks after each read: the first check after `now`.
+uint64_t cd_pause_ns(uint64_t now, uint64_t t0, int rate) {
+    const uint64_t sector = 1000000000ull / (uint64_t)rate, check = 17712ull * 1000000000ull / (44100 * 256);
+    uint64_t at = t0 + check;
+    if (now >= at) at += ((now - at) / sector + 1) * sector;
+    return at;
+}
+
 void cd_tick() {
     uint64_t now = sat_now();
     if (g_cdrom_clear_at && now >= g_cdrom_clear_at) g_is_cdrom = false, g_cdrom_clear_at = 0;
@@ -238,6 +249,7 @@ void cd_tick() {
     } else if (g_fs_done && now >= g_seek_from) {
         g_status = ST_SEEK;
     }
+    if (g_pause_at && now >= g_pause_at) g_status = ST_PAUSE, g_pause_at = 0;
     if (g_status == ST_BUSY && g_seek_until && now >= g_seek_from) g_status = ST_SEEK;
     if (g_status == ST_SEEK && g_seek_until && now >= g_seek_until) {
         g_status = ST_PLAY;
@@ -328,6 +340,7 @@ static void fs_read(uint32_t fad, uint32_t size) {
     g_fs_done = now + cd_fs_read_ns(g_fad, fad, n, !g_root_known, &busy);
     g_seek_from = now + busy;
     g_seek_until = 0;
+    g_pause_at = 0;
     g_fad = fad + n;
     g_status = ST_BUSY;
     g_cdrom_clear_at = now + kCdromClearNs;
@@ -363,6 +376,7 @@ static void start_play(uint32_t start, uint32_t end, int mode) {
     g_play_done = 0;
     g_seek_until = 0;
     g_fs_done = 0;
+    g_pause_at = 0;
     if (g_cfg.accurate_drive) {
         uint64_t busy;
         g_seek_until = g_play_t0 + cd_seek_ns(head, g_fad, g_audio_play ? 75 : 150, &busy);
@@ -410,7 +424,7 @@ static void command() {
         g_hirq |= CMOK;
         break;
     case 0x04:                                  // Initialize CD System
-        if (cr1 & 1) { reset_all(); g_status = ST_PAUSE; }
+        if (cr1 & 1) { reset_all(); g_status = ST_PAUSE; g_pause_at = 0; }
         if (cr1 & 0x10) sat_trace("CD: 1x speed asked for (kept at 2x)");
         report();
         g_hirq |= CMOK | ESEL;
@@ -431,12 +445,21 @@ static void command() {
         break;
     case 0x11: {                                // Seek Disc
         uint32_t pos = (uint32_t)(cr1 & 0xFF) << 16 | cr2;
-        if (pos == 0) g_status = ST_STANDBY, g_is_cdrom = true, g_cdrom_clear_at = 0;
-        else {                                  // 0xFFFFFF: pause where it is
-            if (pos == 0xFFFFFF) {}
-            else if (pos & 0x800000) g_fad = pos & 0x7FFFFF;
-            else g_fad = track_fad(pos >> 8, false);
-            g_status = ST_PAUSE;
+        if (pos == 0xFFFFFF) {                  // pause where it is
+            // PAUSE at the drive's next check, or when playing at the one after, since the next only sees the play's end.
+            const bool playing = g_status == ST_PLAY;
+            if (g_cfg.accurate_drive && (playing || g_status == ST_PAUSE)) {
+                const int rate = g_audio_play ? 75 : cd_data_rate();
+                g_pause_at = cd_pause_ns(sat_now(), g_play_t0, rate) + (playing ? 1000000000ull / rate : 0);
+                g_status = ST_BUSY;
+            } else if (!g_pause_at) {
+                g_status = ST_PAUSE;
+                g_seek_until = 0;
+            }
+        } else {
+            g_pause_at = 0;
+            if (pos == 0) g_status = ST_STANDBY, g_is_cdrom = true, g_cdrom_clear_at = 0;
+            else g_fad = pos & 0x800000 ? pos & 0x7FFFFF : track_fad(pos >> 8, false), g_status = ST_PAUSE;
         }
         report();
         g_hirq |= CMOK;
@@ -587,7 +610,7 @@ static void command() {
         report(); g_hirq |= CMOK;
         break;
     }
-    case 0x75: g_status = ST_PAUSE; g_fs_done = 0; report(); g_hirq |= CMOK | EFLS; break;   // Abort File
+    case 0x75: g_status = ST_PAUSE; g_fs_done = 0; g_pause_at = 0; report(); g_hirq |= CMOK | EFLS; break;   // Abort File
     case 0xE0: report(); g_hirq |= CMOK | EFLS | CSCT; break;                 // Authenticate Device
     case 0xE1: answer(status_hi(), 4, 0, 0); g_hirq |= CMOK; break;                 // a Saturn disc
     default:
@@ -619,6 +642,7 @@ void cd_init() {
     g_fad = 150;
     g_seek_until = 0;
     g_fs_done = 0;
+    g_pause_at = 0;
     g_root_known = false;
     g_repeat = g_repeat_left = 0;
     g_audio_play = false;
@@ -682,3 +706,4 @@ void cdblock_state(State& s) {
 void cddrive_state(State& s) { s(g_seek_from), s(g_seek_until); }
 void cdfs_state(State& s) { s(g_fs_done), s(g_root_known); }
 void cdpos_state(State& s) { s(g_is_cdrom), s(g_cdrom_clear_at), s(g_fs_data_at); }
+void cdpause_state(State& s) { s(g_pause_at); }

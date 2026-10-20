@@ -184,6 +184,7 @@ std::string cdrom_first_file();                       // the 1st file of the roo
 void cd_init();
 void cd_tick();
 uint64_t cd_seek_ns(uint32_t from, uint32_t to, int rate, uint64_t* busy_ns);   // a play's seek from FAD to FAD until it plays, with --accurate-drive
+uint64_t cd_pause_ns(uint64_t now, uint64_t t0, int rate);   // the drive's first status check after now, reading from t0, with --accurate-drive
 int cd_data_rate();                                  // data sectors a second while the drive plays
 uint64_t cd_fs_read_ns(uint32_t head, uint32_t fad, uint32_t sectors, bool find_root, uint64_t* busy_ns);   // a directory read, with --accurate-drive
 uint32_t cd_read(uint32_t off, int size);

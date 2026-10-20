@@ -5,7 +5,10 @@
 // back-edges, calls, `ldc ...,sr`). Every kBudget safe points the master
 // polls: time moves on, the devices run, interrupts are taken. Time is
 // virtual by default (kNsPerSafePoint per safe point: a run is the same run
-// every time) or the host's clock (`realtime`).
+// every time) or the host's clock (`realtime`). In virtual time a poll that
+// would pass line 0 or line 1 is cut short to land on it, so VBlank-OUT is taken
+// on time and its handler has one line before line 1 decides the frame change.
+// In real time the raster stops at line 0 for the poll instead (video_tick).
 //
 // Interrupts are taken at a poll, as the CPU would between two instructions:
 // SR and a return PC pushed on the guest stack, the mask raised to the
@@ -63,6 +66,13 @@ struct SlaveReset {};
 static uint64_t g_vtime;                        // virtual ns
 static std::chrono::steady_clock::time_point g_t0;
 static int g_starts;
+
+// The safe points until the next poll.
+static int32_t slice(uint64_t t) {
+    if (g_cfg.realtime) return kBudget;
+    uint64_t left = (video_next_blanking_line(t) - t + kNsPerSafePoint - 1) / kNsPerSafePoint;
+    return left < (uint64_t)kBudget ? (int32_t)left : kBudget;
+}
 
 uint64_t sat_now() {
     if (g_cfg.realtime)
@@ -530,14 +540,15 @@ void master_poll_devices() {
 }
 
 void sh2_poll(SH2Context& c) {
-    c.budget = kBudget;
     if (c.cpu == 1) {
+        c.budget = kBudget;
         if (++g_slave_polls >= kSlaveSlice) to_master();
         return;
     }
     g_poll_ring[g_poll_pos++ % 4096] = __builtin_return_address(0);
-    g_vtime += kBudget * kNsPerSafePoint;
+    g_vtime += slice(g_vtime) * kNsPerSafePoint;
     master_poll_devices();
+    c.budget = slice(g_vtime);
     scu_deliver(c);
     onchip_deliver(c);
 }
@@ -571,9 +582,12 @@ void sat_interrupt(SH2Context& c, uint32_t vec, uint32_t level) {
 void sh2_sleep(SH2Context& c, uint32_t pc) {
     // wait for an interrupt: time passes until one is taken
     for (int i = 0; i < 100000; ++i) {
-        g_vtime += kBudget * kNsPerSafePoint;
+        g_vtime += slice(g_vtime) * kNsPerSafePoint;
         master_poll_devices();
-        if (scu_deliver(c) | onchip_deliver(c)) return;
+        if (scu_deliver(c) | onchip_deliver(c)) {
+            c.budget = slice(g_vtime);
+            return;
+        }
     }
     sat_fatal("sleep at %08X: nothing woke it", pc);
 }
@@ -644,7 +658,7 @@ int saturn_main(const SaturnConfig& cfg) {
         g_modem = std::make_unique<Modem>(std::move(line));
     }
     g_master = SH2Context{};
-    g_master.budget = kBudget;
+    g_master.budget = slice(g_vtime);
     video_init();
     sound_init();
     cd_init();

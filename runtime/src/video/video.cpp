@@ -96,15 +96,23 @@ static void vblank_in(uint64_t now) {
     host_pace(now);
 }
 
+uint64_t video_next_blanking_line(uint64_t now) {
+    uint64_t m = now / kLineNs + 1;
+    if (m % kLines > 1) m += kLines - m % kLines;      // on to the next line 0
+    return m * kLineNs;
+}
+
 void video_tick(uint64_t now) {
     uint64_t target = now / kLineNs;
     while (g_line_abs < target) {
         ++g_line_abs;
         int line = (int)(g_line_abs % kLines);
-        if (line == 0) { vdp1_vblank_out(); scu_raise(IRQ_VBLANK_OUT); scu_frame_event(1); }
+        if (line == 0) { scu_raise(IRQ_VBLANK_OUT); scu_frame_event(1); }
+        if (line == 1) vdp1_vblank_out();       // the first HBlank after VBlank-OUT, as Mednafen decides
         if (line == display_lines()) vblank_in(g_line_abs * kLineNs);
         scu_raise(IRQ_HBLANK_IN);
         scu_line(line);
+        if (line == 0) break;                   // VBlank-OUT's handler runs before line 1 comes
     }
     vdp1_tick(now);
 }

@@ -18,6 +18,14 @@
 // direction decides. A line wholly outside the clipping is drawn as its first point only, and
 // only for a shape's last line; one that has been inside the clipping stops when it leaves.
 // Lines and polylines are lines alone, without anti-aliasing. Coordinates wrap at 11 bits.
+//
+// What a draw costs the chip, in g_draw_cycles: setting up a line 8 cycles, 12 with pre-clipping;
+// each pixel stepped through 1, or 6 where it reads the framebuffer (MSB on, shadow,
+// half-transparency), and a further 48/256 of the pixels' cycles (24/256 at 8 bits a pixel); a
+// Gouraud table 4, a lookup table 16, and a line command 1 and 2 a line with Gouraud.
+// Mednafen carries the part of a cycle left over from one draw to the next and starts each draw
+// with 263 cycles in hand, so its draws end up to that much sooner; here each draw starts from 0,
+// which leaves the machine's state as it was.
 
 namespace {
 
@@ -154,8 +162,8 @@ struct Edge {
 
 // One line from p0 to p1; a texture's row `row`, its columns stepped from p0.t to p1.t. Returns
 // whether pre-clipping found it wholly outside, when it is drawn only if `always` is set, as a
-// point.
-bool raster_line(const Cmd& c, Vtx p0, Vtx p1, bool aa, int row, bool always) {
+// point. `cycles` gains the pixels' cycles.
+bool line_pixels(const Cmd& c, Vtx p0, Vtx p1, bool aa, int row, bool always, uint32_t& cycles) {
     const bool pcd = c.pmod & 0x800, hss = c.pmod & 0x1000;
     const bool uclip_en = c.clip, uclip_out = c.outside;
     p0.x &= 0x1FFF; p0.y &= 0x1FFF; p1.x &= 0x1FFF; p1.y &= 0x1FFF;
@@ -241,12 +249,14 @@ bool raster_line(const Cmd& c, Vtx p0, Vtx p1, bool aa, int row, bool always) {
     const uint32_t sys = (uint32_t)(g_sys_y & 0x3FF) << 16 | (uint32_t)(g_sys_x & 0x3FF);
     const uint32_t u0 = (uint32_t)(g_uy0 & 0x3FF) << 16 | (uint32_t)(g_ux0 & 0x3FF);
     const uint32_t u1 = (uint32_t)(g_uy1 & 0x3FF) << 16 | (uint32_t)(g_ux1 & 0x3FF);
+    const uint32_t pixel_cycles = (c.mon || (c.ccb & 1)) ? 6 : 1;
     // false: the line has left the clipping after being inside it, and ends
     auto pixel = [&](uint32_t pxy, uint16_t pix, bool transparent) {
         bool out = (uclip_en && !uclip_out) ? (((u1 - pxy) | (pxy - u0)) & 0x80008000) != 0
                                             : ((sys - pxy) & 0x80008000) != 0;
         if (out && !drawn_ac) return false;
         drawn_ac &= out;
+        cycles += pixel_cycles;
         if (uclip_en) {
             if (!uclip_out) out |= ((sys - pxy) & 0x80008000) != 0;
             else out |= !(((u1 - pxy) | (pxy - u0)) & 0x80008000);
@@ -281,6 +291,16 @@ bool raster_line(const Cmd& c, Vtx p0, Vtx p1, bool aa, int row, bool always) {
         if (!pixel(xy, pix, transparent)) return clipped;
         if (c.gouraud) shade.step();
     } while (xy != term);
+    return clipped;
+}
+
+bool raster_line(const Cmd& c, Vtx p0, Vtx p1, bool aa, int row, bool always) {
+    g_draw_cycles += (c.pmod & 0x800) ? 8 : 12;
+    uint32_t cycles = 0;
+    bool clipped = line_pixels(c, p0, p1, aa, row, always, cycles);
+    g_dta += cycles * (g_fb8 ? 24 : 48);
+    g_draw_cycles += cycles + (g_dta >> 8);
+    g_dta &= 0xFF;
     return clipped;
 }
 
@@ -321,6 +341,9 @@ static void draw_shape(const Cmd& c0, const uint8_t* cmd, int comm, Pt* p) {
     if (c.textured && c.cmode == 1)             // the lookup table's address ignores the colour's low 2 bits
         for (int i = 0; i < 16; ++i) c.lut[i] = tw((uint32_t)(c.colr & ~3) * 8 + i * 2);
     if (c.textured && c.cmode == 5) c.srca &= ~0xFu;
+    if (c.gouraud) g_draw_cycles += comm < 5 ? 4 : comm == 6 ? 2 : 8;
+    if (comm >= 5) g_draw_cycles += 1;
+    if (c.textured && c.cmode == 1) g_draw_cycles += 16;
     uint16_t gt[4] = {packed(c.g[0]), packed(c.g[1]), packed(c.g[2]), packed(c.g[3])};
     Vtx v[4];
     for (int i = 0; i < 4; ++i) v[i] = {p[i].x, p[i].y, gt[i], 0};

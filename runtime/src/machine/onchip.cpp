@@ -39,9 +39,14 @@ uint64_t sat_mul_div(uint64_t a, uint32_t b, uint64_t c) {
     return q * b + (x / c << 16) + ((x % c << 16) + r * (b & 0xFFFF)) / c;
 }
 
+static uint32_t master_hz() { return bios_pal() ? 1734687500u : 1746818182u; }
+
 uint64_t onchip_phi_clocks(uint64_t ns) {
-    const uint32_t master = bios_pal() ? 1734687500u : 1746818182u;
-    return sat_mul_div(ns, master, (uint64_t)g_phi_div * 1000000000ull);
+    return sat_mul_div(ns, master_hz(), (uint64_t)g_phi_div * 1000000000ull);
+}
+
+uint64_t onchip_phi_ns(uint64_t clocks) {
+    return sat_mul_div(clocks * g_phi_div, 1000000000u, master_hz());
 }
 
 static uint32_t rd(OnChip& o, uint32_t off, int size) { return mem_rd(o.regs, off, size); }

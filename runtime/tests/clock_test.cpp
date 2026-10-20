@@ -19,3 +19,14 @@ TEST(the_on_chip_timers_count_at_320_dots_rate_until_smpc_changes_the_clock) {
     smpc_write(0x1F, 0x0F);                     // CKCHG320
     CHECK_EQ(onchip_phi_clocks(1000000000ull), 26874125ull);
 }
+
+// VDP1's cycles become time the other way, at the same two rates.
+TEST(phi_clocks_take_their_time_at_320_dots_rate_or_352s) {
+    onchip_reset(0);
+    CHECK_EQ(onchip_phi_ns(1000), 37210ull);
+    CHECK_EQ(onchip_phi_ns(26874125), 999999967ull);
+    smpc_write(0x1F, 0x0E);                     // CKCHG352
+    CHECK_EQ(onchip_phi_ns(1000), 34920ull);
+    smpc_write(0x1F, 0x0F);                     // CKCHG320
+    CHECK_EQ(onchip_phi_ns(1000), 37210ull);
+}

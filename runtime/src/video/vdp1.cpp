@@ -2,11 +2,12 @@
 // framebuffers, the frame change and the erase.
 //
 // A draw starts when PTMR is written with 1, or at a frame change with
-// PTMR 2. It is done at once, when it starts: the command table as it is at
+// PTMR 2. Its pixels are done at once, when it starts: the command table as it is at
 // that moment, from address 0, through the jumps (next, assign, call,
-// return, and their skips) to the END bit. The game waits for the
-// sprite-draw-end interrupt, 1 ms later (video.cpp's time), before it
-// touches the table again. System clipping, user clipping and the local
+// return, and their skips) to the END bit. The sprite-draw-end interrupt
+// comes when the chip would have finished, after the cycles of the SH-2's
+// clock its commands cost, and the game waits for it before it touches the
+// table again. System clipping, user clipping and the local
 // coordinates stay from one draw to the next, as on the chip.
 //
 // Shapes become pixels in vdp1_raster.inc, or with SATURN_VDP1_GPL in
@@ -23,10 +24,10 @@
 // the framebuffer, a line each in turn, and every line goes to a full-height
 // copy (1024x512, a dot a word) that VDP2 shows both fields from at once.
 //
-// Frames (FBCR): the frame changes as the VBlank ends (VBlank-OUT), as in
+// Frames (FBCR): the frame changes a line after the VBlank ends (VBlank-OUT), as in
 // Mednafen: a game that asks for it in its VBlank-IN handler (Virtual
-// Hydlide's movie player does, once a draw has ended) gets it in the same
-// blanking. One-cycle mode (FCM 0) changes frame every field and erases the
+// Hydlide's movie player does, once a draw has ended) or its VBlank-OUT handler gets it at that
+// change. One-cycle mode (FCM 0) changes frame every field and erases the
 // framebuffer it shows as it shows it; manual mode changes frame when FCT is
 // 1 and erases in the next field when FCT is 0. The erase writes EWDR over EWLR-EWRR. The CPU sees
 // the framebuffer being drawn.
@@ -201,6 +202,8 @@ static Rgb mix(const Rgb& a, const Rgb& b, int k, int n) {
 // short, as the next frame change cuts short Mednafen's, which draws in time slices.
 static const uint64_t kDrawSteps = 4000000;
 static uint64_t g_draw_steps;
+static uint64_t g_draw_cycles;                  // what the draw under way costs the chip, so far
+static uint32_t g_dta;                          // a part of a cycle not yet charged, in 256ths
 
 // The shapes drawn to pixels: vdp1_raster.inc's own rules, or with SATURN_VDP1_GPL,
 // vdp1_raster_gpl.inc's, which follow Mednafen's and are under its licence, the GPL.
@@ -328,6 +331,8 @@ static void draw() {
     uint32_t a = 0, ret = 0, last = 0;
     int n = 0;
     g_draw_steps = 0;
+    g_draw_cycles = 0;
+    g_dta = 0;
     for (int guard = 0; guard < 20000; ++guard) {
         if (g_draw_steps >= kDrawSteps) {
             static bool told;
@@ -337,6 +342,7 @@ static void draw() {
         }
         uint16_t ctrl = vw(a);
         last = a;
+        g_draw_cycles += 16;                    // the fetch, of every command the walk reaches
         if (ctrl & 0x8000) break;
         int jp = ctrl >> 12 & 7;
         if (!(jp & 4)) {
@@ -362,8 +368,9 @@ static void draw() {
     g_reg[COPR] = (uint16_t)(last >> 3);
     ++g_draws;
     g_drawing = true;
-    g_draw_end = sat_now() + 1000000;           // 1 ms
-    sat_trace("VDP1 draw %llu: %d commands", (unsigned long long)g_draws, n);
+    g_draw_end = sat_now() + onchip_phi_ns(g_draw_cycles);
+    sat_trace("VDP1 draw %llu: %d commands, %llu cycles", (unsigned long long)g_draws, n,
+              (unsigned long long)g_draw_cycles);
 }
 
 static bool matchable(const uint8_t* b) { return (cw(b, 0) & 0xF) <= 7; }

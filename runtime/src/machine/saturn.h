@@ -209,6 +209,7 @@ void onchip_input_capture(int cpu);   // SINIT/MINIT: the FRT's input-capture fl
 void onchip_reset(int cpu);
 void onchip_set_clock(bool dots352);   // SMPC's CKCHG: φ at 352 dots' rate or 320's
 uint64_t onchip_phi_clocks(uint64_t ns);   // φ's clocks in `ns`: the FRT's and the watchdog's time base
+uint64_t onchip_phi_ns(uint64_t clocks);    // the time `clocks` of φ take: also VDP1's clock
 uint64_t sat_mul_div(uint64_t a, uint32_t b, uint64_t c);   // a * b / c, rounded down, for c below 2^47
 bool onchip_deliver(SH2Context& c);   // the watchdog's interval interrupt, if due and above c's mask; taken?
 
@@ -216,6 +217,7 @@ bool onchip_deliver(SH2Context& c);   // the watchdog's interval interrupt, if d
 void video_init();
 void video_reboot();                  // the BIOS boots a disc again: VDP2's registers as at power-on
 void video_tick(uint64_t now);        // raster timing: VBlank in/out, lines, VDP1 frames
+uint64_t video_next_blanking_line(uint64_t now);   // when the next line 0 (VBlank-OUT) or line 1 comes
 uint32_t video_read(uint32_t a, int size);    // VDP1, VDP2, SCSP (canonical addresses)
 void video_write(uint32_t a, uint32_t v, int size);
 bool video_owns(uint32_t a);

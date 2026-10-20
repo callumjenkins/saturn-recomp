@@ -9,6 +9,10 @@ saturn-recomp began as a fork of Samuele Voltan's
 separately. It holds what every Saturn game shares. What one game needs lives in that game's own
 repository, which takes saturn-recomp as a submodule.
 
+## AI disclosure
+
+Claude Code wrote most of the changes since the fork from saturnkit, working from my direction and review. Runs are checked against Beetle Saturn (see below). I have not audited how the saturnkit code it forked from was written, so this section does not cover it.
+
 ## Games built on it
 
 | Game | Repository | What it added |

@@ -1,7 +1,7 @@
 from conftest import BASE, assemble
 
 from saturnrecomp import config
-from saturnrecomp.analysis.resume import for_game, resume_points
+from saturnrecomp.analysis.resume import analyse, for_game, resume_points
 
 NOP, RTS = 0x0009, 0x000B
 G, F, Y, H = BASE, BASE + 0x08, BASE + 0x10, BASE + 0x14
@@ -61,3 +61,17 @@ switch = {Y:#x}
 switch_key = "r0"
 """)
     assert for_game(config.load(str(tmp_path / "game.toml"))) == {"MAIN": [G + 4, F + 4]}
+
+
+def test_the_yielding_functions_are_the_yield_and_the_functions_that_reach_it(tmp_path):
+    path = tmp_path / "prog.bin"
+    path.write_bytes(CODE)
+    yielding, _, unknown = analyse(str(path), BASE, [H], [Y])
+    assert yielding == {G, F, Y} and unknown == 1
+
+
+def test_a_function_that_calls_an_unknown_target_yields_when_asked(tmp_path):
+    path = tmp_path / "prog.bin"
+    path.write_bytes(CODE)
+    assert H in analyse(str(path), BASE, [H], [Y], unknown_yields=True)[0]
+    assert H not in analyse(str(path), BASE, [H], [Y])[0]

@@ -45,9 +45,10 @@ def _call_sites(p):
                 yield f.entry, a, lit[1] if lit and lit[0] == "lit" else _held(p, f, ins.n)
 
 
-def resume_points(path, base, seeds, yields, unknown_yields=False, log=None, inside=()):
-    """The sorted return addresses of the calls that can yield, in the program at `path` loaded at `base`.
-    The functions whose code holds an address in `inside` yield as well as those in `yields`."""
+def analyse(path, base, seeds, yields, unknown_yields=False, inside=()):
+    """(the entries of the functions that can yield, the sorted return addresses of the calls that can),
+    in the program at `path` loaded at `base`. The functions whose code holds an address in `inside` yield
+    as well as those in `yields`."""
     with open(path, "rb") as f:
         p = discover.Program(sh2.Image(f.read(), base), [base, *seeds])
     sites = list(_call_sites(p))
@@ -64,10 +65,25 @@ def resume_points(path, base, seeds, yields, unknown_yields=False, log=None, ins
             break
         yielding |= more
     points = sorted({a + 4 for _, a, t in sites if may_yield(t)})
+    return yielding, points, sum(1 for _, _, t in sites if t is None)
+
+
+def resume_points(path, base, seeds, yields, unknown_yields=False, log=None, inside=()):
+    """The sorted return addresses of the calls that can yield, in the program at `path` loaded at `base`."""
+    yielding, points, unknown = analyse(path, base, seeds, yields, unknown_yields, inside)
     if log:
-        unknown = sum(1 for _, _, t in sites if t is None)
         log(f"{len(yielding)} yielding functions, {len(points)} resume points, {unknown} calls with no known target")
     return points
+
+
+def yielding_functions(game):
+    """The entries of the functions that can yield, in the module [tasks] names. A replacement for one of
+    these cannot be parked and resumed on another fiber, so it has to leave them alone."""
+    t = game.tasks
+    if not t:
+        return set()
+    m = game.module(t.module)
+    return analyse(m.file, m.base, m.seeds + game.learned_seeds().get(m.name, []), t.yields, t.unknown_yields)[0]
 
 
 def for_game(game, log=None):

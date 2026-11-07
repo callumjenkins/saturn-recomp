@@ -1,0 +1,26 @@
+# Writes OUTPUT, saturn_build_id.h, with the builds a session's terms name: the runtime's commit, and the game's as
+# SATURN_GAME_BUILD gives it or else GAME_DIR's commit, "dev" when neither is known. Rewritten only when they change.
+#   cmake -DRUNTIME_DIR=... -DGAME_DIR=... -DGAME_BUILD=... -DOUTPUT=... -P build_id.cmake
+function(commit_of dir out)
+  set(${out} "dev" PARENT_SCOPE)
+  if(dir)
+    execute_process(COMMAND git -C ${dir} rev-parse --short=7 HEAD OUTPUT_VARIABLE c
+        OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET RESULT_VARIABLE failed)
+    if(NOT failed AND c)
+      set(${out} ${c} PARENT_SCOPE)
+    endif()
+  endif()
+endfunction()
+commit_of("${RUNTIME_DIR}" runtime)
+if(GAME_BUILD)
+  set(game ${GAME_BUILD})
+else()
+  commit_of("${GAME_DIR}" game)
+endif()
+set(text "#pragma once\n#define SATURN_RUNTIME_BUILD \"${runtime}\"\n#define SATURN_GAME_BUILD \"${game}\"\n")
+if(EXISTS ${OUTPUT})
+  file(READ ${OUTPUT} old)
+endif()
+if(NOT old STREQUAL text)
+  file(WRITE ${OUTPUT} "${text}")
+endif()

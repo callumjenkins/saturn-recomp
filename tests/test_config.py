@@ -136,3 +136,21 @@ def test_a_sound_program_reads_from_its_offset_to_its_length_or_the_files_end(tm
                                         '[[inventory.sound]]\nname = "B"\nsource = "/S.BIN"\noffset = 5\n')
     g = config.load(str(tmp_path / "game.toml"))
     assert [s.read(g.inventory.files) for s in g.inventory.sound] == [bytes([2, 3, 4]), bytes([5, 6, 7])]
+
+
+CLASSIC_TOML = TOML + """
+[online.classic]
+boot = ["100:UP", "106:"]
+program = "XS"
+starts = 500
+wait = ["40:A", "46:"]
+dial = ["40:B", "46:"]
+"""
+
+
+def test_the_classic_call_steers_from_power_on_then_from_each_start_of_its_program(tmp_path):
+    c = load(tmp_path, CLASSIC_TOML).classic
+    assert c.first("dial") == ["100:UP", "106:", "540:B", "546:"]
+    assert c.steer("wait") == ["--steer", "100:UP,106:,540:A,546:", "--steer-again", "XS:40:A,46:"]
+    assert c.steer("dial") == ["--steer", "100:UP,106:,540:B,546:", "--steer-again", "XS:40:B,46:"]
+    assert load(tmp_path, TOML).classic is None

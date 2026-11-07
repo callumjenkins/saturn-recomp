@@ -19,6 +19,9 @@ export const MAX_PADS = 10
 
 export const TERM_FIELDS = ['product', 'game', 'runtime', 'mode'] as const
 
+/** A classic room plays the game's own NetLink battle, which is one console calling another. */
+const CLASSIC_PEERS = 2
+
 const CODE_LETTERS = 'BCDFGHJKLMNPQRSTVWXZ'
 
 const STUN_ONLY: IceServer[] = [{ urls: ['stun:stun.cloudflare.com:3478'] }]
@@ -103,6 +106,7 @@ export class Room extends DurableObject<Env> {
 		const differs = roomTerms ? TERM_FIELDS.filter((f) => roomTerms[f] !== terms[f]) : []
 		if (roomTerms && differs.length)
 			return refuse(ws, differs.map((f) => `the ${f} differs: the room's is ${roomTerms[f]}, yours is ${terms[f]}`).join('; '))
+		if (terms.mode === 'classic' && others.length >= CLASSIC_PEERS) return refuse(ws, `a classic room takes ${CLASSIC_PEERS} peers`)
 		if (!roomTerms) await this.ctx.storage.put('terms', terms)
 		await this.ctx.storage.deleteAlarm()
 

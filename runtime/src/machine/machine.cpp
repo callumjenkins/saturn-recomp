@@ -627,6 +627,7 @@ void sh2_program_start(SH2Context& c, uint32_t addr) {
     ++g_starts;
     sat_note("program start %d: %s at %08X (r4 %08X, r5 %08X)", g_starts, m ? m->name : "(same module)",
              addr, c.r[4], c.r[5]);
+    if (m) online_program_start(m->name);
     throw ProgramStart{addr};
 }
 
@@ -641,6 +642,7 @@ int saturn_main(const SaturnConfig& cfg) {
         g_sh2_watch_report = watch_report;
     }
     smpc_input_script(cfg.input);
+    if (!cfg.steer.empty()) smpc_steer(smpc_parse_script(cfg.steer), 0);
     parse_writes(cfg.writes);
     parse_cheats(cfg.cheats);
     parse_keep(cfg.progress_keep);
@@ -654,7 +656,9 @@ int saturn_main(const SaturnConfig& cfg) {
     }
     if (!cfg.modem.empty()) {
         std::string error;
-        std::unique_ptr<ModemLine> line = cfg.modem == "line" ? modem_no_line() : modem_tcp_line(cfg.modem, error);
+        std::unique_ptr<ModemLine> line = cfg.modem == "line"      ? modem_no_line()
+                                          : cfg.modem == "session" ? online_modem_line(error)
+                                                                   : modem_tcp_line(cfg.modem, error);
         if (!line) { std::fprintf(stderr, "--modem %s: %s\n", cfg.modem.c_str(), error.c_str()); return 2; }
         g_modem = std::make_unique<Modem>(std::move(line));
     }

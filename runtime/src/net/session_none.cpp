@@ -6,7 +6,7 @@ struct Session::Impl {
     std::vector<SessionEvent> events;
 };
 
-Session::Session(const std::string&, const SessionHello&) : impl_(std::make_unique<Impl>()) {
+Session::Session(const std::string&, const SessionHello&, std::chrono::milliseconds) : impl_(std::make_unique<Impl>()) {
     impl_->events.push_back({.kind = SessionEvent::Kind::RoomClosed, .text = "this build has no network play"});
 }
 

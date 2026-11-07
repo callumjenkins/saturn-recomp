@@ -27,6 +27,7 @@
 #pragma once
 #include "saturn/sh2.h"
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -66,8 +67,13 @@ struct SaturnConfig {
     std::string other_disc;         // a second disc that files and audio tracks are borrowed from (cdrom_borrow)
     std::string from_other;         // ... those files: "PATH=OTHERPATH,..."
     std::string tracks_from_other;  // ... and those tracks: "2,..."
-    std::string modem;              // a NetLink fitted: "line" with nothing on its line, or a TCP line (modem.h); empty: none
+    std::string modem;              // a NetLink fitted: "line" with nothing on its line, "session" to --session's other
+                                    // peer, or a TCP line (modem.h); empty: none
     std::string session;            // a playtest room's WebSocket URL, which the run joins (online.cpp); empty: none
+    std::string steer;              // presses over the controllers' from power-on, as --input's: the way to the game's call
+    std::string line_in;            // a classic match's OUT/line.txt, which --modem session's line hears again
+    std::string steer_again;        // "PROGRAM:SCRIPT": SCRIPT, from each later start of PROGRAM, once the player asks
+                                    // (asked late, from the moment its first press comes then)
     int64_t clock = -1;             // the SMPC's clock at power-on, seconds since 1970 (no time zone); -1: the host's
     uint32_t task_setjmp = 0, task_longjmp = 0;   // the game's own task switch (tasks.cpp), 0: none
     int agent_fd = -1;              // a socket another program plays the run through (agent.cpp)
@@ -118,8 +124,16 @@ void state_finish();                // the last dump written
 void state_load(const std::string& path);   // after the boot: the machine as the dump has it
 
 // ---- --session (online.cpp) ---------------------------------------------------------------
-void online_poll();                 // from the master's polls: the room joined once IP.BIN is in, its news noted
+void online_poll();                 // from the master's polls: the room joined once IP.BIN is in, or --line-in played
+struct ModemLine;
+std::unique_ptr<ModemLine> online_modem_line(std::string& error);   // --modem session's line, to the room's other peer
 void online_finish();               // the session left
+void online_program_start(const char* module);
+// What the room has to tell the player, over the picture: empty when there is nothing; `again` when Start
+// would play another match (--steer-again).
+struct OnlineCard { std::string text; bool again = false; };
+OnlineCard online_card();
+void online_again();                // the player chose another match
 int  sh2_active_slots();            // the modules active now (core.cpp)
 const SH2Module* sh2_active_slot(int i);
 void sh2_set_active_slot(int i, const SH2Module* m);
@@ -170,6 +184,7 @@ void smpc_tick();
 void smpc_input_script(const std::string& spec);   // "VBLANK:BUTTON+BUTTON,..."
 struct PadStep { uint64_t vblank; int pad; uint16_t pressed; };   // from VBlank on, pad (from 0) holds these bits
 std::vector<PadStep> smpc_parse_script(const std::string& spec);  // an --input script or "@FILE", in VBlank order
+void smpc_steer(const std::vector<PadStep>& steps, uint64_t from);  // `steps` from VBlank `from`, over the controllers'
 bool smpc_press(const std::string& spec, std::string& error);   // "[N.]BUTTON+BUTTON" from this VBlank on
 void smpc_set_area(char symbol);                   // the disc's first area symbol (J T U B K A E L)
 

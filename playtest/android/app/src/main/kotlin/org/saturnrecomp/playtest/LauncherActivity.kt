@@ -51,6 +51,7 @@ class LauncherActivity : Activity() {
     private lateinit var token: EditText
     private lateinit var who: Spinner
     private lateinit var playButton: Button
+    private lateinit var roomCode: EditText
     private lateinit var status: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -121,6 +122,19 @@ class LauncherActivity : Activity() {
             column.addView(this)
         }
         playButton = button("Play") { play() }
+        if (info.has("classic")) {
+            text("Online, against one other tester", bold = true).setPadding(0, pad, 0, 0)
+            button("Make a room") { playOnline(null) }
+            roomCode = EditText(this).apply {
+                hint = "A room's code"
+                inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
+                column.addView(this)
+            }
+            button("Join that room") {
+                val code = Sessions.roomCode(roomCode.text.toString())
+                if (code == null) say("A room's code is the four letters its maker's screen shows.") else playOnline(code)
+            }
+        }
         button("Save files…") { chooseSession() }
         button("My sessions") { openSessions() }
         status = text().apply { setPadding(0, pad, 0, 0) }
@@ -274,7 +288,15 @@ class LauncherActivity : Activity() {
         startActivityForResult(Intent(this, SavesActivity::class.java), SAVES)
     }
 
-    private fun play(from: File? = null, useDump: Boolean = true, branch: Sessions.Branch? = null, save: String? = null, parent: JSONObject? = null) {
+    /** Plays through a playtest room: a new one, or the room `code`. */
+    private fun playOnline(code: String?) {
+        settings.put("token", token.text.toString().trim())
+        if (credential().isEmpty()) return say("Playing online needs a tester: pick who's playing.")
+        play(online = Sessions.classicArgs(info, code))
+    }
+
+    private fun play(from: File? = null, useDump: Boolean = true, branch: Sessions.Branch? = null, save: String? = null, parent: JSONObject? = null,
+                     online: List<String> = emptyList()) {
         val cue = settings.optString("cue")
         if (cue.isEmpty()) {
             say("Choose your disc first.")
@@ -284,9 +306,9 @@ class LauncherActivity : Activity() {
         saveSettings()
         val code = credential()
         val otherCue = settings.optString("other_cue")
-        val more = other?.takeIf { settings.optBoolean("other_on") && otherCue.isNotEmpty() }?.let {
+        val more = (other?.takeIf { settings.optBoolean("other_on") && otherCue.isNotEmpty() }?.let {
             listOf("--other-disc", otherCue, "--from-other", it.getString("files"), "--track-from-other", it.getString("tracks"))
-        } ?: emptyList()
+        } ?: emptyList()) + online
         val (session, args) = Sessions.start(home, info, File(cue), send = code.isNotEmpty(), from = from, useDump = useDump, branch = branch, save = save, parent = parent, more = more)
         val record = Sessions.read(session)
         say((when {

@@ -12,9 +12,11 @@ import pytest
 from saturnrecomp.playtest import coverage, disc_image, paths, review, session, upload
 
 FAKE_SATURN = """#!{python}
-import sys, time
+import os, sys, time
 args = dict(zip(sys.argv[1::2], sys.argv[2::2]))
 open(args["--record-input"], "w").write("120:START,130:,")
+open(os.path.join(args["--out"], "line.txt"), "w").write("100 reachable 1\\n")
+print("token", os.environ["SATURN_PLAYTEST_TOKEN"])
 time.sleep(0.5)
 open(args["--coverage"], "w").write("KRNL 06010000 4 1\\nKRNL 06010010 2 0\\n")
 print("[  10.000 M] pad: FFF7")
@@ -73,8 +75,9 @@ def test_a_session_is_sent_while_playing_and_once_more_when_it_ends(tmp_path, mo
     assert last[1]["X-Playtest-Exit"].startswith("call to 06012345")
     assert last[1]["X-Playtest-Vblanks"] == "750"
     with zipfile.ZipFile(io.BytesIO(last[2])) as z:
-        assert {"session.json", "input.txt", "clock.txt", "log.txt", "coverage.txt"} <= set(z.namelist())
+        assert {"session.json", "input.txt", "clock.txt", "log.txt", "coverage.txt", "line.txt"} <= set(z.namelist())
         assert json.loads(z.read("session.json"))["build"] == "20261007-abcdef12"
+        assert "token code" in z.read("log.txt").decode()
 
 
 def test_a_session_whose_last_upload_fails_is_sent_next_time(tmp_path, endpoint):
@@ -162,9 +165,9 @@ cue = "iso-jp/jp.cue"
 """
 
 
-def other_disc_game(tmp_path):
+def other_disc_game(tmp_path, more=""):
     from saturnrecomp import config
-    (tmp_path / "game.toml").write_text(OTHER_DISC_TOML)
+    (tmp_path / "game.toml").write_text(OTHER_DISC_TOML + more)
     (tmp_path / "disc.json").write_text('{"product": "MK-1", "version": "V1.000"}')
     (tmp_path / "disc-jp.json").write_text('{"product": "T-1", "version": "V1.000"}')
     return config.load(str(tmp_path / "game.toml"))
@@ -177,6 +180,46 @@ def test_a_bundle_offers_the_other_disc_with_its_manifest(tmp_path):
     info = json.loads((out / "playtest.json").read_text())
     assert info["other_disc"] == {"label": "Japanese voices", "files": "/A/V.AIF=/V.AIF", "tracks": "2"}
     assert json.loads((out / "other-disc.json").read_text())["product"] == "T-1"
+
+
+def test_a_bundle_gives_the_launcher_both_sides_of_a_classic_call(tmp_path):
+    from saturnrecomp.playtest.__main__ import bundle
+    classic = '\n[online.classic]\nboot = ["1:UP"]\nprogram = "XS"\nstarts = 10\nwait = ["2:A"]\ndial = ["2:B"]\n'
+    out = tmp_path / "bundle"
+    bundle(other_disc_game(tmp_path, classic), "ID", str(out))
+    assert json.loads((out / "playtest.json").read_text())["classic"] == {
+        "wait": ["--steer", "1:UP,12:A", "--steer-again", "XS:2:A"],
+        "dial": ["--steer", "1:UP,12:B", "--steer-again", "XS:2:B"],
+    }
+
+
+@pytest.mark.parametrize("endpoint, code, url, role", [
+    pytest.param("https://pt.example", None, "wss://pt.example/api/rooms/new", "wait", id="a new room waits"),
+    pytest.param("http://127.0.0.1:8791", "BCDK", "ws://127.0.0.1:8791/api/rooms/BCDK", "dial", id="joining dials"),
+])
+def test_a_classic_call_goes_through_its_room_as_waiter_or_dialler(endpoint, code, url, role):
+    info = {"endpoint": endpoint, "classic": {"wait": ["--steer", "W"], "dial": ["--steer", "D"]}}
+    args = session.classic_args(info, code)
+    assert args == ["--modem", "session", "--session", url, "--steer", "W" if role == "wait" else "D"]
+
+
+@pytest.mark.parametrize("typed, code", [
+    (" bcdk ", "BCDK"),
+    ("BCD", None),
+    ("BCDKF", None),
+    ("BC1K", None),
+    ("BCDÉ", None),
+])
+def test_a_room_code_is_four_letters_in_either_case(typed, code):
+    assert session.room_code(typed) == code
+
+
+def test_a_classic_replay_hears_the_line_again_rather_than_joining_a_room(tmp_path):
+    from saturnrecomp.playtest.__main__ import replay_args
+    played = replay_args(other_disc_game(tmp_path), ["--multitap", "1", "--modem", "session", "--session", "wss://x/api/rooms/new",
+                                                     "--steer", "1:A", "--steer-again", "XS:1:A"], "S")
+    assert played == ["--multitap", "1", "--modem", "session", "--line-in", os.path.join("S", "line.txt")]
+    assert replay_args(other_disc_game(tmp_path), ["--modem", "line"], "S") == ["--modem", "line"]
 
 
 @pytest.mark.linux_only

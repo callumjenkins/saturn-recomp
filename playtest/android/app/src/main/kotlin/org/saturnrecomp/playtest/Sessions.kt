@@ -31,12 +31,25 @@ object Sessions {
     private val LOCAL = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")     // the runtime's --clock
     private val UTC = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ssxxx")    // Python's isoformat
     // The latest dump goes too, so a Continue on another phone has at most a minute of presses to play again.
-    private val FILES = listOf("session.json", "input.txt", "clock.txt", "backup-at-start.bin", "state-at-start.bin", "log.txt", "coverage.txt", PROGRESS, DUMP)
+    private val FILES = listOf("session.json", "input.txt", "clock.txt", "backup-at-start.bin", "state-at-start.bin", "log.txt", "coverage.txt", PROGRESS, DUMP, "line.txt")
     private const val DUMP = "state.bin"                    // the run's latest dump of the machine
     private const val PROGRESS = "progress.txt"             // the runtime's --progress: the starts Continue can rebuild
 
     /** Where a new session starts: a save file's start, rebuilt from its progress line, as a save file of its own. */
     class Branch(val line: String, val clock: String, val parent: JSONObject)
+
+    /**
+     * The runtime's arguments for the game's own online call through a playtest room: a new room, or the room `code`.
+     * Whoever makes the room waits for the call, and whoever joins it dials.
+     */
+    fun classicArgs(info: JSONObject, code: String?): List<String> {
+        val url = "ws" + info.getString("endpoint").removePrefix("http")   // https:// is wss://, http:// ws://
+        val steer = info.getJSONObject("classic").getJSONArray(if (code == null) "wait" else "dial")
+        return listOf("--modem", "session", "--session", "$url/api/rooms/${code ?: "new"}") + List(steer.length()) { steer.getString(it) }
+    }
+
+    /** The room code a player typed, in capitals, or null when it is not the four letters a room's maker sees. */
+    fun roomCode(typed: String): String? = typed.trim().uppercase().takeIf { Regex("[A-Z]{4}").matches(it) }
 
     /**
      * A new session's directory under `home`/sessions, and the runtime's arguments for it; with `send`, it is sent once it has ended.

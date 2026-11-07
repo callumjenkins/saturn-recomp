@@ -9,9 +9,11 @@
 #include "session_ice.h"
 #include <nlohmann/json.hpp>
 #include <rtc/rtc.hpp>
+#include <atomic>
 #include <condition_variable>
 #include <cstdlib>
 #include <cstddef>
+#include <cstdio>
 #include <deque>
 #include <functional>
 #include <map>
@@ -77,6 +79,9 @@ struct Session::Impl {
     rtc::Configuration config;
     std::map<std::string, Link> links;
     bool room_closed = false;
+    std::chrono::milliseconds away_after{};
+    std::atomic<std::chrono::steady_clock::rep> last_poll{};
+    bool gone_away = false;
 
     std::mutex task_mutex;
     std::condition_variable woken;
@@ -104,18 +109,37 @@ struct Session::Impl {
             std::function<void()> task;
             {
                 std::unique_lock lock(task_mutex);
-                woken.wait(lock, [&] { return stopping || !tasks.empty(); });
-                if (tasks.empty()) break;
-                task = std::move(tasks.front());
-                tasks.pop_front();
+                woken.wait_for(lock, std::chrono::milliseconds(250), [&] { return stopping || !tasks.empty(); });
+                if (stopping) break;
+                if (!tasks.empty()) {
+                    task = std::move(tasks.front());
+                    tasks.pop_front();
+                }
             }
-            try {
-                task();
-            } catch (const std::exception& e) {
-                emit({.kind = SessionEvent::Kind::RoomClosed, .text = std::string("the session failed: ") + e.what()});
+            if (task && !gone_away) {
+                try {
+                    task();
+                } catch (const std::exception& e) {
+                    emit({.kind = SessionEvent::Kind::RoomClosed, .text = std::string("the session failed: ") + e.what()});
+                }
             }
+            leave_if_away();
         }
         shut();
+    }
+
+    void leave_if_away() {
+        using Clock = std::chrono::steady_clock;
+        if (gone_away || Clock::now() - Clock::time_point(Clock::duration(last_poll.load())) < away_after) return;
+        gone_away = true;
+        for (const auto& [id, _] : links)
+            emit({.kind = SessionEvent::Kind::Left, .peer = id, .text = "is no longer reached: this game left"});
+        shut();
+        room_closed = true;
+        const auto seconds = std::chrono::duration_cast<std::chrono::duration<double>>(away_after).count();
+        char why[96];
+        std::snprintf(why, sizeof why, "the game stopped for more than %g seconds, so it left the room", seconds);
+        emit({.kind = SessionEvent::Kind::RoomClosed, .text = why});
     }
 
     void start() {
@@ -279,10 +303,13 @@ struct Session::Impl {
     }
 };
 
-Session::Session(const std::string& url, const SessionHello& hello) : impl_(std::make_unique<Impl>()) {
+Session::Session(const std::string& url, const SessionHello& hello, std::chrono::milliseconds away_after)
+    : impl_(std::make_unique<Impl>()) {
     mbedtls_threads_start();
     impl_->hello = hello;
     impl_->url = url;
+    impl_->away_after = away_after;
+    impl_->last_poll = std::chrono::steady_clock::now().time_since_epoch().count();
     impl_->thread = std::thread([impl = impl_.get()] { impl->run(); });
     impl_->post([impl = impl_.get()] { impl->start(); });
 }
@@ -298,6 +325,7 @@ Session::~Session() {
 }
 
 std::vector<SessionEvent> Session::poll() {
+    impl_->last_poll = std::chrono::steady_clock::now().time_since_epoch().count();
     std::scoped_lock lock(impl_->event_mutex);
     return std::exchange(impl_->events, {});
 }

@@ -112,6 +112,16 @@ void smpc_input_script(const std::string& given) {
     for (auto& s : g_script) g_script_names[s.pad] = true;
 }
 
+void smpc_steer(const std::vector<PadStep>& steps, uint64_t from) {
+    for (PadStep step : steps) {
+        step.vblank += from;
+        auto at = std::upper_bound(g_script.begin() + (std::ptrdiff_t)g_script_pos, g_script.end(), step.vblank,
+                                   [](uint64_t v, const PadStep& x) { return v < x.vblank; });
+        g_script.insert(at, step);
+        g_script_names[step.pad] = true;
+    }
+}
+
 bool smpc_press(const std::string& spec, std::string& error) {
     PadStep step;
     if (!parse_press(sat_vblanks(), spec, step, error)) return false;
@@ -180,7 +190,7 @@ static void sample_host() {
     g_host_vblank = sat_vblanks();
     for (int p = 0; p < kPads && p < kHostSlots; ++p) {
         uint16_t h = host_pad(p);
-        if (h != g_host_pressed[p]) record_host(g_host_vblank, p, h);
+        if (h != g_host_pressed[p]) record_host(g_host_vblank, p, h | g_script_pressed[p]);
         g_host_pressed[p] = h;
     }
 }
@@ -191,9 +201,11 @@ static uint16_t pad_now(int p) {
            !(g_cfg.resume && g_script[g_script_pos].vblank >= g_cfg.resume)) {
         const PadStep& s = g_script[g_script_pos];
         g_script_pressed[s.pad] = s.pressed;
-        if (g_cfg.resume) record_host(s.vblank, s.pad, s.pressed);
-        else if (s.pad) sat_note("pad %d: %04X", s.pad + 1, s.pressed);
-        else sat_note("pad: %04X", s.pressed);
+        // Steered presses are recorded too, with the host's buttons held alongside them.
+        // A replay plays the file alone, and each of its steps sets the whole pad.
+        if (g_cfg.resume || host_drives()) record_host(s.vblank, s.pad, s.pressed | g_host_pressed[s.pad]);
+        if (!g_cfg.resume && s.pad) sat_note("pad %d: %04X", s.pad + 1, s.pressed);
+        else if (!g_cfg.resume) sat_note("pad: %04X", s.pressed);
         ++g_script_pos;
     }
     if (host_drives() && g_cfg.resume && !g_handed_over) {

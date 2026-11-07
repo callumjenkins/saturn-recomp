@@ -32,6 +32,7 @@
 #include "video.h"
 #include "host.h"
 #include "host_sdl.h"
+#include "online_card.h"
 #include "pace.h"
 #include "pad_slots.h"
 #include "settings.h"
@@ -290,6 +291,10 @@ static void read_pads() {
         if ((b[s] & (B_UP | B_DOWN)) == (B_UP | B_DOWN)) b[s] &= (uint16_t)~(B_UP | B_DOWN);
         g_held_over[s] &= b[s];
         g_buttons[s] = b[s] & (uint16_t)~g_held_over[s];
+    }
+    if (online_card_takes_start(g_buttons[0])) {
+        g_held_over[0] |= B_START;
+        g_buttons[0] &= (uint16_t)~B_START;
     }
 }
 
@@ -1021,6 +1026,7 @@ static void draw() {
     SDL_SetRenderDrawBlendMode(g_ren, SDL_BLENDMODE_BLEND);
     if (g_tex) SDL_RenderTexture(g_ren, g_tex, nullptr, &g_dst);
     if (sat_resuming()) draw_catching_up();
+    else if (!g_menu_open) online_card_draw(g_out_w, display_scale());
     if (g_menu_open) draw_menu();
     else {
         if (touch_shown()) draw_touch_pad();

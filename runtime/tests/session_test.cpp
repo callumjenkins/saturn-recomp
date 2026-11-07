@@ -145,6 +145,38 @@ TEST(session_hears_a_peer_leave) {
     CHECK_EQ(as.back().peer == "p1", true);
 }
 
+TEST(session_leaves_the_room_once_its_game_stops_polling) {
+    StubRoom room;
+    Session a(room.url("/api/rooms/new"), hello());
+    std::vector<SessionEvent> as, bs;
+    CHECK_EQ(wait_for(a, as, kind(SessionEvent::Kind::Welcome)), true);
+    Session b(room.url("/api/rooms/ABCD"), hello(), std::chrono::milliseconds(1500));
+    CHECK_EQ(wait_for(b, bs, kind(SessionEvent::Kind::Open)), true);
+    CHECK_EQ(wait_for(a, as, kind(SessionEvent::Kind::Open)), true);
+    CHECK_EQ(wait_for(a, as, kind(SessionEvent::Kind::Left)), true);
+    std::vector<SessionEvent> late = b.poll();
+    CHECK_EQ(late.size() == 2 && late[0].kind == SessionEvent::Kind::Left && late[0].peer == "p0", true);
+    CHECK_EQ(!late.empty() && late.back().kind == SessionEvent::Kind::RoomClosed, true);
+    CHECK_EQ(late.back().text.find("stopped for more than 1.5 seconds") != std::string::npos, true);
+}
+
+TEST(session_that_keeps_polling_stays_in_the_room) {
+    StubRoom room;
+    Session a(room.url("/api/rooms/new"), hello());
+    std::vector<SessionEvent> as, bs;
+    CHECK_EQ(wait_for(a, as, kind(SessionEvent::Kind::Welcome)), true);
+    Session b(room.url("/api/rooms/ABCD"), hello(), std::chrono::milliseconds(500));
+    CHECK_EQ(wait_for(b, bs, kind(SessionEvent::Kind::Open)), true);
+    CHECK_EQ(wait_for(a, as, kind(SessionEvent::Kind::Open)), true);
+    for (auto until = std::chrono::steady_clock::now() + std::chrono::seconds(2); std::chrono::steady_clock::now() < until;) {
+        for (auto& e : b.poll()) bs.push_back(e);
+        for (auto& e : a.poll()) as.push_back(e);
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    CHECK_EQ(std::none_of(bs.begin(), bs.end(), kind(SessionEvent::Kind::RoomClosed)), true);
+    CHECK_EQ(std::none_of(as.begin(), as.end(), kind(SessionEvent::Kind::Left)), true);
+}
+
 TEST(session_is_refused_with_the_rooms_reason) {
     StubRoom room;
     Session a(room.url("/api/rooms/new"), hello("refuse-me"));

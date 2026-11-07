@@ -73,6 +73,19 @@ Online play meets in rooms (`worker/src/rooms.ts`, one Durable Object a room). A
 `SATURN_PLAYTEST_TESTER`. The room refuses a peer whose disc, game build, runtime build or mode differs from
 the first peer's, and passes the WebRTC offers and candidates by which every pair of peers connects.
 
+A game whose `game.toml` has `[online.classic]` plays its own NetLink battle through a room (`config.py`
+documents the table). Both launchers offer "Make a room" and "Join that room". Whoever makes the room waits
+for the call and whoever joins dials it. `--steer` presses each of them through the menus to the call, over
+the player's own pads, and `--modem session` puts the other peer on the modem's line. A classic room takes
+two peers. Until a call connects, the window shows the room's code and the other tester's name. Each time
+the game comes back to its client after a match, Start offers the rematch (`--steer-again`). The session
+keeps what the line heard as `line.txt`, so `replay` plays a classic match again without the room
+(`--line-in`). A game that stops polling its session for 10 seconds, paused in the background or behind its
+menu, leaves the room, and the other peer's modem hears NO CARRIER.
+
+`tests/netlink.py --room` in the game runs a match and a rematch through a room on this machine
+(`saturnrecomp.playtest.local_worker`, under `wrangler dev`), then replays each side from what it recorded.
+
 ## The loop
 
 ```sh

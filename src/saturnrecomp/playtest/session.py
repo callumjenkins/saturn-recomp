@@ -24,6 +24,14 @@ SEND_AFTER_CHECKPOINT = 15              # seconds for the runtime to finish writ
 NO_CONSOLE = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
+def classic_args(info, code=None):
+    """saturn's arguments for the game's own online call through a playtest room: a new room, or the room `code`.
+    Whoever makes the room waits for the call, and whoever joins it dials."""
+    url = "ws" + info["endpoint"].removeprefix("http")   # https:// is wss://, http:// ws://
+    role = "dial" if code else "wait"
+    return ["--modem", "session", "--session", f"{url}/api/rooms/{code or 'new'}", *info["classic"][role]]
+
+
 def exit_reason(log_path, code):
     """The first fatal error in the log, or how the runtime exited."""
     try:
@@ -41,7 +49,8 @@ def play(saturn, cue, info, endpoint=None, token=None, args=(), on_sent=None):
     """Plays a session to its end and sends it; its directory.
 
     `info` gives the product and the build. Without a token the session is kept but not sent.
-    `on_sent(ok, ended)` is called from another thread after each upload.
+    `on_sent(ok, ended)` is called from another thread after each upload. The token also lets the run into a
+    playtest room, when `args` name one.
     """
     started = datetime.datetime.now().replace(microsecond=0)
     sessions = os.path.join(game_dir(info["product"]), "sessions")
@@ -62,7 +71,8 @@ def play(saturn, cue, info, endpoint=None, token=None, args=(), on_sent=None):
                "--coverage", os.path.join(out, "coverage.txt"), "--checkpoint", str(CHECKPOINT), *args]
     log_path = os.path.join(out, "log.txt")
     with open(log_path, "w") as log:
-        process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, creationflags=NO_CONSOLE)
+        process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, creationflags=NO_CONSOLE,
+                                   env={**os.environ, "SATURN_PLAYTEST_TOKEN": token or ""})
     stop = threading.Event()
     sender = None
     if token:
@@ -85,6 +95,12 @@ def play(saturn, cue, info, endpoint=None, token=None, args=(), on_sent=None):
         if on_sent:
             on_sent(ok, True)
     return out
+
+
+def room_code(typed):
+    """The room code a player typed, in capitals, or None when it is not the four letters a room's maker sees."""
+    code = typed.strip().upper()
+    return code if len(code) == 4 and code.isalpha() and code.isascii() else None
 
 
 def _send_while_playing(endpoint, token, out, stop, on_sent):

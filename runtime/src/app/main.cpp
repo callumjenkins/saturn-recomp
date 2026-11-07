@@ -9,7 +9,8 @@
 //            [--write VBLANK:ADDR=HEX,...] [--video FILE] [--save FILE|-] [--coverage FILE] [--checkpoint SECONDS]
 //            [--log FILE] [--state-in FILE] [--state-out FILE] [--state-every SECONDS] [--state-at VBLANK]
 //            [--progress FILE --progress-keep ADDR:BYTES,...] [--after FILE] [--launcher]
-//            [--modem line|dial=HOST:PORT[,listen=PORT]] [--session URL]
+//            [--modem line|session|dial=HOST:PORT[,listen=PORT]] [--session URL [--steer SCRIPT] [--steer-again PROGRAM:SCRIPT]]
+//            [--line-in FILE]
 //
 // --accurate-drive seeks before each read and reads at double speed, as the hardware's drive does
 // (cdblock.cpp), for comparing with Beetle Saturn; loads take longer.
@@ -43,9 +44,16 @@
 // whether it ran, when the run ends, an error that ends it included; --checkpoint SECONDS writes it again every
 // SECONDS of the host's time. --video writes the run's pictures and sound as an MP4 through ffmpeg, an
 // error that ends it included (movie.cpp). --modem fits a NetLink modem (modem.cpp): "line" with nothing on
-// its line, or a TCP line on which every number dialled calls HOST:PORT and a connection to PORT rings.
+// its line, "session" with the other peer in --session's room on it (a dial rings that peer, whatever the
+// number), or a TCP line on which every number dialled calls HOST:PORT and a connection to PORT rings.
 // --session joins the playtest room at URL (online.cpp), as the tester SATURN_PLAYTEST_TOKEN or SATURN_PLAYTEST_TESTER
-// names, and notes who comes and goes.
+// names, and notes who comes and goes. Until a call connects, the window shows the room's code and the other
+// player.
+// --steer presses SCRIPT's buttons, as --input's, over the controllers': the way through the game's menus to its
+// call. --steer-again offers another match each time PROGRAM starts again, and presses SCRIPT, its VBlanks counted
+// from that start, once the player takes the offer with Start. Taken late, SCRIPT's first press comes at once.
+// --modem session's line writes what it heard to DIR/line.txt, at the machine time of each, and --line-in FILE
+// has the line hear that again in place of a room, for a replay.
 // --other-disc CUE with --from-other PATH=OTHERPATH,... and --track-from-other N,... plays those files and
 // audio tracks from that disc instead (cdrom.cpp).
 // --write sets memory at a VBlank-IN, as the agent's write does: a stage
@@ -160,6 +168,9 @@ static int parse_args(SaturnConfig& cfg, bool& launcher, int argc, char** argv) 
         else if (!std::strcmp(a, "--multitap") && more) cfg.multitap = std::atoi(argv[++i]);
         else if (!std::strcmp(a, "--modem") && more) cfg.modem = argv[++i];
         else if (!std::strcmp(a, "--session") && more) cfg.session = argv[++i];
+        else if (!std::strcmp(a, "--steer") && more) cfg.steer = argv[++i];
+        else if (!std::strcmp(a, "--line-in") && more) cfg.line_in = argv[++i];
+        else if (!std::strcmp(a, "--steer-again") && more) cfg.steer_again = argv[++i];
         else if (!std::strcmp(a, "--other-disc") && more) cfg.other_disc = argv[++i];
         else if (!std::strcmp(a, "--from-other") && more) cfg.from_other = argv[++i];
         else if (!std::strcmp(a, "--track-from-other") && more) cfg.tracks_from_other = argv[++i];
@@ -194,8 +205,8 @@ static int parse_args(SaturnConfig& cfg, bool& launcher, int argc, char** argv) 
                                  "             [--save FILE|-] [--coverage FILE] [--checkpoint SECONDS] [--log FILE]\n"
                                  "             [--state-in FILE] [--state-out FILE] [--state-every SECONDS] [--state-at VBLANK]\n"
                                  "             [--progress FILE --progress-keep ADDR:BYTES,...] [--after FILE] [--launcher [--options FILE]]\n"
-                                 "             [--cheat MODULE:ADDR=HEX|MODULE:ADDR|=HEX,...] [--modem line|dial=HOST:PORT[,listen=PORT]]\n"
-                                 "             [--session URL] [--other-disc CUE --from-other PATH=OTHERPATH,... --track-from-other N,...]\n");
+                                 "             [--cheat MODULE:ADDR=HEX|MODULE:ADDR|=HEX,...] [--modem line|session|dial=HOST:PORT[,listen=PORT]]\n"
+                                 "             [--session URL [--steer SCRIPT] [--steer-again PROGRAM:SCRIPT]] [--line-in FILE] [--other-disc CUE --from-other PATH=OTHERPATH,... --track-from-other N,...]\n");
             return 2;
         }
     }

@@ -66,8 +66,16 @@ class Launcher:
         self.play_button = ttk.Button(frame, text="Play", command=self.play)
         self.play_button.grid(column=0, row=row + 2, sticky="w", pady=(16, 0))
         ttk.Button(frame, text="My sessions", command=self.open_sessions).grid(column=1, row=row + 2, sticky="w", pady=(16, 0))
+        row += 3
+        if "classic" in self.info:
+            ttk.Label(frame, text="Online, against one other tester").grid(column=0, row=row, columnspan=3, sticky="w", pady=(12, 0))
+            ttk.Button(frame, text="Make a room", command=self.make_room).grid(column=0, row=row + 1, sticky="w")
+            self.room_code = tk.StringVar()
+            ttk.Entry(frame, textvariable=self.room_code, width=8).grid(column=1, row=row + 1, sticky="w")
+            ttk.Button(frame, text="Join that room", command=self.join_room).grid(column=2, row=row + 1, sticky="w")
+            row += 2
         self.status = ttk.Label(frame, width=52, wraplength=420)
-        self.status.grid(column=0, row=row + 3, columnspan=3, sticky="w", pady=(12, 0))
+        self.status.grid(column=0, row=row, columnspan=3, sticky="w", pady=(12, 0))
 
         self._show_disc()
         self.root.after(100, self._drain)
@@ -95,19 +103,33 @@ class Launcher:
         self.settings["other_on"] = self.other_on.get()
         self._save_settings()
 
+    def join_room(self):
+        code = session.room_code(self.room_code.get())
+        if not code:
+            messagebox.showinfo("Join a room", "A room's code is the four letters its maker's window shows.")
+            return
+        self.play(session.classic_args(self.info, code))
+
+    def make_room(self):
+        self.play(session.classic_args(self.info))
+
     def open_sessions(self):
         webbrowser.open(f"{self.info['endpoint']}/#token={self.token.get().strip()}")
 
-    def play(self):
+    def play(self, online=()):
+        """Plays, through a playtest room when `online` gives saturn's arguments for one."""
         if not self.settings.get("cue"):
             messagebox.showinfo("No disc", "Choose your disc image first.")
             return
         token = self.token.get().strip()
+        if online and not token:
+            messagebox.showinfo("Online", "Playing online needs your tester code.")
+            return
         self.settings["token"] = token
         self._save_settings()
         self.status.config(text="Playing. The session is sent every 10 minutes and when you quit."
                                 if token else "Playing. Without a tester code this session stays on this computer.")
-        self._start(self._play, token)
+        self._start(self._play, token, list(online))
 
     def run(self):
         self.root.mainloop()
@@ -150,14 +172,14 @@ class Launcher:
         except (OSError, ValueError):
             return {}
 
-    def _play(self, token):
+    def _play(self, token, online):
         saturn = os.path.join(self.bundle, "saturn.exe" if sys.platform == "win32" else "saturn")
 
         def sent(ok, ended):
             if ended:
                 self.events.put(("status", "Session sent. Its review shows under My sessions." if ok
                                  else "Could not send the session. The launcher tries again next time it starts."))
-        args = list(self.info.get("args", ()))
+        args = list(self.info.get("args", ())) + online
         if self.other and self.other_on.get() and self.settings.get("other_cue"):
             args += ["--other-disc", self.settings["other_cue"], "--from-other", self.other["files"],
                      "--track-from-other", self.other["tracks"]]

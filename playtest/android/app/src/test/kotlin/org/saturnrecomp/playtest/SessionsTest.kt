@@ -1,5 +1,6 @@
 package org.saturnrecomp.playtest
 
+import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -83,5 +84,20 @@ class SessionsTest {
         File(played, "log.txt").writeText("[ 150.000 M] resumed at VBlank 9000: the controllers have the pads\n")
         Sessions.finish(played)
         assertFalse(Sessions.read(played).has("caught_up"))
+    }
+
+    @Test
+    fun aClassicCallGoesThroughItsRoomAsWaiterOrDialler() {
+        val classic = JSONObject().put("wait", JSONArray(listOf("--steer", "W"))).put("dial", JSONArray(listOf("--steer", "D")))
+        val https = JSONObject().put("endpoint", "https://pt.example").put("classic", classic)
+        assertEquals(listOf("--modem", "session", "--session", "wss://pt.example/api/rooms/new", "--steer", "W"), Sessions.classicArgs(https, null))
+        val http = JSONObject().put("endpoint", "http://127.0.0.1:8791").put("classic", classic)
+        assertEquals(listOf("--modem", "session", "--session", "ws://127.0.0.1:8791/api/rooms/BCDK", "--steer", "D"), Sessions.classicArgs(http, "BCDK"))
+    }
+
+    @Test
+    fun aRoomCodeIsFourLettersInEitherCase() {
+        assertEquals("BCDK", Sessions.roomCode(" bcdk "))
+        for (bad in listOf("BCD", "BCDKF", "BC1K", "BCDÉ")) assertEquals(null, Sessions.roomCode(bad))
     }
 }

@@ -95,6 +95,32 @@ describe('rooms', () => {
 		await guest.closed
 	})
 
+	it('take two peers in a classic room', async () => {
+		const host = await join('/api/rooms/new', await invite('Jo'), TERMS, 1)
+		const code = host.answer.code as string
+		expect((await join(`/api/rooms/${code}`, await invite('Kit'), TERMS, 1)).answer.type).toBe('welcome')
+		const third = await join(`/api/rooms/${code}`, await invite('Lee'), TERMS, 1)
+		expect(third.answer).toEqual({ type: 'refused', reason: 'a classic room takes 2 peers' })
+	})
+
+	it('take a peer into a classic room once one of its two has gone', async () => {
+		const host = await join('/api/rooms/new', await invite('Mo'), TERMS, 1)
+		const code = host.answer.code as string
+		const guest = await join(`/api/rooms/${code}`, await invite('Ned'), TERMS, 1)
+		await host.next()
+		guest.ws.close()
+		await host.next()
+		expect((await join(`/api/rooms/${code}`, await invite('Oz'), TERMS, 1)).answer.type).toBe('welcome')
+	})
+
+	it('take more than two peers in a room that is not classic', async () => {
+		const terms = { ...TERMS, mode: 'session' }
+		const host = await join('/api/rooms/new', await invite('Pat'), terms, 1)
+		const code = host.answer.code as string
+		for (const name of ['Quin', 'Ray'])
+			expect((await join(`/api/rooms/${code}`, await invite(name), terms, 1)).answer.type).toBe('welcome')
+	})
+
 	it('refuse an unknown tester and a room nobody made', async () => {
 		const host = await join('/api/rooms/new', 'not-a-token')
 		expect(host.answer).toEqual({ type: 'refused', reason: 'unknown or revoked tester' })

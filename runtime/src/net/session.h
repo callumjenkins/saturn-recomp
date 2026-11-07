@@ -1,6 +1,7 @@
 // saturn-recomp runtime — a session: the other peers in one room of the playtest Worker (playtest/worker/src/rooms.ts),
 // each reached by a WebRTC connection of its own with three data channels.
 #pragma once
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -42,8 +43,11 @@ struct SessionEvent {
 // The session's work runs on a thread of its own; poll and send are for one other thread, the emulation's.
 class Session {
 public:
-    // Joins the room at `url`, ws:// or wss:// and ending in /api/rooms/new or /api/rooms/CODE.
-    Session(const std::string& url, const SessionHello& hello);
+    // Joins the room at `url`, ws:// or wss:// and ending in /api/rooms/new or /api/rooms/CODE. Unpolled for
+    // `away_after`, as a game paused in the background or behind its menu is, the session reports each peer Left
+    // and leaves the room.
+    Session(const std::string& url, const SessionHello& hello,
+            std::chrono::milliseconds away_after = std::chrono::seconds(10));
     ~Session();
     Session(const Session&) = delete;
     Session& operator=(const Session&) = delete;

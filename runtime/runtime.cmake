@@ -20,7 +20,7 @@ add_library(saturn_machine OBJECT
     ${_src}/machine/machine.cpp ${_src}/machine/bios.cpp ${_src}/machine/mmio.cpp ${_src}/machine/tasks.cpp
     ${_src}/machine/onchip.cpp ${_src}/machine/scu.cpp ${_src}/machine/scudsp.cpp ${_src}/machine/smpc.cpp
     ${_src}/machine/cdrom.cpp ${_src}/machine/cdblock.cpp ${_src}/machine/agent.cpp ${_src}/machine/state.cpp
-    ${_src}/machine/modem.cpp ${_src}/machine/modem_tcp.cpp ${_src}/machine/online.cpp
+    ${_src}/machine/modem.cpp ${_src}/machine/modem_tcp.cpp ${_src}/machine/line_log.cpp ${_src}/machine/modem_session.cpp ${_src}/machine/online.cpp ${_src}/machine/online_room.cpp
     ${_src}/video/video.cpp ${_src}/video/vdp1.cpp ${_src}/video/vdp2.cpp ${_src}/video/png.cpp ${_src}/video/movie.cpp
     ${_src}/sound/sound.cpp ${_src}/sound/scsp.cpp)
 option(SATURN_NO_SDL "build the headless host even if SDL3 is installed" OFF)
@@ -54,7 +54,7 @@ if(SDL3_FOUND)
         DEPENDS ${_ttf} ${_rt}/embed.cmake VERBATIM)
     list(APPEND _font_headers ${_fonts}/inter_${f}.h)
   endforeach()
-  add_library(saturn_host OBJECT ${_src}/host/host.cpp ${_src}/host/launcher.cpp ${_src}/host/settings.cpp ${_src}/host/ui.cpp
+  add_library(saturn_host OBJECT ${_src}/host/host.cpp ${_src}/host/launcher.cpp ${_src}/host/online_card.cpp ${_src}/host/settings.cpp ${_src}/host/ui.cpp
       ${_src}/host/uinput_pad.cpp ${_font_headers})
   target_include_directories(saturn_host PRIVATE ${_fonts} ${_rt}/third_party/stb)
   target_link_libraries(saturn_host PUBLIC SDL3::SDL3 saturn_imgui)
@@ -84,13 +84,15 @@ else()
   include(${_rt}/net.cmake)
 endif()
 target_link_libraries(saturn_machine PUBLIC saturn_net)
-# The builds a room compares (net/session.h's terms): this runtime's commit, and the game's, which its build sets
-execute_process(COMMAND git -C ${_rt} rev-parse --short=7 HEAD OUTPUT_VARIABLE _runtime_commit
-    OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
-set(SATURN_RUNTIME_BUILD "${_runtime_commit}" CACHE STRING "the runtime's build, as a session's terms name it")
-set(SATURN_GAME_BUILD "dev" CACHE STRING "the game's build, as a session's terms name it")
-set_source_files_properties(${_src}/machine/online.cpp PROPERTIES COMPILE_DEFINITIONS
-    "SATURN_RUNTIME_BUILD=\"${SATURN_RUNTIME_BUILD}\";SATURN_GAME_BUILD=\"${SATURN_GAME_BUILD}\"")
+# The builds a room compares (net/session.h's terms), looked up on every build (build_id.cmake)
+set(SATURN_GAME_DIR "" CACHE PATH "the game's checkout, whose commit names the game's build")
+set(SATURN_GAME_BUILD "" CACHE STRING "the game's build, in place of its checkout's commit")
+set(_build_id ${CMAKE_CURRENT_BINARY_DIR}/saturn-build-id/saturn_build_id.h)
+add_custom_target(saturn_build_id BYPRODUCTS ${_build_id}
+    COMMAND ${CMAKE_COMMAND} -DRUNTIME_DIR=${_rt} -DGAME_DIR=${SATURN_GAME_DIR} -DGAME_BUILD=${SATURN_GAME_BUILD}
+            -DOUTPUT=${_build_id} -P ${_rt}/build_id.cmake VERBATIM)
+add_dependencies(saturn_machine saturn_build_id)
+target_include_directories(saturn_machine PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/saturn-build-id)
 foreach(t saturn_core saturn_stub saturn_machine saturn_host)
   target_include_directories(${t} PUBLIC ${_rt}/include)
 endforeach()

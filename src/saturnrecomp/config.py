@@ -64,6 +64,13 @@
     tracks = "2"                    # saturn's --track-from-other
     cue = "iso-jp/GAME.cue"         # this machine's copy, which replays use in place of the tester's
 
+    [online.classic]                # optional: the game's own online call, through a playtest room (--modem session)
+    boot = ["1500:UP", "1530:"]     # from power-on to the program that makes the call
+    program = "XS"                  # that program, which starts again after each match
+    starts = 1559                   # the VBlank it first starts at
+    wait = ["741:A", "747:"]        # from each of its starts to waiting for a call ...
+    dial = ["741:A", "747:"]        # ... and to dialling one
+
     [checkpoint]                    # optional: a start a session's Continue can rebuild when its dump won't load
     keep = [["stage_2", 2], ["score", 8], ["objects+0x5E", 1]]   # the first's changes start one
     accept = [[0x0001, 0x0006], [0x0100, 0x0108]]   # ranges of the first's values, big-endian, it can be rebuilt from
@@ -88,6 +95,9 @@ import json
 import os
 import tomllib
 from dataclasses import dataclass, field
+from typing import Literal, get_args
+
+ClassicRole = Literal["wait", "dial"]   # who waits for the call, and who dials it
 
 
 @dataclass
@@ -291,6 +301,28 @@ class TaskSwitch:
 
 
 @dataclass
+class Classic:
+    """[online.classic]: the presses that take a player to the game's own call, as saturn's --steer plays them."""
+    boot: list[str]
+    program: str
+    starts: int
+    wait: list[str]
+    dial: list[str]
+
+    def first(self, role: ClassicRole) -> list[str]:
+        """From power-on to the call."""
+        return self.boot + later(getattr(self, role), self.starts)
+
+    def steer(self, role: ClassicRole) -> list[str]:
+        """saturn's arguments that steer a player to the call and to each rematch's."""
+        return ["--steer", ",".join(self.first(role)), "--steer-again", f"{self.program}:{','.join(getattr(self, role))}"]
+
+    def steers(self) -> dict[ClassicRole, list[str]]:
+        """Each role's steer, as a launcher picks from them."""
+        return {role: self.steer(role) for role in get_args(ClassicRole)}
+
+
+@dataclass
 class Game:
     name: str
     root: str
@@ -306,6 +338,7 @@ class Game:
     task_switches: list[TaskSwitch] = field(default_factory=list)
     inventory: Inventory | None = None
     executable: str = ""
+    classic: Classic | None = None
 
     @property
     def saturn(self):
@@ -324,6 +357,11 @@ class Game:
         with open(self.seeds_file, "w") as f:
             json.dump({k: [f"{x:08X}" for x in v] for k, v in seeds.items()}, f, indent=1)
             f.write("\n")
+
+
+def later(presses: list[str], by: int) -> list[str]:
+    """`presses`, saturn's VBLANK:BUTTONS, `by` VBlanks later."""
+    return [f"{int(v) + by}:{b}" for v, b in (p.split(":", 1) for p in presses)]
 
 
 def load(path):
@@ -381,7 +419,11 @@ def load(path):
     return Game(game.get("name", os.path.basename(root)), root, os.path.join(root, game.get("build", "build")),
                 os.path.join(root, game.get("seeds", "seeds.json")), modules, symbols, tasks, hooks,
                 list(game.get("cmake", [])), playtest, _checkpoint(t["checkpoint"], symbols) if "checkpoint" in t else None,
-                switches, inventory)
+                switches, inventory, classic=_classic(t["online"]["classic"]) if "classic" in t.get("online", {}) else None)
+
+
+def _classic(c: dict) -> Classic:
+    return Classic(list(c["boot"]), c["program"], int(c["starts"]), list(c["wait"]), list(c["dial"]))
 
 
 def _register(name):

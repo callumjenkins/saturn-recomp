@@ -1,6 +1,7 @@
 // The NetLink modem through its UART registers, as the software drives it: detection, AT commands, a call
 // between two modems, the escape to command mode and a hang-up.
 #include "modem.h"
+#include "modem_session.h"
 #include "test.h"
 #include <deque>
 #include <memory>
@@ -51,6 +52,43 @@ std::string heard(Modem& m, uint64_t ms = 100) {
         while (m.read(kLsr, g_now) & 1) out += (char)m.read(kData, g_now);
     return out;
 }
+
+// Two modems on session lines (modem_session.h), each line's messages handed straight to the other's.
+struct SessionCall {
+    SessionLine* line[2];
+    std::unique_ptr<Modem> modem[2];
+    SessionCall() {
+        auto a = std::make_unique<SessionLine>([this](std::vector<uint8_t> m) { line[1]->heard(m); });
+        auto b = std::make_unique<SessionLine>([this](std::vector<uint8_t> m) { line[0]->heard(m); });
+        line[0] = a.get();
+        line[1] = b.get();
+        a->reachable(true);
+        b->reachable(true);
+        modem[0] = std::make_unique<Modem>(std::move(a));
+        modem[1] = std::make_unique<Modem>(std::move(b));
+        for (auto& m : modem) {
+            type(*m, "ATE0\r");
+            heard(*m);
+        }
+    }
+    // What modem `i` has sent, with both lines flushed as the session's poll does.
+    std::string heard_by(int i, uint64_t ms = 100) {
+        std::string out;
+        for (uint64_t end = g_now + ms * kMs; g_now < end; g_now += kMs / 4) {
+            line[0]->flush();
+            line[1]->flush();
+            while (modem[i]->read(kLsr, g_now) & 1) out += (char)modem[i]->read(kData, g_now);
+        }
+        return out;
+    }
+    void dial_and_answer() {
+        type(*modem[0], "ATD1\r");
+        heard_by(1);
+        type(*modem[1], "ATA\r");
+        heard_by(1);
+        heard_by(0);
+    }
+};
 
 }  // namespace
 
@@ -201,4 +239,58 @@ TEST(a_dialled_call_waits_for_an_answer_and_gives_up_after_s7_seconds) {
     CHECK_EQ(heard(callee).find("RING") != std::string::npos, true);
     CHECK_EQ(heard(caller, 1500) == "\r\nNO CARRIER\r\n", true);
     CHECK_EQ(caller.online(), false);
+}
+
+TEST(a_session_call_rings_the_other_peer_and_carries_bytes_both_ways) {
+    SessionCall c;
+    type(*c.modem[0], "atdt 5551234\r");
+    CHECK_EQ(c.heard_by(1) == "\r\nRING\r\n", true);
+    type(*c.modem[1], "ATA\r");
+    CHECK_EQ(c.heard_by(1) == "\r\nCONNECT 28800\r\n", true);
+    CHECK_EQ(c.heard_by(0) == "\r\nCONNECT 28800\r\n", true);
+    type(*c.modem[0], "BOMB");
+    CHECK_EQ(c.heard_by(1) == "BOMB", true);
+    type(*c.modem[1], "MAN");
+    CHECK_EQ(c.heard_by(0) == "MAN", true);
+}
+
+TEST(a_session_call_hung_up_with_ath_or_a_factory_reset_is_no_carrier_at_the_other_end) {
+    for (const char* hang_up : {"ATH\r", "AT&F0\r"}) {
+        SessionCall c;
+        c.dial_and_answer();
+        CHECK_EQ(c.modem[0]->online(), true);
+        c.heard_by(0, 1100);
+        type(*c.modem[0], "+++");
+        c.heard_by(0, 1100);
+        type(*c.modem[0], hang_up);
+        c.heard_by(0);
+        CHECK_EQ(c.modem[0]->online(), false);
+        CHECK_EQ(c.heard_by(1).find("NO CARRIER") != std::string::npos, true);
+        CHECK_EQ(c.modem[1]->online(), false);
+        c.dial_and_answer();
+        CHECK_EQ(c.modem[0]->online() && c.modem[1]->online(), true);
+    }
+}
+
+TEST(a_session_call_whose_peer_goes_is_no_carrier_and_the_bytes_before_it_still_arrive) {
+    SessionCall c;
+    c.dial_and_answer();
+    type(*c.modem[0], "LAST");
+    c.line[0]->flush();
+    c.line[1]->reachable(false);
+    CHECK_EQ(c.heard_by(1) == "LAST\r\nNO CARRIER\r\n", true);
+    CHECK_EQ(c.modem[1]->online(), false);
+}
+
+TEST(a_session_dial_rings_the_peer_once_it_is_reachable_and_rings_out_after_s7_seconds) {
+    SessionCall c;
+    c.line[0]->reachable(false);
+    type(*c.modem[0], "ATS7=2\r");
+    c.heard_by(0);
+    type(*c.modem[0], "ATD1\r");
+    CHECK_EQ(c.heard_by(0, 500).empty(), true);
+    CHECK_EQ(c.heard_by(1).empty(), true);
+    c.line[0]->reachable(true);
+    CHECK_EQ(c.heard_by(1) == "\r\nRING\r\n", true);
+    CHECK_EQ(c.heard_by(0, 1500) == "\r\nNO CARRIER\r\n", true);
 }

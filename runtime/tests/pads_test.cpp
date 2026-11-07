@@ -3,6 +3,8 @@
 #include "pad_slots.h"
 #include "unplugs.h"
 #include "test.h"
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -130,4 +132,28 @@ TEST(with_one_multitap_port_2_holds_pad_7) {
     CHECK_EQ(d[19], 0xF1);                  // port 2: pad 7
     CHECK_EQ(d[21], 0xFE);                  // B held
     g_cfg.multitap = 0;
+}
+
+TEST(steered_presses_wait_for_their_vblank_counted_from_where_they_start) {
+    const uint64_t now = sat_vblanks();
+    smpc_steer(smpc_parse_script("0:B,5:C"), now);
+    smpc_steer(smpc_parse_script("0:A"), now);
+    CHECK_EQ(peripherals()[2], 0xFB);       // pad 1: B then A at this VBlank, in the order steered; C is still to come
+    smpc_steer(smpc_parse_script("0:,5:"), now);
+    CHECK_EQ(peripherals()[2], 0xFF);
+}
+
+TEST(steered_presses_reach_the_recorded_input) {
+    const std::string recorded = test_dir("steered") + "/input.txt";
+    g_cfg.record_input = recorded;
+    const uint64_t now = sat_vblanks();
+    smpc_steer(smpc_parse_script("0:START"), now);
+    peripherals();
+    smpc_steer(smpc_parse_script("0:"), now);
+    peripherals();
+    g_cfg.record_input.clear();
+    std::ifstream in(recorded);
+    const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    const std::string at = std::to_string(now);
+    CHECK_EQ(text == at + ":START," + at + ":,", true);
 }

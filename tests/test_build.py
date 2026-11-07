@@ -1,7 +1,10 @@
 import json
 import os
+import subprocess
 
 from saturnrecomp import build, config
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 TOML = """
 [game]
@@ -82,3 +85,24 @@ def test_a_build_option_is_a_change(tmp_path):
     g = game(tmp_path, TOML.replace('name = "Test"', 'name = "Test"\ncmake = ["SATURN_VDP1_GPL=ON"]'))
     assert g.cmake == ["SATURN_VDP1_GPL=ON"]
     assert build.stale(g) == ["game.toml"]
+
+
+def build_id(tmp_path, game_build=""):
+    """saturn_build_id.h as runtime/build_id.cmake writes it, for this checkout's runtime and a game outside git."""
+    header = tmp_path / "saturn_build_id.h"
+    subprocess.run(["cmake", f"-DRUNTIME_DIR={ROOT}", f"-DGAME_DIR={tmp_path}", f"-DGAME_BUILD={game_build}",
+                    f"-DOUTPUT={header}", "-P", os.path.join(ROOT, "runtime", "build_id.cmake")], check=True)
+    return header
+
+
+def test_the_build_id_names_the_runtimes_commit_and_the_game_build_given_or_dev(tmp_path):
+    runtime = subprocess.run(["git", "-C", ROOT, "rev-parse", "--short=7", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+    assert build_id(tmp_path).read_text() == f'#pragma once\n#define SATURN_RUNTIME_BUILD "{runtime}"\n#define SATURN_GAME_BUILD "dev"\n'
+    assert '#define SATURN_GAME_BUILD "20261107-abcdef12"' in build_id(tmp_path, "20261107-abcdef12").read_text()
+
+
+def test_the_build_id_is_rewritten_only_when_it_changes(tmp_path):
+    written = build_id(tmp_path).stat().st_mtime_ns
+    os.utime(tmp_path / "saturn_build_id.h", ns=(written - 10**9, written - 10**9))
+    assert build_id(tmp_path).stat().st_mtime_ns == written - 10**9
+    assert build_id(tmp_path, "b").stat().st_mtime_ns != written - 10**9

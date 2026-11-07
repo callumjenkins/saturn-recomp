@@ -39,8 +39,13 @@ npx wrangler r2 bucket create saturn-playtest
 npx wrangler d1 migrations apply saturn-playtest --remote
 npx wrangler secret put ADMIN_TOKEN           # your CLI's token
 npx wrangler secret put CI_TOKEN              # the release workflow's token
+npx wrangler secret put TURN_KEY_ID           # a Cloudflare TURN key (Realtime > TURN), for rooms' relays
+npx wrangler secret put TURN_KEY_API_TOKEN    # ... and its API token
 npx wrangler deploy
 ```
+
+Without the TURN key, rooms give their peers Cloudflare's STUN alone, and two peers that cannot reach each
+other directly, such as two behind carrier-grade NAT, do not connect.
 
 In the game's repository:
 
@@ -59,6 +64,14 @@ In the game's repository:
    gh secret set PLAYTEST_ANDROID_KEYSTORE_PASSWORD
    ```
 5. Run `python -m saturnrecomp.playtest game.toml register`.
+
+## Rooms
+
+Online play meets in rooms (`worker/src/rooms.ts`, one Durable Object a room). A runtime started with
+`--session wss://WORKER/api/rooms/new` makes one and notes its four-letter code; another joins with
+`--session wss://WORKER/api/rooms/CODE`. Each says which tester it is through `SATURN_PLAYTEST_TOKEN` or
+`SATURN_PLAYTEST_TESTER`. The room refuses a peer whose disc, game build, runtime build or mode differs from
+the first peer's, and passes the WebRTC offers and candidates by which every pair of peers connects.
 
 ## The loop
 

@@ -301,10 +301,7 @@ std::string sat_data_dir() {
 #endif
 }
 
-// DATA/saturn-recomp/PRODUCT_VERSION/backup.bin, from IP.BIN's product number and version.
-static std::string default_save(const uint8_t* ip) {
-    std::string dir = sat_data_dir();
-    if (dir.empty()) return "";
+std::string bios_product(const uint8_t* ip) {
     auto field = [&](int at, int len) {
         std::string s(reinterpret_cast<const char*>(ip + at), len);
         s.erase(s.find_last_not_of(' ') + 1);
@@ -312,7 +309,14 @@ static std::string default_save(const uint8_t* ip) {
             if (!std::isalnum((unsigned char)ch) && ch != '-' && ch != '.') ch = '_';
         return s;
     };
-    return dir + "/saturn-recomp/" + field(0x20, 10) + "_" + field(0x2A, 6) + "/backup.bin";
+    return field(0x20, 10) + "_" + field(0x2A, 6);
+}
+
+// DATA/saturn-recomp/PRODUCT_VERSION/backup.bin
+static std::string default_save(const uint8_t* ip) {
+    std::string dir = sat_data_dir();
+    if (dir.empty()) return "";
+    return dir + "/saturn-recomp/" + bios_product(ip) + "/backup.bin";
 }
 
 void bios_select_save(const uint8_t* ip) {

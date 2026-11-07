@@ -67,6 +67,7 @@ struct SaturnConfig {
     std::string from_other;         // ... those files: "PATH=OTHERPATH,..."
     std::string tracks_from_other;  // ... and those tracks: "2,..."
     std::string modem;              // a NetLink fitted: "line" with nothing on its line, or a TCP line (modem.h); empty: none
+    std::string session;            // a playtest room's WebSocket URL, which the run joins (online.cpp); empty: none
     int64_t clock = -1;             // the SMPC's clock at power-on, seconds since 1970 (no time zone); -1: the host's
     uint32_t task_setjmp = 0, task_longjmp = 0;   // the game's own task switch (tasks.cpp), 0: none
     int agent_fd = -1;              // a socket another program plays the run through (agent.cpp)
@@ -115,6 +116,10 @@ void state_point(SH2Context& c);    // a safe moment: c's registers and PC are a
 void state_stop(const char* why);   // the run stops at the next dump, or soon without one
 void state_finish();                // the last dump written
 void state_load(const std::string& path);   // after the boot: the machine as the dump has it
+
+// ---- --session (online.cpp) ---------------------------------------------------------------
+void online_poll();                 // from the master's polls: the room joined once IP.BIN is in, its news noted
+void online_finish();               // the session left
 int  sh2_active_slots();            // the modules active now (core.cpp)
 const SH2Module* sh2_active_slot(int i);
 void sh2_set_active_slot(int i, const SH2Module* m);
@@ -130,6 +135,7 @@ void bios_dispatch(SH2Context& c, uint32_t vec);     // the handler SYS_SETUINT 
 void bios_save();                   // the backup memory to its file
 std::string sat_data_dir();         // the user's data directory by the platform's convention; empty if none
 void bios_select_save(const uint8_t* ip);   // the save file for the disc with this IP.BIN, none loaded yet
+std::string bios_product(const uint8_t* ip);   // IP.BIN's product number and version, as MK-81070_V1.003
 
 // ---- the address map (mmio.cpp) ---------------------------------------------------
 void mmio_log_write(const std::string& path);        // every register touched, with counts

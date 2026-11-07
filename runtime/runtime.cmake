@@ -7,6 +7,8 @@
 #                   SDL3, or with -DSATURN_NO_SDL=ON, a host for headless runs only
 #   saturn_m68k     Musashi, the 68000 (third_party/musashi, C)
 #   saturn_imgui    Dear ImGui, the launcher's menu (third_party/imgui), with SDL3 only
+#   saturn_net      sessions, the peers in a playtest room (net.cmake); with -DSATURN_NO_NET=ON, a session that
+#                   never opens
 # The in-game menu and the touch pad draw text in Inter (third_party/inter), with stb_truetype (third_party/stb).
 # A target links saturn_core, then saturn_stub or saturn_machine with saturn_host, then recomp.
 set(_rt ${CMAKE_CURRENT_LIST_DIR})
@@ -18,7 +20,7 @@ add_library(saturn_machine OBJECT
     ${_src}/machine/machine.cpp ${_src}/machine/bios.cpp ${_src}/machine/mmio.cpp ${_src}/machine/tasks.cpp
     ${_src}/machine/onchip.cpp ${_src}/machine/scu.cpp ${_src}/machine/scudsp.cpp ${_src}/machine/smpc.cpp
     ${_src}/machine/cdrom.cpp ${_src}/machine/cdblock.cpp ${_src}/machine/agent.cpp ${_src}/machine/state.cpp
-    ${_src}/machine/modem.cpp ${_src}/machine/modem_tcp.cpp
+    ${_src}/machine/modem.cpp ${_src}/machine/modem_tcp.cpp ${_src}/machine/online.cpp
     ${_src}/video/video.cpp ${_src}/video/vdp1.cpp ${_src}/video/vdp2.cpp ${_src}/video/png.cpp ${_src}/video/movie.cpp
     ${_src}/sound/sound.cpp ${_src}/sound/scsp.cpp)
 option(SATURN_NO_SDL "build the headless host even if SDL3 is installed" OFF)
@@ -74,6 +76,21 @@ target_link_libraries(saturn_machine PUBLIC saturn_m68k)
 if(WIN32)
   target_link_libraries(saturn_machine PUBLIC ws2_32)   # the modem's TCP line
 endif()
+option(SATURN_NO_NET "build without network play, and without fetching libdatachannel and Mbed TLS" OFF)
+if(SATURN_NO_NET)
+  add_library(saturn_net STATIC ${_src}/net/session_none.cpp)
+  target_include_directories(saturn_net PUBLIC ${_src}/net)
+else()
+  include(${_rt}/net.cmake)
+endif()
+target_link_libraries(saturn_machine PUBLIC saturn_net)
+# The builds a room compares (net/session.h's terms): this runtime's commit, and the game's, which its build sets
+execute_process(COMMAND git -C ${_rt} rev-parse --short=7 HEAD OUTPUT_VARIABLE _runtime_commit
+    OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+set(SATURN_RUNTIME_BUILD "${_runtime_commit}" CACHE STRING "the runtime's build, as a session's terms name it")
+set(SATURN_GAME_BUILD "dev" CACHE STRING "the game's build, as a session's terms name it")
+set_source_files_properties(${_src}/machine/online.cpp PROPERTIES COMPILE_DEFINITIONS
+    "SATURN_RUNTIME_BUILD=\"${SATURN_RUNTIME_BUILD}\";SATURN_GAME_BUILD=\"${SATURN_GAME_BUILD}\"")
 foreach(t saturn_core saturn_stub saturn_machine saturn_host)
   target_include_directories(${t} PUBLIC ${_rt}/include)
 endforeach()

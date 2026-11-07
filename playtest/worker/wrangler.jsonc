@@ -11,6 +11,9 @@
   "r2_buckets": [
     { "binding": "BUCKET", "bucket_name": "saturn-playtest" }
   ],
-  // ADMIN_TOKEN is the maintainer's CLI, CI_TOKEN the release workflow's.
-  "secrets": { "required": ["ADMIN_TOKEN", "CI_TOKEN"] }
+  "durable_objects": { "bindings": [{ "name": "ROOMS", "class_name": "Room" }] },
+  "migrations": [{ "tag": "rooms", "new_sqlite_classes": ["Room"] }],
+  // ADMIN_TOKEN is the maintainer's CLI, CI_TOKEN the release workflow's. TURN_KEY_ID and TURN_KEY_API_TOKEN are a
+  // Cloudflare TURN key, which rooms make each peer's credentials from; without them, rooms give STUN alone.
+  "secrets": { "required": ["ADMIN_TOKEN", "CI_TOKEN", "TURN_KEY_ID", "TURN_KEY_API_TOKEN"] }
 }

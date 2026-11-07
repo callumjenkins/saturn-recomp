@@ -104,6 +104,25 @@ carry `license:BSD-3-Clause`, `copyright-holders:ElSemi, R. Belmont`
 > NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 > SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+## Network play: libdatachannel and Mbed TLS — MPL-2.0, Apache-2.0 and others
+
+`runtime/net.cmake` fetches these when a build is configured, unchanged, and links them into the runtime unless
+it is built with `-DSATURN_NO_NET=ON`. Their sources are at the commits it names:
+
+- libdatachannel 0.24.6 by Paul-Louis Ageneau (<https://github.com/paullouisageneau/libdatachannel>), under the
+  Mozilla Public License 2.0, with its submodules: libjuice (MPL-2.0), usrsctp (BSD-3-Clause), plog (MIT) and
+  nlohmann/json (MIT).
+- Mbed TLS 3.6.7 (<https://github.com/Mbed-TLS/mbedtls>), under the Apache License 2.0 or the GPL v2 or later,
+  used under Apache-2.0. `runtime/src/net/mbedtls/` holds the two configuration headers saturn-recomp adds.
+
+The MPL covers those files alone: their source stays available at the addresses above, and the rest of the
+runtime keeps its own licence.
+
+## Mozilla's CA certificates — MPL-2.0
+
+`runtime/third_party/cacert/cacert.pem`: curl's extract of the root certificates in Mozilla's NSS, unchanged
+(`README.md` there). A session checks the playtest Worker's certificate against it.
+
 ## Read, not copied
 
 Mednafen (GPL-2.0) and Beetle Saturn were read for facts about the

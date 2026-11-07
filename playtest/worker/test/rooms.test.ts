@@ -1,0 +1,117 @@
+import { exports } from 'cloudflare:workers'
+import { describe, expect, it } from 'vitest'
+
+type Message = { type: string; [field: string]: unknown }
+
+type Socket = { ws: WebSocket; next: () => Promise<Message>; closed: Promise<void> }
+
+const TERMS = { product: 'MK-81070_V1.003', game: 'c73bc11', runtime: 'f20de94', mode: 'classic' }
+
+const invite = async (name: string) => {
+	const r = await exports.default.fetch(
+		new Request('https://playtest.example/api/admin/testers', {
+			method: 'POST',
+			headers: { authorization: 'Bearer admin-secret' },
+			body: JSON.stringify({ name }),
+		}),
+	)
+	return (await r.json<{ token: string }>()).token
+}
+
+/** A WebSocket to `path`, whose messages arrive in order through `next`. */
+const open = async (path: string): Promise<Socket> => {
+	const r = await exports.default.fetch(new Request(`https://playtest.example${path}`, { headers: { upgrade: 'websocket' } }))
+	expect(r.status).toBe(101)
+	const ws = r.webSocket as WebSocket
+	ws.accept()
+	const queue: Message[] = []
+	const waiting: ((m: Message) => void)[] = []
+	ws.addEventListener('message', (e) => {
+		const m = JSON.parse(e.data as string) as Message
+		const wake = waiting.shift()
+		if (wake) wake(m)
+		else queue.push(m)
+	})
+	const closed = new Promise<void>((resolve) => ws.addEventListener('close', () => resolve()))
+	const next = () => {
+		const queued = queue.shift()
+		return queued ? Promise.resolve(queued) : new Promise<Message>((resolve) => waiting.push(resolve))
+	}
+	return { ws, next, closed }
+}
+
+/** A peer that has said hello to `path` with `terms`, and the room's answer. */
+const join = async (path: string, token: string, terms: Record<string, string> = TERMS, pads = 2) => {
+	const socket = await open(path)
+	socket.ws.send(JSON.stringify({ type: 'hello', token, terms, pads }))
+	return { ...socket, answer: await socket.next() }
+}
+
+describe('rooms', () => {
+	it('give a new room a code and its first peer STUN', async () => {
+		const host = await join('/api/rooms/new', await invite('Ash'))
+		expect(host.answer).toMatchObject({ type: 'welcome', peers: [], iceServers: [{ urls: ['stun:stun.cloudflare.com:3478'] }] })
+		expect(host.answer.code).toMatch(/^[A-Z]{4}$/)
+	})
+
+	it('tell each peer of the others and pass signals between them', async () => {
+		const host = await join('/api/rooms/new', await invite('Bo'))
+		const code = host.answer.code as string
+		const guest = await join(`/api/rooms/${code}`, await invite('Cy'), TERMS, 1)
+		expect(guest.answer).toMatchObject({ type: 'welcome', code, peers: [{ id: host.answer.id, name: 'Bo', pads: 2 }] })
+		expect(await host.next()).toEqual({ type: 'joined', peer: { id: guest.answer.id, name: 'Cy', pads: 1 } })
+
+		guest.ws.send(JSON.stringify({ type: 'signal', to: host.answer.id, data: { sdp: 'offer' } }))
+		expect(await host.next()).toEqual({ type: 'signal', from: guest.answer.id, data: { sdp: 'offer' } })
+		host.ws.send(JSON.stringify({ type: 'signal', to: guest.answer.id, data: { sdp: 'answer' } }))
+		expect(await guest.next()).toEqual({ type: 'signal', from: host.answer.id, data: { sdp: 'answer' } })
+	})
+
+	it('tell the others when a peer goes, and forget the room when the last one does', async () => {
+		const host = await join('/api/rooms/new', await invite('Di'))
+		const code = host.answer.code as string
+		const guest = await join(`/api/rooms/${code}`, await invite('Ed'))
+		await host.next()
+		guest.ws.close()
+		expect(await host.next()).toEqual({ type: 'left', id: guest.answer.id })
+		host.ws.close()
+		await host.closed
+
+		const late = await join(`/api/rooms/${code}`, await invite('Fi'))
+		expect(late.answer).toEqual({ type: 'refused', reason: 'there is no such room' })
+	})
+
+	it.each([
+		['another build', { ...TERMS, game: 'abc1234' }, 2, 'the game differs: the room\'s is c73bc11, yours is abc1234'],
+		['another disc and mode', { ...TERMS, product: 'T-14302G', mode: 'sync' }, 2, 'the product differs'],
+		['terms missing', { product: 'MK-81070_V1.003' }, 2, "the hello's terms need product, game, runtime, mode"],
+		['more pads than are free', TERMS, 9, 'the room has 8 of its 10 pads free'],
+		['no pads', TERMS, 0, 'pads must be 1 to 10'],
+	])('refuse a peer with %s, saying why', async (_, terms, pads, reason) => {
+		const host = await join('/api/rooms/new', await invite('Gus'))
+		const guest = await join(`/api/rooms/${host.answer.code}`, await invite('Hal'), terms as Record<string, string>, pads)
+		expect(guest.answer.type).toBe('refused')
+		expect(guest.answer.reason).toContain(reason)
+		await guest.closed
+	})
+
+	it('refuse an unknown tester and a room nobody made', async () => {
+		const host = await join('/api/rooms/new', 'not-a-token')
+		expect(host.answer).toEqual({ type: 'refused', reason: 'unknown or revoked tester' })
+		const nowhere = await join('/api/rooms/QQQQ', await invite('Ivy'))
+		expect(nowhere.answer).toEqual({ type: 'refused', reason: 'there is no such room' })
+	})
+
+	it('take only a hello before the peer has joined, and only signals after', async () => {
+		const peer = await open('/api/rooms/new')
+		peer.ws.send(JSON.stringify({ type: 'signal', to: 'x', data: {} }))
+		expect(await peer.next()).toEqual({ type: 'error', reason: 'say hello first' })
+		peer.ws.send('not json')
+		expect(await peer.next()).toEqual({ type: 'error', reason: 'a message must be JSON' })
+	})
+
+	it('are reached only by a WebSocket', async () => {
+		const r = await exports.default.fetch(new Request('https://playtest.example/api/rooms/new'))
+		expect(r.status).toBe(426)
+	})
+})

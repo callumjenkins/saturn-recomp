@@ -535,6 +535,7 @@ void master_poll_devices() {
     checkpoint_due();
     progress_due();
     state_poll();
+    online_poll();
     if (g_slave_on && !g_slave_idle) to_slave();
     if (g_cfg.stop_vblanks && sat_vblanks() >= g_cfg.stop_vblanks) sat_stop("VBlank limit");
 }
@@ -715,6 +716,7 @@ int saturn_main(const SaturnConfig& cfg) {
     mmio_log_write(cfg.out + "/hw-log.txt");
     bios_save();
     state_finish();
+    online_finish();
     std::fflush(stderr);
     std::fflush(stdout);
     std::_Exit(0);                  // the slave's thread is parked: do not wait for it

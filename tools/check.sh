@@ -29,8 +29,8 @@ quiet cmake -S runtime/tests -B $B/runtime-tests "${CMAKE[@]}"
 quiet ninja -C $B/runtime-tests
 $B/runtime-tests/runtime_tests
 
-echo "== runtime unit tests, VDP1 by Mednafen's rules (SATURN_VDP1_GPL)"
-quiet cmake -S runtime/tests -B $B/runtime-tests-gpl "${CMAKE[@]}" -DSATURN_VDP1_GPL=ON
+echo "== runtime unit tests, VDP1 by Mednafen's rules (SATURN_VDP1_GPL), without network play (SATURN_NO_NET)"
+quiet cmake -S runtime/tests -B $B/runtime-tests-gpl "${CMAKE[@]}" -DSATURN_VDP1_GPL=ON -DSATURN_NO_NET=ON
 quiet ninja -C $B/runtime-tests-gpl
 $B/runtime-tests-gpl/runtime_tests
 

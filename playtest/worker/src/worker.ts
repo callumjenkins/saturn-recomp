@@ -2,6 +2,7 @@ import { requireMaintainer, requireTester } from './auth'
 import { latestBuild, putBuild, putGame, putSources, readSources } from './builds'
 import { errorResponse, HttpError } from './http'
 import { PAGE } from './page'
+import { openRoom } from './rooms'
 import { gameSessions, listSessions, mySessions, readBundle, reviewSession, uploadSession } from './sessions'
 import { inviteTester, listTesters, revokeTester } from './testers'
 
@@ -14,6 +15,8 @@ const ROUTES: Route[] = [
 	['GET', /^\/api\/games\/([^/]+)\/sessions\/([^/]+)\/bundle$/, (env, _, __, product, id) => readBundle(env, id, product)],
 	['GET', /^\/api\/testers$/, (env) => listTesters(env)],
 	['GET', /^\/api\/me$/, async (env, request) => mySessions(env, await requireTester(env, request))],
+	['GET', /^\/api\/rooms\/new$/, (env, request) => openRoom(env, request)],
+	['GET', /^\/api\/rooms\/([A-Z]{4})$/, (env, request, _, code) => openRoom(env, request, code)],
 	['PUT', /^\/api\/sessions\/([^/]+)$/, async (env, request, _, id) => uploadSession(env, request, await requireTester(env, request), id)],
 
 	['POST', /^\/api\/admin\/testers$/, admin((env, request) => inviteTester(env, request))],
@@ -27,6 +30,8 @@ const ROUTES: Route[] = [
 	['PUT', /^\/api\/builds\/([^/]+)\/([^/]+)$/, maintainer(['admin', 'ci'], (env, request, _, product, build) => putBuild(env, request, product, build))],
 	['GET', /^\/api\/sources\/([^/]+)\/([^/]+)$/, maintainer(['admin', 'ci'], (env, _, __, product, build) => readSources(env, product, build))],
 ]
+
+export { Room } from './rooms'
 
 export default {
 	async fetch(request, env): Promise<Response> {

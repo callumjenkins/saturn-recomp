@@ -38,7 +38,7 @@ RUNTIME = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.d
 WORKFLOW = "playtest.yml"
 # saturn's arguments, each with its value, that a replay leaves out: the room, whose line it hears from line.txt
 # instead, and the steering, whose presses input.txt already holds
-LIVE_ONLY = ("--session", "--steer", "--steer-again")
+LIVE_ONLY = ("--session", "--steer", "--steer-again", "--steer-again-saved")
 
 
 def api(game, method, path, body=None, raw=False):
@@ -115,7 +115,7 @@ def pull(game, pulled):
 
 def replay_args(game, args, session="."):
     """A session's saturn arguments for this machine: another disc it played with is this machine's copy, and a
-    classic match's line hears what it heard then (`session`'s line.txt) rather than a room."""
+    classic match's line hears what it heard then (`session`'s line.txt) rather than a room or the NetBand tunnel."""
     played, rest = [], list(args)
     while rest:
         arg = rest.pop(0)
@@ -123,7 +123,10 @@ def replay_args(game, args, session="."):
             del rest[:1]
         else:
             played.append(arg)
-    if "--modem" in played[:-1] and played[played.index("--modem") + 1] == "session":
+    modem = played.index("--modem") + 1 if "--modem" in played[:-1] else None
+    if modem and played[modem].startswith("netband="):
+        played[modem] = "session"
+    if modem and played[modem] == "session":
         played += ["--line-in", os.path.join(session, "line.txt")]
     if "--other-disc" in played:
         cue = game.playtest.other_disc.cue if game.playtest.other_disc else ""

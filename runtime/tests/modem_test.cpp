@@ -112,6 +112,27 @@ TEST(an_at_command_is_echoed_and_answered_ok) {
     CHECK_EQ(heard(m) == "\r\nOK\r\n", true);
 }
 
+TEST(what_comes_before_at_is_dropped_so_a_command_after_a_dropped_call_still_runs) {
+    Modem m(modem_no_line());
+    type(m, "AT E0\r");
+    heard(m);
+    type(m, "\x10\x01hello+++AT\r");   // a chat's bytes sent after the carrier went, then the way back to command mode
+    CHECK_EQ(heard(m) == "\r\nOK\r\n", true);
+    type(m, "xyA\r");
+    CHECK_EQ(heard(m).empty(), true);
+}
+
+TEST(the_modem_counts_each_at_command_and_repeat_and_nothing_else) {
+    Modem m(modem_no_line());
+    CHECK_EQ(m.commands(), 0);
+    type(m, "AT\r");
+    type(m, "A/\r");
+    type(m, "hello\r");
+    type(m, "\r");
+    heard(m);
+    CHECK_EQ(m.commands(), 2);
+}
+
 TEST(the_answer_arrives_at_the_baud_rate) {
     Modem m(modem_no_line());
     m.write(kLcr, 0x83, g_now);                              // 8N1, and the divisor latch

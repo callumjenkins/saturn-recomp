@@ -656,8 +656,10 @@ int saturn_main(const SaturnConfig& cfg) {
     }
     if (!cfg.modem.empty()) {
         std::string error;
+        const bool netband = cfg.modem.rfind("netband=", 0) == 0;
         std::unique_ptr<ModemLine> line = cfg.modem == "line"      ? modem_no_line()
                                           : cfg.modem == "session" ? online_modem_line(error)
+                                          : netband                ? online_netband_line(cfg.modem.substr(8), error)
                                                                    : modem_tcp_line(cfg.modem, error);
         if (!line) { std::fprintf(stderr, "--modem %s: %s\n", cfg.modem.c_str(), error.c_str()); return 2; }
         g_modem = std::make_unique<Modem>(std::move(line));

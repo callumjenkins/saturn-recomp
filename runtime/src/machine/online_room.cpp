@@ -61,3 +61,10 @@ std::string OnlineRoom::name(const std::string& peer) const {
 uint64_t online_again_from(uint64_t offered_at, uint64_t first_press, uint64_t now) {
     return offered_at + first_press < now ? now - first_press : offered_at;
 }
+
+std::string online_again_script(const std::string& script, const std::string& saved,
+                                const std::function<bool(const std::string&)>& held) {
+    const size_t colon = saved.find(':');
+    if (colon == std::string::npos || !held(saved.substr(0, colon))) return script;
+    return saved.substr(colon + 1);
+}

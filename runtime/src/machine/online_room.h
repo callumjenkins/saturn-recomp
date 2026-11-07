@@ -3,6 +3,7 @@
 #pragma once
 #include "saturn.h"
 #include "session.h"
+#include <functional>
 #include <map>
 #include <optional>
 #include <string>
@@ -38,3 +39,8 @@ private:
 // Where a taken offer's script starts: its VBlanks count from the program's start, so taken after its first
 // press was due, the script moves later and that press comes at `now`.
 uint64_t online_again_from(uint64_t offered_at, uint64_t first_press, uint64_t now);
+
+// The script a taken offer presses: `script`, or the one in `saved` ("SAVE:SCRIPT") when `held` says the save file
+// held SAVE. A game's own client can come back from a match by another way when it finds its save.
+std::string online_again_script(const std::string& script, const std::string& saved,
+                                const std::function<bool(const std::string&)>& held);

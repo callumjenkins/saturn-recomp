@@ -86,6 +86,12 @@ menu, leaves the room, and the other peer's modem hears NO CARRIER.
 `tests/netlink.py --room` in the game runs a match and a rematch through a room on this machine
 (`saturnrecomp.playtest.local_worker`, under `wrangler dev`), then replays each side from what it recorded.
 
+A classic game can also play outside the rooms, against a real Saturn on SegaRPGFan's NetBand tunnel:
+`--modem netband=wait`, `wait:CODE`, `dial:CODE` or `dial:IP` (`runtime/src/net/netband.h`). `CODE` is the
+game's three digits on the dreampipe.net match service, `netband_code` in `[online.classic]`.
+`SATURN_NETBAND_MATCH` and `SATURN_NETBAND_STUN` point it at other servers for a test. Its `line.txt` replays
+the same way.
+
 ## The loop
 
 ```sh

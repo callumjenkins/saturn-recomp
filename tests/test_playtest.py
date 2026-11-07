@@ -217,9 +217,16 @@ def test_a_room_code_is_four_letters_in_either_case(typed, code):
 def test_a_classic_replay_hears_the_line_again_rather_than_joining_a_room(tmp_path):
     from saturnrecomp.playtest.__main__ import replay_args
     played = replay_args(other_disc_game(tmp_path), ["--multitap", "1", "--modem", "session", "--session", "wss://x/api/rooms/new",
-                                                     "--steer", "1:A", "--steer-again", "XS:1:A"], "S")
+                                                     "--steer", "1:A", "--steer-again", "XS:1:A",
+                                                     "--steer-again-saved", "XBAND____01:9:A"], "S")
     assert played == ["--multitap", "1", "--modem", "session", "--line-in", os.path.join("S", "line.txt")]
     assert replay_args(other_disc_game(tmp_path), ["--modem", "line"], "S") == ["--modem", "line"]
+
+
+def test_a_netband_replay_hears_the_line_again_rather_than_calling(tmp_path):
+    from saturnrecomp.playtest.__main__ import replay_args
+    played = replay_args(other_disc_game(tmp_path), ["--modem", "netband=dial:192.168.1.2", "--steer", "1:A"], "S")
+    assert played == ["--modem", "session", "--line-in", os.path.join("S", "line.txt")]
 
 
 @pytest.mark.linux_only

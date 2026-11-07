@@ -90,6 +90,13 @@ TEST(a_taken_offer_counts_its_script_from_the_offer_or_late_enough_that_its_firs
     CHECK_EQ(online_again_from(1000, 50, 1100), 1050);
 }
 
+TEST(a_taken_offer_presses_the_saved_script_only_when_the_save_file_held_its_save) {
+    auto held = [](const std::string& name) { return name == "XBAND____01"; };
+    CHECK_EQ(online_again_script("741:A", "XBAND____01:2700:A", held) == "2700:A", true);
+    CHECK_EQ(online_again_script("741:A", "OTHER:2700:A", held) == "741:A", true);
+    CHECK_EQ(online_again_script("741:A", "", held) == "741:A", true);
+}
+
 TEST(a_line_log_entry_reads_back_as_what_the_line_heard) {
     for (const LineHeard& h : {LineHeard{12, true, {}}, LineHeard{13, false, {}}, LineHeard{14, true, {0x44, 0x00, 0xFF}}}) {
         const std::optional<LineHeard> back = line_log_read(line_log_entry(h));

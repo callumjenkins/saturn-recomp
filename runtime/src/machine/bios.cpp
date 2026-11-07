@@ -26,6 +26,7 @@
 #include <cstring>
 #include <filesystem>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -287,6 +288,7 @@ static std::map<std::string, BupFile> g_bup;
 static bool g_bup_loaded;
 static bool g_bup_changed;                           // since the file was last written
 static std::string g_bup_path;                       // empty: the saves last for the run alone
+static std::set<std::string> g_bup_at_start;         // the names of the saves the file held
 
 // The user's data directory, by the platform's convention; empty if the environment names none.
 std::string sat_data_dir() {
@@ -321,6 +323,7 @@ static std::string default_save(const uint8_t* ip) {
 
 void bios_select_save(const uint8_t* ip) {
     g_bup.clear();
+    g_bup_at_start.clear();
     g_bup_loaded = g_bup_changed = false;
     g_bup_path = g_cfg.save == "-" ? "" : !g_cfg.save.empty() ? g_cfg.save : default_save(ip);
     if (g_bup_path.empty()) sat_note("backup memory: kept for this run alone");
@@ -354,8 +357,14 @@ static void bup_load() {
             break;
         }
         g_bup[std::string(name, strnlen(name, 12))] = b;
+        g_bup_at_start.insert(std::string(name, strnlen(name, 12)));
     }
     std::fclose(f);
+}
+
+bool bios_save_held(const std::string& name) {
+    bup_load();
+    return g_bup_at_start.count(name) != 0;
 }
 
 // Written beside the file and renamed over it, so a run that ends partway through leaves the last whole one.

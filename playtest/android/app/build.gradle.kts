@@ -1,6 +1,6 @@
 // A game's playtest app, built by the release workflow (playtest-release.yml) with:
 //   -Pplaytest.bundle=DIR    playtest.json and disc.json, from `python -m saturnrecomp.playtest GAME.toml bundle`
-//   -Pplaytest.native=DIR    arm64-v8a/ holding libmain.so (the game) and libSDL3.so
+//   -Pplaytest.native=DIR    a folder per ABI, such as arm64-v8a/, holding libmain.so (the game) and libSDL3.so
 //   -Psdl.java=DIR           SDL's Java sources, from the same SDL as libSDL3.so (android-project/app/src/main/java)
 //   -Pplaytest.id=ID         the application id: one per game, so two games install side by side
 //   -Pplaytest.name=NAME     the game's name, under the app's icon
@@ -24,7 +24,7 @@ android {
         versionCode = (System.currentTimeMillis() / 60000).toInt()
         versionName = prop("playtest.build")
         manifestPlaceholders["gameName"] = prop("playtest.name")
-        ndk { abiFilters += "arm64-v8a" }
+        ndk { abiFilters += file(prop("playtest.native")).list().orEmpty() }
     }
     sourceSets["main"].apply {
         java.srcDir(prop("sdl.java"))

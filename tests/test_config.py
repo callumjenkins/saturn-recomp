@@ -154,3 +154,22 @@ def test_the_classic_call_steers_from_power_on_then_from_each_start_of_its_progr
     assert c.steer("wait") == ["--steer", "100:UP,106:,540:A,546:", "--steer-again", "XS:40:A,46:"]
     assert c.steer("dial") == ["--steer", "100:UP,106:,540:B,546:", "--steer-again", "XS:40:B,46:"]
     assert load(tmp_path, TOML).classic is None
+
+
+def test_a_classic_call_with_a_save_named_steers_each_rematch_by_its_way_too(tmp_path):
+    c = load(tmp_path, CLASSIC_TOML + 'saved = "XBAND____01"\nsaved_wait = ["90:A", "96:"]\nsaved_dial = ["90:B"]\n').classic
+    assert c.steer("wait")[4:] == ["--steer-again-saved", "XBAND____01:90:A,96:"]
+    assert c.steer("dial")[4:] == ["--steer-again-saved", "XBAND____01:90:B"]
+    with pytest.raises(SystemExit, match="saved_wait and saved_dial"):
+        load(tmp_path, CLASSIC_TOML + 'saved = "XBAND____01"\n')
+
+
+def test_a_netband_call_waits_finds_a_waiting_game_by_its_code_or_dials_an_address(tmp_path):
+    c = load(tmp_path, CLASSIC_TOML + 'netband_code = "123"\n').classic
+    assert c.netband("wait") == ["--modem", "netband=wait:123", "--steer", "100:UP,106:,540:A,546:"]
+    assert c.netband("match") == ["--modem", "netband=dial:123", "--steer", "100:UP,106:,540:B,546:"]
+    assert c.netband("192.168.1.2") == ["--modem", "netband=dial:192.168.1.2", "--steer", "100:UP,106:,540:B,546:"]
+    without_code = load(tmp_path, CLASSIC_TOML).classic
+    assert without_code.netband("wait")[1] == "netband=wait"
+    with pytest.raises(SystemExit, match="no netband_code"):
+        without_code.netband("match")

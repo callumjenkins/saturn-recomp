@@ -2,10 +2,13 @@
 // IP.BIN in work RAM, and notes who comes and goes. With --modem session, the modem's line reaches the first peer
 // whose channels open (online_room.h), and what the line hears goes to OUT/line.txt, which --line-in plays to the
 // line again in a replay. The window shows what the room has to tell the player (online_card).
+// --modem netband=SPEC puts a real Saturn's NetLink on the line instead, through the NetBand tunnel (net/netband.h),
+// whose calls reach the line as the same messages a room's peer sends, and are recorded the same way.
 #include "saturn.h"
 #include "line_log.h"
 #include "modem.h"
 #include "modem_session.h"
+#include "netband.h"
 #include "online_room.h"
 #include "saturn_build_id.h"
 #include "session.h"
@@ -18,6 +21,9 @@
 namespace {
 
 std::unique_ptr<Session> g_session;
+std::unique_ptr<NetBand> g_netband;
+bool g_netband_waits;
+uint64_t g_modem_commands;      // the modem's, when the NetBand line last looked
 SessionLine* g_line;            // the modem's, which owns it
 OnlineRoom g_room;
 FILE* g_line_out;
@@ -102,7 +108,68 @@ void note(const SessionEvent& e) {
     }
 }
 
+// The line's messages, as the NetBand tunnel carries them out.
+void netband_says(const std::vector<uint8_t>& m) {
+    switch (m[0]) {
+    case SessionLine::kRing: g_netband->call(); break;
+    case SessionLine::kAnswer: g_netband->answer(); break;
+    case SessionLine::kHangUp: g_netband->hang_up(); break;
+    case SessionLine::kData: g_netband->send({m.begin() + 1, m.end()}); break;
+    }
+}
+
+// The tunnel's news, as the line's messages. A waiting end waits again whenever the software next sets its modem up.
+void netband_poll() {
+    if (g_netband_waits && g_modem && g_modem->commands() != g_modem_commands) {
+        g_modem_commands = g_modem->commands();
+        g_netband->wait();
+    }
+    for (NetBandEvent& e : g_netband->poll()) {
+        switch (e.kind) {
+        case NetBandEvent::Kind::Ringing: line_hears({sat_now(), true, {SessionLine::kRing}}); break;
+        case NetBandEvent::Kind::Answered: line_hears({sat_now(), true, {SessionLine::kAnswer}}); break;
+        case NetBandEvent::Kind::Ended:
+            sat_note("netband: %s", e.text.c_str());
+            line_hears({sat_now(), true, {SessionLine::kHangUp}});
+            break;
+        case NetBandEvent::Kind::Data:
+            e.data.insert(e.data.begin(), SessionLine::kData);
+            line_hears({sat_now(), true, std::move(e.data)});
+            break;
+        case NetBandEvent::Kind::Note: sat_note("%s", e.text.c_str()); break;
+        }
+    }
+    g_line->flush();
+}
+
+// SATURN_NETBAND_MATCH and SATURN_NETBAND_STUN (HOST:PORT) in place of the tunnel's own, for a test.
+NetBandServers netband_servers() {
+    NetBandServers servers;
+    if (std::string match = env("SATURN_NETBAND_MATCH"); !match.empty()) servers.match = match;
+    std::string stun = env("SATURN_NETBAND_STUN");
+    if (size_t colon = stun.rfind(':'); colon != std::string::npos)
+        servers.stun = {stun.substr(0, colon), std::atoi(stun.c_str() + colon + 1)};
+    return servers;
+}
+
+void open_line_out(const char* modem) {
+    if (!g_cfg.out.empty() && !(g_line_out = std::fopen((g_cfg.out + "/line.txt").c_str(), "w")))
+        sat_fatal("--modem %s: cannot write %s/line.txt", modem, g_cfg.out.c_str());
+}
+
 }  // namespace
+
+std::unique_ptr<ModemLine> online_netband_line(const std::string& spec_text, std::string& error) {
+    std::optional<NetBandSpec> spec = netband_spec(spec_text, error);
+    if (!spec) return nullptr;
+    open_line_out("netband");
+    auto line = std::make_unique<SessionLine>(netband_says);
+    g_line = line.get();
+    g_netband = std::make_unique<NetBand>(*spec, netband_servers());
+    g_netband_waits = spec->wait;
+    line_hears({sat_now(), true, {}});   // a telephone line, always there
+    return line;
+}
 
 std::unique_ptr<ModemLine> online_modem_line(std::string& error) {
     if (g_cfg.session.empty() == g_cfg.line_in.empty()) {
@@ -110,8 +177,7 @@ std::unique_ptr<ModemLine> online_modem_line(std::string& error) {
         return nullptr;
     }
     if (!g_cfg.line_in.empty()) g_line_in = read_line(g_cfg.line_in);
-    else if (!g_cfg.out.empty() && !(g_line_out = std::fopen((g_cfg.out + "/line.txt").c_str(), "w")))
-        sat_fatal("--modem session: cannot write %s/line.txt", g_cfg.out.c_str());
+    else open_line_out("session");
     auto line = std::make_unique<SessionLine>([](std::vector<uint8_t> m) {
         if (g_session && !g_room.far().empty()) g_session->send(g_room.far(), Channel::Line, std::move(m));
     });
@@ -125,11 +191,16 @@ void online_poll() {
             line_hears(g_line_in[g_line_in_pos]);
         return;
     }
+    if (g_netband) return netband_poll();
     if (g_cfg.session.empty() || sat_vblanks() == 0) return;
     if (!g_session) {
         if (!g_cfg.steer_again.empty() && steer_again().first.empty())
             sat_fatal("--steer-again: %s is not PROGRAM:SCRIPT", g_cfg.steer_again.c_str());
         smpc_parse_script(steer_again().second);   // a fault in it now rather than when the player takes the offer
+        if (size_t colon = g_cfg.steer_again_saved.find(':'); colon != std::string::npos)
+            smpc_parse_script(g_cfg.steer_again_saved.substr(colon + 1));
+        else if (!g_cfg.steer_again_saved.empty())
+            sat_fatal("--steer-again-saved: %s is not SAVE:SCRIPT", g_cfg.steer_again_saved.c_str());
         g_session = std::make_unique<Session>(g_cfg.session, hello());
     }
     for (const SessionEvent& e : g_session->poll()) {
@@ -145,6 +216,7 @@ void online_finish() {
     g_line_out = nullptr;
     g_line = nullptr;
     g_session.reset();
+    g_netband.reset();
 }
 
 void online_program_start(const char* module) {
@@ -160,7 +232,14 @@ OnlineCard online_card() {
 void online_again() {
     std::optional<uint64_t> offered_at = g_room.take_offer();
     if (!offered_at) return;
-    std::vector<PadStep> steps = smpc_parse_script(steer_again().second);
+    // The client keeps the last match's call, and one back with its save found opens a chat on it that it leaves
+    // only when the carrier drops. Heard as the other end hanging up, so a replay hangs up at the same moment.
+    if (g_modem && g_modem->online() && g_line) {
+        sat_note("session: the last match's call hangs up");
+        line_hears({sat_now(), true, {SessionLine::kHangUp}});
+    }
+    std::vector<PadStep> steps =
+        smpc_parse_script(online_again_script(steer_again().second, g_cfg.steer_again_saved, bios_save_held));
     if (steps.empty()) return;
     smpc_steer(steps, online_again_from(*offered_at, steps.front().vblank, sat_vblanks()));
     sat_note("session: another match taken at VBlank %llu", (unsigned long long)sat_vblanks());

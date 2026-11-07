@@ -74,6 +74,7 @@ struct SaturnConfig {
     std::string line_in;            // a classic match's OUT/line.txt, which --modem session's line hears again
     std::string steer_again;        // "PROGRAM:SCRIPT": SCRIPT, from each later start of PROGRAM, once the player asks
                                     // (asked late, from the moment its first press comes then)
+    std::string steer_again_saved;  // "SAVE:SCRIPT": --steer-again's SCRIPT instead, when the save file held SAVE
     int64_t clock = -1;             // the SMPC's clock at power-on, seconds since 1970 (no time zone); -1: the host's
     uint32_t task_setjmp = 0, task_longjmp = 0;   // the game's own task switch (tasks.cpp), 0: none
     int agent_fd = -1;              // a socket another program plays the run through (agent.cpp)
@@ -127,6 +128,8 @@ void state_load(const std::string& path);   // after the boot: the machine as th
 void online_poll();                 // from the master's polls: the room joined once IP.BIN is in, or --line-in played
 struct ModemLine;
 std::unique_ptr<ModemLine> online_modem_line(std::string& error);   // --modem session's line, to the room's other peer
+// --modem netband=SPEC's line, to a real Saturn through the NetBand tunnel
+std::unique_ptr<ModemLine> online_netband_line(const std::string& spec, std::string& error);
 void online_finish();               // the session left
 void online_program_start(const char* module);
 // What the room has to tell the player, over the picture: empty when there is nothing; `again` when Start
@@ -149,6 +152,7 @@ void bios_dispatch(SH2Context& c, uint32_t vec);     // the handler SYS_SETUINT 
 void bios_save();                   // the backup memory to its file
 std::string sat_data_dir();         // the user's data directory by the platform's convention; empty if none
 void bios_select_save(const uint8_t* ip);   // the save file for the disc with this IP.BIN, none loaded yet
+bool bios_save_held(const std::string& name);   // whether the save file held this save when the run read it
 std::string bios_product(const uint8_t* ip);   // IP.BIN's product number and version, as MK-81070_V1.003
 
 // ---- the address map (mmio.cpp) ---------------------------------------------------

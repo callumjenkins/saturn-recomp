@@ -4,7 +4,7 @@
 // libdatachannel calls back on threads of its own. A channel's message goes straight to the events; every other
 // callback posts a task to the session's thread, which alone touches the links and the room's socket.
 #include "session.h"
-#include "cacert.h"
+#include "ca_bundle.h"
 #include "mbedtls_threads.h"
 #include "session_ice.h"
 #include <nlohmann/json.hpp>
@@ -144,7 +144,7 @@ struct Session::Impl {
 
     void start() {
         rtc::WebSocketConfiguration wc;
-        wc.caCertificatePemFile = std::string(reinterpret_cast<const char*>(cacert_pem), sizeof cacert_pem);
+        wc.caCertificatePemFile = ca_bundle_pem();
         room = std::make_shared<rtc::WebSocket>(wc);
         room->onOpen([this] { post([this] { say_hello(); }); });
         room->onMessage([this](rtc::message_variant m) {

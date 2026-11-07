@@ -57,6 +57,7 @@ set(_cacert ${CMAKE_CURRENT_BINARY_DIR}/saturn-cacert/cacert.h)
 add_custom_command(OUTPUT ${_cacert}
     COMMAND ${CMAKE_COMMAND} -DINPUT=${_rt}/third_party/cacert/cacert.pem -DOUTPUT=${_cacert} -DNAME=cacert_pem -P ${_rt}/embed.cmake
     DEPENDS ${_rt}/third_party/cacert/cacert.pem ${_rt}/embed.cmake VERBATIM)
-add_library(saturn_net STATIC ${_net}/session.cpp ${_net}/mbedtls_threads.cpp ${_cacert})
+add_library(saturn_net STATIC ${_net}/session.cpp ${_net}/mbedtls_threads.cpp ${_net}/ca_bundle.cpp ${_net}/http_get.cpp
+    ${_net}/netband.cpp ${_net}/netband_sockets.cpp ${_net}/netband_wire.cpp ${_cacert})
 target_include_directories(saturn_net PUBLIC ${_net} ${SATURN_JSON_INCLUDE} PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/saturn-cacert)
 target_link_libraries(saturn_net PUBLIC LibDataChannel::LibDataChannelStatic PRIVATE saturn_mbedtls)

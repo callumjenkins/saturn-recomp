@@ -4,7 +4,7 @@
 // line status for received bytes and the modem status for the carrier. What the modem says reaches the
 // FIFO at the baud rate, a byte each start bit, data bits, parity and stop bits.
 //
-// In command mode a line ending in CR is an AT command; E, V, Q, Z, &F, S0 (rings before answering), A, D,
+// In command mode a line from "AT" to CR is a command; E, V, Q, Z, &F, S0 (rings before answering), A, D,
 // H and O act, and anything else is accepted with OK. Online, every byte goes down the line until
 // "+++" with a second of silence either side returns to command mode with the call held.
 #include "modem.h"
@@ -21,6 +21,12 @@ const uint64_t kRingEvery = 6 * kSecond;
 const size_t kFifo = 16;
 
 enum { kDcd = 0x80, kRi = 0x40, kDeltaDcd = 0x08, kRiEnded = 0x04 };
+
+// Whether `b`, after the one or no characters of `start`, keeps it the start of "AT" or "A/".
+bool command_prefix(const std::string& start, uint8_t b) {
+    if (start.empty()) return std::toupper(b) == 'A';
+    return std::toupper(b) == 'T' || b == '/';
+}
 
 struct NoLine : ModemLine {
     bool dial(const std::string&) override { return false; }
@@ -206,11 +212,15 @@ void Modem::from_host(uint8_t b, uint64_t now) {
         if (line.size() >= 2 && std::toupper((unsigned char)line[0]) == 'A' && line[1] == '/') line = last_cmd_;
         if (line.size() >= 2 && std::toupper((unsigned char)line[0]) == 'A' && std::toupper((unsigned char)line[1]) == 'T') {
             last_cmd_ = line;
+            ++commands_;
             sat_note("modem: -> %s", line.c_str());
             command(line.substr(2), now);
         }
     } else if (b == 8) {
         if (!cmd_.empty()) cmd_.pop_back();
+    } else if (cmd_.size() < 2 && !command_prefix(cmd_, b)) {
+        // As a Hayes modem does, a command starts at its "AT" or "A/", and what comes before it is dropped.
+        cmd_ = std::toupper(b) == 'A' ? std::string(1, (char)b) : "";
     } else if (b != '\n' && cmd_.size() < 256) {
         cmd_ += (char)b;
     }

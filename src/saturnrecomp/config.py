@@ -70,6 +70,10 @@
     starts = 1559                   # the VBlank it first starts at
     wait = ["741:A", "747:"]        # from each of its starts to waiting for a call ...
     dial = ["741:A", "747:"]        # ... and to dialling one
+    saved = "XBAND____01"           # optional: a save the program finds after a match, and comes back another way ...
+    saved_wait = ["2700:A", "2706:"]   # ... to wait again from, after it ...
+    saved_dial = ["2700:A", "2706:"]   # ... and to dial again
+    netband_code = "123"            # optional: the 3 digits a real Saturn dials to find the game through dreampipe.net
 
     [checkpoint]                    # optional: a start a session's Continue can rebuild when its dump won't load
     keep = [["stage_2", 2], ["score", 8], ["objects+0x5E", 1]]   # the first's changes start one
@@ -308,6 +312,10 @@ class Classic:
     starts: int
     wait: list[str]
     dial: list[str]
+    saved: str = ""
+    saved_wait: list[str] = field(default_factory=list)
+    saved_dial: list[str] = field(default_factory=list)
+    netband_code: str = ""
 
     def first(self, role: ClassicRole) -> list[str]:
         """From power-on to the call."""
@@ -315,11 +323,27 @@ class Classic:
 
     def steer(self, role: ClassicRole) -> list[str]:
         """saturn's arguments that steer a player to the call and to each rematch's."""
-        return ["--steer", ",".join(self.first(role)), "--steer-again", f"{self.program}:{','.join(getattr(self, role))}"]
+        found = ["--steer", ",".join(self.first(role)), "--steer-again", f"{self.program}:{','.join(getattr(self, role))}"]
+        if self.saved:
+            found += ["--steer-again-saved", f"{self.saved}:{','.join(getattr(self, f'saved_{role}'))}"]
+        return found
 
     def steers(self) -> dict[ClassicRole, list[str]]:
         """Each role's steer, as a launcher picks from them."""
         return {role: self.steer(role) for role in get_args(ClassicRole)}
+
+    def netband(self, target: str) -> list[str]:
+        """saturn's arguments for a call to a real Saturn through the NetBand tunnel: "wait" waits for one, "match"
+        finds a game waiting through the match service, and an IPv4 address is called directly."""
+        if target == "wait":
+            spec, role = "wait" + (f":{self.netband_code}" if self.netband_code else ""), "wait"
+        elif target == "match":
+            if not self.netband_code:
+                raise SystemExit("[online.classic] has no netband_code, so the match service cannot find the game")
+            spec, role = f"dial:{self.netband_code}", "dial"
+        else:
+            spec, role = f"dial:{target}", "dial"
+        return ["--modem", f"netband={spec}", "--steer", ",".join(self.first(role))]
 
 
 @dataclass
@@ -423,7 +447,11 @@ def load(path):
 
 
 def _classic(c: dict) -> Classic:
-    return Classic(list(c["boot"]), c["program"], int(c["starts"]), list(c["wait"]), list(c["dial"]))
+    if "saved" in c and not ("saved_wait" in c and "saved_dial" in c):
+        raise SystemExit("[online.classic] saved needs saved_wait and saved_dial, the ways back with it")
+    return Classic(list(c["boot"]), c["program"], int(c["starts"]), list(c["wait"]), list(c["dial"]),
+                   str(c.get("saved", "")), list(c.get("saved_wait", [])), list(c.get("saved_dial", [])),
+                   str(c.get("netband_code", "")))
 
 
 def _register(name):

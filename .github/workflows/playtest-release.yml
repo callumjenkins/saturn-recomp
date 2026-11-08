@@ -235,9 +235,19 @@ jobs:
         run: |
           ls zips
           read -r endpoint product < <(python -c "import sys; from saturnrecomp import config; g = config.load(sys.argv[1]); print(g.playtest.endpoint, g.playtest.product)" "$CONFIG")
+          echo "ENDPOINT=$endpoint" >> "$GITHUB_ENV"
           tag="playtest-$BUILD"
           gh release create "$tag" zips/* --prerelease --title "Playtest build $BUILD" \
             --notes-file saturn-recomp/playtest/README.txt
           url="https://github.com/${{ github.repository }}/releases/tag/$tag"
           curl --fail --silent --show-error -X PUT -H "Authorization: Bearer $CI_TOKEN" -H "content-type: application/json" \
             -d "{\"release_url\": \"$url\"}" "$endpoint/api/builds/$product/$BUILD"
+      # The release is out by now, so a failure here leaves it published and marks the run as needing a look.
+      - name: Check that rooms give TURN relays
+        run: |
+          health=$(curl --fail --silent --show-error "$ENDPOINT/api/health")
+          echo "$health"
+          if [ "$health" != '{"turn":"ok"}' ]; then
+            echo "::error::Rooms give STUN alone ($health), so two players behind carrier-grade NAT cannot connect. Check the Worker's TURN_KEY_ID and TURN_KEY_API_TOKEN secrets."
+            exit 1
+          fi

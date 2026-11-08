@@ -1,6 +1,9 @@
 // saturn-recomp runtime — BSD sockets as Winsock and POSIX both give them, for the NetBand tunnel, http_get and tests.
 #pragma once
 #ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <winsock2.h>
 #include <ws2tcpip.h>
 using Socket = SOCKET;

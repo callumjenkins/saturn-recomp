@@ -42,7 +42,6 @@ struct NetBand::Impl {
 
     State state = State::Idle;
     Socket udp = kNoSocket, listener = kNoSocket;
-    NetBandAddress far;
     sockaddr_in far_addr{};
     std::string ip12;          // this end, as the match service knows it
     int mapped_port = 0;
@@ -206,7 +205,6 @@ struct NetBand::Impl {
         const int port = dialled ? servers.dial_port : servers.wait_port;
         if (!a) return fail("cannot reach " + to.ip);
         if (!open_udp(port)) return fail("UDP port " + std::to_string(port) + " is in use");
-        far = to;
         far_addr = *a;
         sender = {};
         receiver = {};

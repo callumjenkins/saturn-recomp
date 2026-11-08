@@ -46,7 +46,9 @@ bool netband_readable(Socket s, milliseconds wait) {
     fd_set set;
     FD_ZERO(&set);
     FD_SET(s, &set);
-    timeval tv{(long)(wait.count() / 1000), (long)(wait.count() % 1000 * 1000)};
+    timeval tv{};
+    tv.tv_sec = (decltype(tv.tv_sec))(wait.count() / 1000);
+    tv.tv_usec = (decltype(tv.tv_usec))(wait.count() % 1000 * 1000);
     return select((int)s + 1, &set, nullptr, nullptr, &tv) > 0;
 }
 

@@ -5,11 +5,13 @@ import { PAGE } from './page'
 import { openRoom } from './rooms'
 import { gameSessions, listSessions, mySessions, readBundle, reviewSession, uploadSession } from './sessions'
 import { inviteTester, listTesters, revokeTester } from './testers'
+import { health } from './turn'
 
 type Route = [method: string, pattern: RegExp, handle: (env: Env, request: Request, url: URL, ...params: string[]) => Promise<Response>]
 
 const ROUTES: Route[] = [
 	['GET', /^\/$/, async () => new Response(PAGE, { headers: { 'content-type': 'text/html; charset=utf-8' } })],
+	['GET', /^\/api\/health$/, (env) => health(env)],
 	['GET', /^\/api\/games\/([^/]+)\/latest$/, (env, _, __, product) => latestBuild(env, product)],
 	['GET', /^\/api\/games\/([^/]+)\/sessions$/, (env, _, __, product) => gameSessions(env, product)],
 	['GET', /^\/api\/games\/([^/]+)\/sessions\/([^/]+)\/bundle$/, (env, _, __, product, id) => readBundle(env, id, product)],

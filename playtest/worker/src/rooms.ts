@@ -1,14 +1,13 @@
 import { DurableObject } from 'cloudflare:workers'
 import { type Tester, testerById, testerByToken } from './auth'
 import { HttpError } from './http'
+import { iceServers } from './turn'
 
 /** A peer as the others see it. */
 export type Peer = { id: string; name: string; pads: number }
 
 /** What every peer in a room must share: the disc, both builds and the way the room plays. */
 export type Terms = Record<(typeof TERM_FIELDS)[number], string>
-
-type IceServer = { urls: string[]; username?: string; credential?: string }
 
 /** A message from a peer. Anything else is answered with an error. */
 type FromPeer =
@@ -23,10 +22,6 @@ export const TERM_FIELDS = ['product', 'game', 'runtime', 'mode'] as const
 const CLASSIC_PEERS = 2
 
 const CODE_LETTERS = 'BCDFGHJKLMNPQRSTVWXZ'
-
-const STUN_ONLY: IceServer[] = [{ urls: ['stun:stun.cloudflare.com:3478'] }]
-
-const TURN_TTL_S = 86400
 
 /** How long a room's code stays claimed with nobody in the room. */
 const UNJOINED_MS = 60_000
@@ -147,21 +142,6 @@ export class Room extends DurableObject<Env> {
 		if (typeof msg.tester === 'string' && msg.tester) return testerById(this.env, msg.tester)
 		return null
 	}
-}
-
-/** Short-lived TURN credentials for a peer, from the account's TURN key, or Cloudflare's STUN alone without one. */
-const iceServers = async (env: Env): Promise<IceServer[]> => {
-	if (!env.TURN_KEY_ID || !env.TURN_KEY_API_TOKEN) return STUN_ONLY
-	const r = await fetch(`https://rtc.live.cloudflare.com/v1/turn/keys/${env.TURN_KEY_ID}/credentials/generate-ice-servers`, {
-		method: 'POST',
-		headers: { authorization: `Bearer ${env.TURN_KEY_API_TOKEN}`, 'content-type': 'application/json' },
-		body: JSON.stringify({ ttl: TURN_TTL_S }),
-	})
-	if (!r.ok) {
-		console.error(JSON.stringify({ message: 'TURN credentials', status: r.status }))
-		return STUN_ONLY
-	}
-	return (await r.json<{ iceServers: IceServer[] }>()).iceServers
 }
 
 const newCode = () => [...crypto.getRandomValues(new Uint8Array(4))].map((b) => CODE_LETTERS[b % CODE_LETTERS.length]).join('')

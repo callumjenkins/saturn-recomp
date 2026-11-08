@@ -45,7 +45,9 @@ npx wrangler deploy
 ```
 
 Without the TURN key, rooms give their peers Cloudflare's STUN alone, and two peers that cannot reach each
-other directly, such as two behind carrier-grade NAT, do not connect.
+other directly, such as two behind carrier-grade NAT, do not connect. `GET /api/health` says whether the key
+works, with no token: `{"turn":"ok"}`, or `{"turn":"stun-only","status":401}` with the status Cloudflare refused it
+with (`null` with no key set). It checks at most once a minute and never returns the credentials it mints.
 
 In the game's repository:
 

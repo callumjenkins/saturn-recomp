@@ -1,6 +1,6 @@
 import { env, exports } from 'cloudflare:workers'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { health } from '../src/turn'
+import { health, iceServers } from '../src/turn'
 
 const KEYED = { ...env, TURN_KEY_ID: 'key-id', TURN_KEY_API_TOKEN: 'key-token' }
 
@@ -20,6 +20,14 @@ const later = () => (clock += 120_000)
 
 afterEach(() => {
 	vi.restoreAllMocks()
+})
+
+describe('iceServers', () => {
+	it("mints a day's credentials tagged with the tester", async () => {
+		const fetch = answer(RELAYS)
+		expect(await iceServers(KEYED, 'tester-1')).toEqual(RELAYS.iceServers)
+		expect(JSON.parse(fetch.mock.calls[0][1]?.body as string)).toEqual({ ttl: 86400, customIdentifier: 'tester-1' })
+	})
 })
 
 describe('health', () => {

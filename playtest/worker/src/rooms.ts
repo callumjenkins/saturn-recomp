@@ -107,7 +107,7 @@ export class Room extends DurableObject<Env> {
 
 		const me: Peer = { id: crypto.randomUUID().slice(0, 8), name: tester.name, pads }
 		ws.serializeAttachment(me)
-		send(ws, { type: 'welcome', code, id: me.id, peers: others, iceServers: await iceServers(this.env) })
+		send(ws, { type: 'welcome', code, id: me.id, peers: others, iceServers: await iceServers(this.env, tester.id) })
 		for (const other of this.sockets(ws)) send(other, { type: 'joined', peer: me })
 	}
 

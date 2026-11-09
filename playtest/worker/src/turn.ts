@@ -24,20 +24,23 @@ export const health = async (env: Env, now = Date.now()) => {
 	return json(await checked.body)
 }
 
-/** Short-lived TURN credentials for a peer, from the account's TURN key, or Cloudflare's STUN alone without one. */
-export const iceServers = async (env: Env): Promise<IceServer[]> => {
-	const minted = await mint(env, TURN_TTL_S)
+/**
+ * Short-lived TURN credentials for a peer, from the account's TURN key, or Cloudflare's STUN alone without one. They
+ * carry the tester's id, which Cloudflare's TURN analytics group usage by.
+ */
+export const iceServers = async (env: Env, tester: string): Promise<IceServer[]> => {
+	const minted = await mint(env, TURN_TTL_S, tester)
 	if ('iceServers' in minted) return minted.iceServers
 	if (minted.status !== null) console.error(JSON.stringify({ message: 'TURN credentials', status: minted.status }))
 	return STUN_ONLY
 }
 
-const mint = async (env: Env, ttl: number): Promise<Minted> => {
+const mint = async (env: Env, ttl: number, customIdentifier?: string): Promise<Minted> => {
 	if (!env.TURN_KEY_ID || !env.TURN_KEY_API_TOKEN) return { status: null }
 	const r = await fetch(`https://rtc.live.cloudflare.com/v1/turn/keys/${env.TURN_KEY_ID}/credentials/generate-ice-servers`, {
 		method: 'POST',
 		headers: { authorization: `Bearer ${env.TURN_KEY_API_TOKEN}`, 'content-type': 'application/json' },
-		body: JSON.stringify({ ttl }),
+		body: JSON.stringify({ ttl, customIdentifier }),
 	})
 	if (!r.ok) return { status: r.status }
 	return { iceServers: (await r.json<{ iceServers: IceServer[] }>()).iceServers }

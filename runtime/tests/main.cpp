@@ -1,4 +1,5 @@
 #include "test.h"
+#include <cstdlib>
 #include <filesystem>
 #include <random>
 
@@ -18,6 +19,19 @@ std::string test_dir(const char* name) {
     std::filesystem::path p = std::filesystem::temp_directory_path() / (std::string(name) + "-" + std::to_string(rng()));
     std::filesystem::create_directories(p);
     return p.string();
+}
+
+std::string use_data_dir(const std::string& root) {
+#if defined(_WIN32)
+    _putenv_s("APPDATA", root.c_str());
+    return root;
+#elif defined(__APPLE__)
+    setenv("HOME", root.c_str(), 1);
+    return (std::filesystem::path(root) / "Library" / "Application Support").string();
+#else
+    setenv("XDG_DATA_HOME", root.c_str(), 1);
+    return root;
+#endif
 }
 
 int main() {

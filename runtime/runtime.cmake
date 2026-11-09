@@ -7,6 +7,7 @@
 #                   SDL3, or with -DSATURN_NO_SDL=ON, a host for headless runs only
 #   saturn_m68k     Musashi, the 68000 (third_party/musashi, C)
 #   saturn_imgui    Dear ImGui, the launcher's menu (third_party/imgui), with SDL3 only
+#   saturn_rcheevos rcheevos's runtime, which evaluates achievements (third_party/rcheevos, C)
 # The in-game menu and the touch pad draw text in Inter (third_party/inter), with stb_truetype (third_party/stb).
 # A target links saturn_core, then saturn_stub or saturn_machine with saturn_host, then recomp.
 set(_rt ${CMAKE_CURRENT_LIST_DIR})
@@ -18,7 +19,7 @@ add_library(saturn_machine OBJECT
     ${_src}/machine/machine.cpp ${_src}/machine/bios.cpp ${_src}/machine/mmio.cpp ${_src}/machine/tasks.cpp
     ${_src}/machine/onchip.cpp ${_src}/machine/scu.cpp ${_src}/machine/scudsp.cpp ${_src}/machine/smpc.cpp
     ${_src}/machine/cdrom.cpp ${_src}/machine/cdblock.cpp ${_src}/machine/agent.cpp ${_src}/machine/state.cpp
-    ${_src}/machine/modem.cpp ${_src}/machine/modem_tcp.cpp
+    ${_src}/machine/modem.cpp ${_src}/machine/modem_tcp.cpp ${_src}/machine/achievements.cpp
     ${_src}/video/video.cpp ${_src}/video/vdp1.cpp ${_src}/video/vdp2.cpp ${_src}/video/png.cpp ${_src}/video/movie.cpp
     ${_src}/sound/sound.cpp ${_src}/sound/scsp.cpp)
 option(SATURN_NO_SDL "build the headless host even if SDL3 is installed" OFF)
@@ -71,6 +72,17 @@ target_include_directories(saturn_m68k PUBLIC ${_m68k})
 target_include_directories(saturn_machine PRIVATE ${_rt}/third_party/minicoro)
 target_compile_options(saturn_m68k PRIVATE -w)
 target_link_libraries(saturn_machine PUBLIC saturn_m68k)
+set(_rc ${_rt}/third_party/rcheevos)
+add_library(saturn_rcheevos STATIC
+    ${_rc}/src/runtime/rc_alloc.c ${_rc}/src/runtime/rc_condition.c ${_rc}/src/runtime/rc_condset.c
+    ${_rc}/src/runtime/rc_format.c ${_rc}/src/runtime/rc_lboard.c ${_rc}/src/runtime/rc_memref.c
+    ${_rc}/src/runtime/rc_operand.c ${_rc}/src/runtime/rc_richpresence.c ${_rc}/src/runtime/rc_runtime.c
+    ${_rc}/src/runtime/rc_trigger.c ${_rc}/src/runtime/rc_typed_value.c ${_rc}/src/runtime/rc_value.c
+    ${_rc}/src/util/md5.c ${_rc}/src/util/rc_compat.c ${_rc}/src/util/rc_util.c)
+target_include_directories(saturn_rcheevos PUBLIC ${_rc}/include)
+target_compile_options(saturn_rcheevos PRIVATE -w)
+target_compile_definitions(saturn_rcheevos PRIVATE RC_NO_THREADS)   # rc_runtime never takes rcheevos's lock
+target_link_libraries(saturn_machine PUBLIC saturn_rcheevos)
 if(WIN32)
   target_link_libraries(saturn_machine PUBLIC ws2_32)   # the modem's TCP line
 endif()

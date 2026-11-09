@@ -13,7 +13,8 @@ modules; the runtime activates the one whose image it finds in memory
     p_<name>_table.cpp      the module: image base, size, crc32, entries
     map/<NAME>.tsv          where each instruction is implemented: its address, the function, the
                             file and line (one row per function that holds it)
-    modules.cpp             every module of the build (g_sh2_modules), the task switch (g_sh2_tasks)
+    modules.cpp             every module of the build (g_sh2_modules), the task switch (g_sh2_tasks),
+                            the achievements (g_achievements) and the game's title
     CMakeLists.txt          the library `recomp`, the runtime, the self-test
     report.txt              per module: functions, calls and jumps by how
                             they were resolved, targets outside the module
@@ -266,10 +267,12 @@ endif()
 
 
 def generate(specs, out, per_file=8000, comments=True, optest=False, log=print, hooks=None, tasks=None,
-             runtime_literals=None, callable_entries=None, unwind_returns=None, task_switches=(), replaces=None):
+             runtime_literals=None, callable_entries=None, unwind_returns=None, task_switches=(), replaces=None,
+             achievements=(), title=""):
     """hooks: {program name: [address, ...]}, see --hook. tasks: (setjmp, longjmp), see --tasks.
     replaces: {program name: {entry: symbol}}: that function's body calls `void symbol(SH2Context&)`, then returns.
-    task_switches: [(save, save_key, resume_sp, switch, switch_key)], config.TaskSwitch's fields."""
+    task_switches: [(save, save_key, resume_sp, switch, switch_key)], config.TaskSwitch's fields.
+    achievements: [config.Achievement]; title: the game's, for the unlock file."""
     hooks = hooks or {}
     replaces = replaces or {}
     runtime_literals = runtime_literals or set()
@@ -307,6 +310,11 @@ def generate(specs, out, per_file=8000, comments=True, optest=False, log=print, 
         rows = [", ".join("0x%X" % v for v in s) for s in task_switches] or ["0, 0, 0, 0, 0"]
         f.write("extern const SH2TaskSwitch g_sh2_task_switches[] = {%s};\n" % ", ".join("{%s}" % r for r in rows))
         f.write("extern const int g_sh2_ntask_switches = %d;\n" % len(task_switches))
+        rows = [", ".join([*map(_c_string, (a.id, a.title, a.description)), str(a.points), _c_string(a.trigger)])
+                for a in achievements] or ["nullptr, nullptr, nullptr, 0, nullptr"]
+        f.write("extern const SH2Achievement g_achievements[] = {%s};\n" % ", ".join("{%s}" % r for r in rows))
+        f.write("extern const int g_nachievements = %d;\n" % len(achievements))
+        f.write("extern const char g_game_title[] = %s;\n" % _c_string(title))
     srcs = [x for m in modules for x in m.files] + ["modules.cpp"]
     with Out(os.path.join(out, "CMakeLists.txt")) as f:
         f.write(CMAKE.format(rt=RUNTIME.replace("\\", "/"), srcs="\n    ".join(srcs)))
@@ -337,6 +345,11 @@ def generate(specs, out, per_file=8000, comments=True, optest=False, log=print, 
                     f.write("%s: target %08X (from %08X) is not an entry of %s\n" % (m.name, t, e, m.name))
     log(tot)
     return modules
+
+
+def _c_string(s: str) -> str:
+    """A C++ string literal of s's UTF-8, each byte outside printable ASCII, and each '"', '\\', and '?', as an octal escape."""
+    return '"%s"' % "".join(chr(b) if 32 <= b < 127 and b not in b'"\\?' else "\\%03o" % b for b in s.encode())
 
 
 def main(argv=None):

@@ -54,6 +54,13 @@
     at = "0x0600665C"               # its entry
     symbol = "decomp_f0600665C"     # void symbol(SH2Context&), linked in through SATURN_EXTRA; the build then sets pc = pr
 
+    [[achievement]]                 # optional: an achievement the runtime evaluates once a VBlank (achievements.cpp)
+    id = "clear-world-1"            # stable: the unlock file keys on it
+    title = "World 1"
+    description = "Clear the first world"
+    points = 10                     # 0 to 100
+    trigger = "0xH{stage_world}=2_d0xH{stage_world}=1"   # rcheevos's condition syntax over work RAM
+
     [playtest]                      # optional: builds for playtesters (saturnrecomp.playtest)
     endpoint = "https://saturn-playtest.example.workers.dev"
     repo = "OWNER/NAME"             # the GitHub repository whose releases hold the builds
@@ -87,13 +94,25 @@ the names of the first byte's bits. "@N" reads from the range's Nth byte on, and
 out a 0 (or no name).
 
 An address is a number, a name from [symbols], or either plus an offset ("objects+0x5E"). Paths are
-relative to the file.
+relative to the file. In a trigger, {ADDRESS} becomes that address in rcheevos's numbering of the Saturn's
+work RAM, as hex digits, so 0xH{stage_world} is the byte there. The Saturn's words are big-endian: read
+16, 24, and 32-bit values with rcheevos's 0xI, 0xJ, and 0xG. A hex constant is h1234, since 0x1234 is
+a memory reference.
 """
 import json
 import os
 import re
 import tomllib
 from dataclasses import dataclass, field
+
+
+@dataclass
+class Achievement:
+    id: str
+    title: str
+    description: str
+    points: int
+    trigger: str               # with each {ADDRESS} expanded
 
 
 @dataclass
@@ -313,6 +332,7 @@ class Game:
     inventory: Inventory | None = None
     executable: str = ""
     replaces: dict[str, dict[int, str]] = field(default_factory=dict)   # {module: {entry: symbol}}
+    achievements: list[Achievement] = field(default_factory=list)
 
     @property
     def saturn(self):
@@ -394,7 +414,50 @@ def load(path):
     return Game(game.get("name", os.path.basename(root)), root, os.path.join(root, game.get("build", "build")),
                 os.path.join(root, game.get("seeds", "seeds.json")), modules, symbols, tasks, hooks,
                 list(game.get("cmake", [])), playtest, _checkpoint(t["checkpoint"], symbols) if "checkpoint" in t else None,
-                switches, inventory, replaces=replaces)
+                switches, inventory, replaces=replaces,
+                achievements=_achievements(t.get("achievement", []), symbols, path))
+
+
+def _achievement(a: dict, symbols: dict[str, int], path: str) -> Achievement:
+    where = f"{path}: [[achievement]]"
+    if not isinstance(a.get("id"), str) or not re.fullmatch(r"[A-Za-z0-9_.-]+", a["id"]):
+        raise SystemExit(f"{where} id {a.get('id')!r} is not letters, digits, '_', '.' and '-'")
+    for key in ("title", "description", "trigger"):
+        if key not in a:
+            raise SystemExit(f"{where} {a['id']} has no {key}")
+        if not isinstance(a[key], str):
+            raise SystemExit(f"{where} {a['id']}: {key} {a[key]!r} is not a string")
+    points = a.get("points")
+    if type(points) is not int or not 0 <= points <= 100:
+        raise SystemExit(f"{where} {a['id']}: points {points!r} is not a whole number from 0 to 100")
+
+    def expand(m: re.Match) -> str:
+        addr = _addr(m[1], symbols)
+        rc = _rc_address(addr)
+        if rc is None:
+            raise SystemExit(f"{where} {a['id']}: {m[1]} is at {addr:08X}, outside work RAM")
+        return "%06x" % rc
+    return Achievement(a["id"], a["title"], a["description"], points, re.sub(r"\{([^}]*)\}", expand, a["trigger"]))
+
+
+def _achievements(entries: list[dict], symbols: dict[str, int], path: str) -> list[Achievement]:
+    out = [_achievement(a, symbols, path) for a in entries]
+    seen = set()
+    for a in out:
+        if a.id in seen:
+            raise SystemExit(f"{path}: [[achievement]] {a.id} is defined twice")
+        seen.add(a.id)
+    return out
+
+
+def _rc_address(addr: int) -> int | None:
+    """rcheevos's number for a work RAM address, work RAM low from 0 and high from 0x100000; None outside work RAM."""
+    a = addr & 0x1FFFFFFF                      # the cache-through area is the same memory
+    if 0x00200000 <= a < 0x00300000:
+        return a - 0x00200000
+    if 0x06000000 <= a < 0x08000000:           # work RAM high repeats every MiB
+        return 0x100000 + (a & 0xFFFFF)
+    return None
 
 
 def _register(name):

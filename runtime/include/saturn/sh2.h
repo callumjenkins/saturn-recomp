@@ -191,6 +191,11 @@ extern const uint32_t g_sh2_tasks[2];             // the game's setjmp and longj
 struct SH2TaskSwitch { uint32_t save, save_key, resume_sp, sw, switch_key; };
 extern const SH2TaskSwitch g_sh2_task_switches[];
 extern const int g_sh2_ntask_switches;
+// game.toml's [[achievement]]s, the trigger in rcheevos's condition syntax over its numbering of work RAM
+struct SH2Achievement { const char* id; const char* title; const char* description; int points; const char* trigger; };
+extern const SH2Achievement g_achievements[];
+extern const int g_nachievements;
+extern const char g_game_title[];
 const SH2Module* sh2_module(const char* name);
 const SH2Module* sh2_identify(uint32_t base);     // the module whose image is in memory at base
 const SH2Module* sh2_identify_containing(uint32_t addr, bool* exact);   // a module whose image in memory holds addr

@@ -181,6 +181,7 @@ static int parse_args(SaturnConfig& cfg, bool& launcher, int argc, char** argv) 
                 return 2;
             }
             sh2_hook_set(addr, (int)reg, v);
+            cfg.hooks = true;
         }
         else {
             std::fprintf(stderr, "usage: saturn --cue GAME.cue [--out DIR] [--headless] [--fullscreen] [--scale N] [--settings FILE]\n"

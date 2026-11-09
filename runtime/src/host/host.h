@@ -12,6 +12,7 @@ bool host_open();                                    // the window (unless headl
 void host_present(const Frame& f);                   // show it, take the events
 void host_pace(uint64_t now);                        // wait until the host's clock has caught up
 bool host_wants_frame();                             // a window to show it in
+void host_notify(const char* title, const char* text);   // a card in a corner for a few seconds, a line for each of text's
 const int kHostSlots = 12;                           // players, numbered across both ports (smpc.cpp)
 enum : uint16_t {                                    // a Saturn pad's buttons, as host_pad gives them
     B_RIGHT = 0x8000, B_LEFT = 0x4000, B_DOWN = 0x2000, B_UP = 0x1000, B_START = 0x0800, B_A = 0x0400,

@@ -14,6 +14,7 @@
 //   onchip.cpp    the SH7604's own registers, per CPU (DIVU, FRT, DMAC...)
 //   tasks.cpp     a game's own tasks, switched by its setjmp and longjmp
 //   agent.cpp     another program playing the run through a socket (--agent)
+//   achievements.cpp  game.toml's achievements, tested at each VBlank-IN (achievements.h)
 //   video/
 //   video.cpp     the raster timing, the video chips on the bus
 //   vdp1.cpp      VDP1: the command table drawn in software, the framebuffers
@@ -69,6 +70,7 @@ struct SaturnConfig {
     std::string modem;              // a NetLink fitted: "line" with nothing on its line, or a TCP line (modem.h); empty: none
     int64_t clock = -1;             // the SMPC's clock at power-on, seconds since 1970 (no time zone); -1: the host's
     uint32_t task_setjmp = 0, task_longjmp = 0;   // the game's own task switch (tasks.cpp), 0: none
+    bool hooks = false;             // --hook's register overrides were given (sh2_hook_set)
     int agent_fd = -1;              // a socket another program plays the run through (agent.cpp)
     std::string writes;             // "VBLANK:ADDR=HEX,...": memory written at those VBlank-INs, as the agent's write
     std::string cheats;             // "MODULE:ADDR=HEX" or "MODULE:ADDR|=HEX",...: written or or-ed in once a VBlank
@@ -130,6 +132,9 @@ void bios_dispatch(SH2Context& c, uint32_t vec);     // the handler SYS_SETUINT 
 void bios_save();                   // the backup memory to its file
 std::string sat_data_dir();         // the user's data directory by the platform's convention; empty if none
 void bios_select_save(const uint8_t* ip);   // the save file for the disc with this IP.BIN, none loaded yet
+struct DiscId { std::string product, version; };
+const DiscId& bios_disc_id();       // IP.BIN's product number and version, as the save directory is named
+const std::string& bios_save_path();   // the save file; empty: the saves last for the run alone
 
 // ---- the address map (mmio.cpp) ---------------------------------------------------
 void mmio_log_write(const std::string& path);        // every register touched, with counts

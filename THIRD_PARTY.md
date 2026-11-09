@@ -38,6 +38,13 @@ is at the top of `m68kcpu.c` and in `readme.txt`:
 the SDL3 and SDL_Renderer3 backends, unchanged (`VERSION` there). Only the SDL host builds it. Its
 licence is `LICENSE.txt` there: the MIT licence above, copyright © 2014-2026 Omar Cornut.
 
+## rcheevos (achievement conditions) — MIT
+
+`runtime/third_party/rcheevos/`: the runtime and condition parser of rcheevos, as of commit eea6461f
+on GitHub, unchanged (`README.md` there says which files). It evaluates a game's `[[achievement]]`
+triggers, and its client and server code were left out. Its licence is `LICENSE` there:
+the MIT licence above, copyright © 2018 RetroAchievements.org.
+
 ## SoftFloat (inside Musashi) — SoftFloat 2b's own terms
 
 `runtime/third_party/musashi/softfloat/`: John R. Hauser's SoftFloat

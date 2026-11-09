@@ -32,6 +32,7 @@
 // entry on a fresh host stack: the old program's C++ frames do not pile up
 // under the new one.
 #include "saturn.h"
+#include "achievements.h"
 #include "modem.h"
 #include "host.h"
 #include "video.h"
@@ -664,6 +665,10 @@ int saturn_main(const SaturnConfig& cfg) {
     cd_init();
     onchip_reset(0);
     bios_boot();
+    if (std::string error = achievements_start(g_achievements, g_nachievements, g_game_title); !error.empty()) {
+        std::fprintf(stderr, "%s\n", error.c_str());
+        return 2;
+    }
     uint32_t entry = bios_first_read();
     const SH2Module* m = sh2_identify(entry);
     if (!m) { std::fprintf(stderr, "no module matches the 1st read file at %08X\n", entry); return 2; }

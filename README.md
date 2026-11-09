@@ -118,6 +118,16 @@ another, as `saturn-recomp/PRODUCT_VERSION/backup.bin` under `$XDG_DATA_HOME` (o
 `~/.local/share`), `~/Library/Application Support` or `%APPDATA%`. A test run should pass
 `--save -` or a file of its own, so it starts from no saves and leaves the player's alone.
 
+A game can list its own achievements in `game.toml` as `[[achievement]]` entries. Each one's trigger
+is in rcheevos's condition syntax over work RAM. In it, `{symbol}` stands for an address from
+`[symbols]`, and `0xI`, `0xJ`, and `0xG` read the Saturn's big-endian 16, 24, and 32-bit values. The
+runtime tests them at each VBlank-IN with rcheevos's runtime (`runtime/third_party/rcheevos`), logs
+`achievement ID triggered`, shows a card in the window, and adds the unlock and its UTC time to
+`achievements.json` beside the saves. `runtime/src/machine/achievements.h` documents that file. A run
+with `--save -`, `--hook`, `--write`, `--state-in`, `--input`, `--agent`, `--cheat`, or
+`--virtual-input` still logs what triggers and records nothing, and its card says the unlock was
+not recorded and why.
+
 ## Playtesting
 
 `playtest/` builds a game for other people to play and brings their sessions back for review: a

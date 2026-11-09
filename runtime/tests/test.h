@@ -12,6 +12,8 @@ struct Test {
 };
 void check_failed(const char* file, int line, const char* expr, uint64_t got, uint64_t want);
 std::string test_dir(const char* name);     // a new empty directory in the system's temporary one
+// Points sat_data_dir into `root` through the platform's own variable, and returns the directory it then gives.
+std::string use_data_dir(const std::string& root);
 
 #define TEST(name)                                       \
     static void name();                                  \

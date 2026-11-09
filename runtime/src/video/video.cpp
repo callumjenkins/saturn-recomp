@@ -12,6 +12,7 @@
 // VDP1 is vdp1.cpp, VDP2's picture vdp2.cpp; VDP2's registers, VRAM and
 // colour RAM keep what is written.
 #include "saturn.h"
+#include "achievements.h"
 #include "state.h"
 #include "video.h"
 #include "host.h"
@@ -72,6 +73,7 @@ static void dump(const char* prefix, uint64_t n) {
 
 static void vblank_in(uint64_t now) {
     ++g_vblanks;
+    achievements_frame();
     std::string n = std::to_string(g_vblanks);
     if (listed(g_cfg.dump, n)) dump("", g_vblanks);
     bool shot = listed(g_cfg.shots, n);

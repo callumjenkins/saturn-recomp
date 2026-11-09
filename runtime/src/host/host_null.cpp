@@ -16,6 +16,7 @@ bool host_open() {
 void host_present(const Frame&) {}
 void host_pace(uint64_t) {}
 bool host_wants_frame() { return false; }
+void host_notify(const char*, const char*) {}
 uint16_t host_pad(int) { return 0; }
 bool host_pad_connected(int) { return false; }
 

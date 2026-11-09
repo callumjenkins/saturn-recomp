@@ -301,27 +301,35 @@ std::string sat_data_dir() {
 #endif
 }
 
-// DATA/saturn-recomp/PRODUCT_VERSION/backup.bin, from IP.BIN's product number and version.
-static std::string default_save(const uint8_t* ip) {
+static DiscId g_disc;
+
+// An IP.BIN field as the save directory's name has it.
+static std::string ip_field(const uint8_t* ip, int at, int len) {
+    std::string s(reinterpret_cast<const char*>(ip + at), len);
+    s.erase(s.find_last_not_of(' ') + 1);
+    for (char& ch : s)
+        if (!std::isalnum((unsigned char)ch) && ch != '-' && ch != '.') ch = '_';
+    return s;
+}
+
+// DATA/saturn-recomp/PRODUCT_VERSION/backup.bin
+static std::string default_save() {
     std::string dir = sat_data_dir();
     if (dir.empty()) return "";
-    auto field = [&](int at, int len) {
-        std::string s(reinterpret_cast<const char*>(ip + at), len);
-        s.erase(s.find_last_not_of(' ') + 1);
-        for (char& ch : s)
-            if (!std::isalnum((unsigned char)ch) && ch != '-' && ch != '.') ch = '_';
-        return s;
-    };
-    return dir + "/saturn-recomp/" + field(0x20, 10) + "_" + field(0x2A, 6) + "/backup.bin";
+    return dir + "/saturn-recomp/" + g_disc.product + "_" + g_disc.version + "/backup.bin";
 }
 
 void bios_select_save(const uint8_t* ip) {
     g_bup.clear();
     g_bup_loaded = g_bup_changed = false;
-    g_bup_path = g_cfg.save == "-" ? "" : !g_cfg.save.empty() ? g_cfg.save : default_save(ip);
+    g_disc = {ip_field(ip, 0x20, 10), ip_field(ip, 0x2A, 6)};
+    g_bup_path = g_cfg.save == "-" ? "" : !g_cfg.save.empty() ? g_cfg.save : default_save();
     if (g_bup_path.empty()) sat_note("backup memory: kept for this run alone");
     else sat_note("backup memory: %s", g_bup_path.c_str());
 }
+
+const DiscId& bios_disc_id() { return g_disc; }
+const std::string& bios_save_path() { return g_bup_path; }
 
 static std::string gstr(uint32_t a, int max) {
     std::string s;

@@ -43,7 +43,9 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <deque>
 #include <map>
+#include <vector>
 
 static SDL_Window* g_win;
 static PadSlots g_slots(kHostSlots);
@@ -1013,6 +1015,39 @@ static void draw_catching_up() {
     ui_fill_rounded({track.x, track.y, std::max(track.h, track.w * std::clamp(done, 0.0f, 1.0f)), track.h}, 4 * u, rgba(0.27f, 0.47f, 0.95f, 1));
 }
 
+// host_notify's cards, shown one at a time
+struct Notice { std::string title, text; };
+static std::deque<Notice> g_notices;
+static Clock::time_point g_notice_until;
+
+void host_notify(const char* title, const char* text) { g_notices.push_back({title, text}); }
+
+static void draw_notice() {
+    Clock::time_point now = Clock::now();
+    if (!g_notices.empty() && g_notice_until != Clock::time_point{} && now >= g_notice_until) {
+        g_notices.pop_front();
+        g_notice_until = {};
+    }
+    if (g_notices.empty()) return;
+    if (g_notice_until == Clock::time_point{}) g_notice_until = now + std::chrono::seconds(4);
+    const Notice& n = g_notices.front();
+    std::vector<std::string> lines;
+    for (size_t from = 0; !n.text.empty() && from <= n.text.size();) {
+        size_t to = std::min(n.text.find('\n', from), n.text.size());
+        lines.push_back(n.text.substr(from, to - from));
+        from = to + 1;
+    }
+    float u = display_scale(), pad = 18 * u;
+    float w = ui_text_width(17 * u, n.title, true);
+    for (const std::string& line : lines) w = std::max(w, ui_text_width(14 * u, line));
+    w = std::min(w + 2 * pad, g_out_w - 32 * u);
+    SDL_FRect card = {g_out_w - w - 16 * u, 16 * u, w, (52 + 22 * (float)lines.size()) * u};
+    ui_fill_rounded(card, 16 * u, rgba(0.09f, 0.1f, 0.13f, 0.92f));
+    ui_text(card.x + pad, card.y + 26 * u, 17 * u, n.title, rgba(0.95f, 0.96f, 0.98f, 1), true, UiAlign::Left);
+    for (size_t i = 0; i < lines.size(); ++i)
+        ui_text(card.x + pad, card.y + (50 + 22 * (float)i) * u, 14 * u, lines[i], rgba(0.6f, 0.63f, 0.69f, 1), false, UiAlign::Left);
+}
+
 // The last picture and what goes over it.
 static void draw() {
     SDL_GetCurrentRenderOutputSize(g_ren, &g_out_w, &g_out_h);
@@ -1025,6 +1060,7 @@ static void draw() {
     else {
         if (touch_shown()) draw_touch_pad();
         if (menu_button_shown()) draw_menu_button();
+        draw_notice();
     }
     if (g_quitting) {
         float u = display_scale();

@@ -92,6 +92,35 @@ TEST(a_boot_copies_ip_bins_header_over_what_a_previous_program_left_in_the_bios_
     CHECK_EQ(ld8(0x06000CCC), (uint8_t)' ');
 }
 
+// The NetLink's client chooses its way back from a match by the saves it finds after the program reboots the disc.
+TEST(a_reboot_keeps_the_saves_the_program_wrote_and_a_power_on_does_not) {
+    std::string dir = test_dir("cdrom_test");
+    std::string cue = disc(dir, "saves", "FIRST");
+    uint8_t ip[0x100];
+    std::memset(ip, ' ', sizeof ip);
+    std::memcpy(ip, "SEGA SEGASATURN ", 16);
+    ip[0xE2] = 0x01;                                            // its size: 0x100
+    ip[0xF0] = 0x06, ip[0xF1] = 0x00, ip[0xF2] = 0x40;          // the 1st read file at 06004000
+    FILE* f = std::fopen((dir + "/saves.bin").c_str(), "r+b");
+    std::fwrite(ip, 1, sizeof ip, f);
+    std::fclose(f);
+    CHECK_EQ(cdrom_open(cue), true);
+    g_cfg.save = "-";
+    bios_boot();
+    const uint32_t entry = 0x06010000, data = 0x06011000;
+    for (uint32_t i = 0; i < 32; ++i) st8(entry + i, 0);
+    for (uint32_t i = 0; i < 5; ++i) st8(entry + i, (uint8_t)"SAVED"[i]);
+    st32(entry + 28, 4);                                        // its size
+    SH2Context& c = g_master;
+    c.r[4] = 0, c.r[5] = entry, c.r[6] = data, c.r[7] = 0;
+    CHECK_EQ(bios_call(c, 0x00003000u + 4 * 4), true);          // BUP Write
+    CHECK_EQ(c.r[0], 0u);
+    bios_reboot();
+    CHECK_EQ(bios_save_held("SAVED"), true);
+    bios_boot();
+    CHECK_EQ(bios_save_held("SAVED"), false);
+}
+
 static uint16_t change_to_root() {
     cd_write(0x90008, 0, 2);                    // HIRQ cleared
     cd_write(0x90018, 0x7000, 2);

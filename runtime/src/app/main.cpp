@@ -60,8 +60,8 @@
 // --steer presses SCRIPT's buttons, as --input's, over the controllers': the way through the game's menus to its
 // call. --steer-again offers another match each time PROGRAM starts again, and presses SCRIPT, its VBlanks counted
 // from that start, once the player takes the offer with Start. Taken late, SCRIPT's first press comes at once.
-// Taking it hangs up a call the last match left held. --steer-again-saved presses its SCRIPT instead when the save
-// file held the save named SAVE as the run read it, for a client that comes back from a match another way then.
+// Taking it hangs up a call the last match left held. --steer-again-saved presses its SCRIPT instead when backup
+// memory holds the save named SAVE, for a client that comes back from a match another way then.
 // --modem session's and netband's lines write what they heard to DIR/line.txt, at the machine time of each, and
 // --line-in FILE has the line hear that again in place of a room, for a replay.
 // --other-disc CUE with --from-other PATH=OTHERPATH,... and --track-from-other N,... plays those files and

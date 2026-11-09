@@ -26,7 +26,6 @@
 #include <cstring>
 #include <filesystem>
 #include <map>
-#include <set>
 #include <string>
 #include <vector>
 
@@ -60,7 +59,8 @@ static bool load_file(const char* path, uint32_t addr, uint32_t* size_out) {
     return true;
 }
 
-void bios_boot() {
+// A reboot keeps the backup memory, which is battery-backed on the hardware.
+static void boot(bool power_on) {
     // IP.BIN: the first 16 sectors of the data track
     uint8_t ip[0x8000], raw[2352];
     for (int i = 0; i < 16; ++i) {
@@ -74,7 +74,7 @@ void bios_boot() {
     std::string areas(reinterpret_cast<const char*>(ip + 0x40), 10);   // area symbols: J T U B K A E L
     g_pal = areas.find('E') != std::string::npos && areas.find_first_of("JTUBKAL") == std::string::npos;
     smpc_set_area(areas[0]);
-    bios_select_save(ip);
+    if (power_on) bios_select_save(ip);
     sh2_mem_write(0x06002000u, ip, ip_size && ip_size <= sizeof ip ? ip_size : sizeof ip);
     // The BIOS also copies the header to 0x06000C00, and its sizes and addresses to 0x060002A0 (below).
     // A program's file system reads 0x06000CCC for a directory a previous program left there.
@@ -106,6 +106,10 @@ void bios_boot() {
     c.r[15] = mstack ? mstack : 0x06002000u;
     (void)sstack;
 }
+
+void bios_boot() { boot(true); }
+
+void bios_reboot() { boot(false); }
 
 // ---- the services ---------------------------------------------------------------------
 static const char* slot_name(uint32_t p) {
@@ -259,7 +263,7 @@ bool bios_call(SH2Context& c, uint32_t addr) {
         cd_init();
         onchip_reset(0);
         video_reboot();
-        bios_boot();
+        bios_reboot();
         st32(0x06000210u, hand_off[0]);
         st32(0x06000214u, hand_off[1]);
         st32(0x06000290u, 3);
@@ -288,7 +292,6 @@ static std::map<std::string, BupFile> g_bup;
 static bool g_bup_loaded;
 static bool g_bup_changed;                           // since the file was last written
 static std::string g_bup_path;                       // empty: the saves last for the run alone
-static std::set<std::string> g_bup_at_start;         // the names of the saves the file held
 
 // The user's data directory, by the platform's convention; empty if the environment names none.
 std::string sat_data_dir() {
@@ -323,7 +326,6 @@ static std::string default_save(const uint8_t* ip) {
 
 void bios_select_save(const uint8_t* ip) {
     g_bup.clear();
-    g_bup_at_start.clear();
     g_bup_loaded = g_bup_changed = false;
     g_bup_path = g_cfg.save == "-" ? "" : !g_cfg.save.empty() ? g_cfg.save : default_save(ip);
     if (g_bup_path.empty()) sat_note("backup memory: kept for this run alone");
@@ -357,14 +359,13 @@ static void bup_load() {
             break;
         }
         g_bup[std::string(name, strnlen(name, 12))] = b;
-        g_bup_at_start.insert(std::string(name, strnlen(name, 12)));
     }
     std::fclose(f);
 }
 
 bool bios_save_held(const std::string& name) {
     bup_load();
-    return g_bup_at_start.count(name) != 0;
+    return g_bup.count(name) != 0;
 }
 
 // Written beside the file and renamed over it, so a run that ends partway through leaves the last whole one.

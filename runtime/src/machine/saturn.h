@@ -160,6 +160,7 @@ void sh2_set_active_slot(int i, const SH2Module* m);
 
 // ---- the BIOS (bios.cpp) -----------------------------------------------------------
 void bios_boot();                   // the state the BIOS leaves, the 1st read file loaded
+void bios_reboot();                 // bios_boot, keeping the backup memory as the program left it
 uint32_t bios_first_read();         // where it was loaded (the entry)
 bool bios_pal();                    // IP.BIN's areas: Europe alone, a PAL disc
 bool bios_call(SH2Context& c, uint32_t addr);        // a BIOS ROM address: true if handled
@@ -169,7 +170,7 @@ void bios_dispatch(SH2Context& c, uint32_t vec);     // the handler SYS_SETUINT 
 void bios_save();                   // the backup memory to its file
 std::string sat_data_dir();         // the user's data directory by the platform's convention; empty if none
 void bios_select_save(const uint8_t* ip);   // the save file for the disc with this IP.BIN, none loaded yet
-bool bios_save_held(const std::string& name);   // whether the save file held this save when the run read it
+bool bios_save_held(const std::string& name);   // whether the backup memory holds this save
 std::string bios_product(const uint8_t* ip);   // IP.BIN's product number and version, as MK-81070_V1.003
 
 // ---- the address map (mmio.cpp) ---------------------------------------------------

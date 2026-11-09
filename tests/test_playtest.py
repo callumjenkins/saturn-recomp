@@ -203,6 +203,21 @@ def test_a_classic_call_goes_through_its_room_as_waiter_or_dialler(endpoint, cod
     assert args == ["--modem", "session", "--session", url, "--steer", "W" if role == "wait" else "D"]
 
 
+@pytest.mark.parametrize("code, url, players", [
+    pytest.param(None, "wss://pt.example/api/rooms/new", "3", id="a new room starts at its players"),
+    pytest.param("BCDK", "wss://pt.example/api/rooms/BCDK", "0", id="joining waits for the start"),
+])
+def test_a_synced_game_goes_through_its_room_with_no_saves_and_one_clock(code, url, players):
+    args = session.sync_args({"endpoint": "https://pt.example"}, 3, code)
+    assert args == ["--session", url, "--sync", players, "--clock", session.SYNC_CLOCK, "--save", "-"]
+
+
+def test_a_synced_replay_plays_the_recorded_pads_without_the_room(tmp_path):
+    from saturnrecomp.playtest.__main__ import replay_args
+    played = replay_args(other_disc_game(tmp_path), [*session.sync_args({"endpoint": "https://pt.example"}, 2), "--sync-delay", "4"])
+    assert played == ["--clock", session.SYNC_CLOCK, "--save", "-"]
+
+
 @pytest.mark.parametrize("typed, code", [
     (" bcdk ", "BCDK"),
     ("BCD", None),

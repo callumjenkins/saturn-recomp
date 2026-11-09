@@ -37,8 +37,8 @@ from .upload import USER_AGENT, vblanks
 RUNTIME = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "runtime")
 WORKFLOW = "playtest.yml"
 # saturn's arguments, each with its value, that a replay leaves out: the room, whose line it hears from line.txt
-# instead, and the steering, whose presses input.txt already holds
-LIVE_ONLY = ("--session", "--steer", "--steer-again", "--steer-again-saved")
+# instead, and the steering and a synced game's room, whose presses input.txt already holds
+LIVE_ONLY = ("--session", "--steer", "--steer-again", "--steer-again-saved", "--sync", "--sync-pads", "--sync-delay")
 
 
 def api(game, method, path, body=None, raw=False):

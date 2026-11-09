@@ -11,6 +11,7 @@ bool host_launch(SaturnConfig& cfg);                 // the launcher (launcher.c
 bool host_open();                                    // the window (unless headless); false if it failed
 void host_present(const Frame& f);                   // show it, take the events
 void host_pace(uint64_t now);                        // wait until the host's clock has caught up
+void host_pace_hold(uint64_t ns);                    // time the run spent waiting, which the pace does not make up
 bool host_wants_frame();                             // a window to show it in
 const int kHostSlots = 12;                           // players, numbered across both ports (smpc.cpp)
 enum : uint16_t {                                    // a Saturn pad's buttons, as host_pad gives them

@@ -42,14 +42,24 @@ int pads() {
     return 2;
 }
 
+// The way the room plays. A --sync game also needs the same multitaps and drive on every machine.
+std::string mode() {
+    if (!g_cfg.modem.empty()) return "classic";
+    if (g_cfg.sync < 0) return "session";
+    std::string m = "sync";
+    if (g_cfg.multitap) m += "-multitap" + std::to_string(g_cfg.multitap);
+    if (g_cfg.accurate_drive) m += "-accurate-drive";
+    return m;
+}
+
 SessionHello hello() {
     return {.token = env("SATURN_PLAYTEST_TOKEN"),
             .tester = env("SATURN_PLAYTEST_TESTER"),
             .terms = {.product = bios_product(g_wram_h + 0x2000),
                       .game = SATURN_GAME_BUILD,
                       .runtime = SATURN_RUNTIME_BUILD,
-                      .mode = g_cfg.modem.empty() ? "session" : "classic"},
-            .pads = pads()};
+                      .mode = mode()},
+            .pads = g_cfg.sync < 0 ? pads() : g_cfg.sync_pads};
 }
 
 // --steer-again's PROGRAM and SCRIPT.
@@ -206,6 +216,7 @@ void online_poll() {
     for (const SessionEvent& e : g_session->poll()) {
         hear(e);
         note(e);
+        online_sync_hear(e);
     }
     if (g_line) g_line->flush();
     if (g_modem && g_modem->online()) g_room.called();
@@ -224,8 +235,11 @@ void online_program_start(const char* module) {
     if (g_room.program_started(sat_vblanks())) sat_note("session: another match is offered");
 }
 
+Session* online_session() { return g_session.get(); }
+
 OnlineCard online_card() {
     if (g_cfg.session.empty()) return {};
+    if (g_cfg.sync >= 0) return online_sync_card();
     return g_room.card();
 }
 

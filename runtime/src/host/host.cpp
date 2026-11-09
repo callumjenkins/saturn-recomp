@@ -1098,6 +1098,8 @@ void host_present(const Frame& f) {
     tasks_on_thread_stack([](void* f) { present(*static_cast<const Frame*>(f)); }, const_cast<Frame*>(&f));
 }
 
+void host_pace_hold(uint64_t ns) { g_base += std::chrono::nanoseconds(ns); }
+
 void host_pace(uint64_t now) {
     if (!g_win || !g_paced) return;
     if (sat_resuming()) {

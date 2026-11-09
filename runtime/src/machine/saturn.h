@@ -27,6 +27,7 @@
 #pragma once
 #include "saturn/sh2.h"
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -70,6 +71,10 @@ struct SaturnConfig {
     std::string modem;              // a NetLink fitted: "line" with nothing on its line, "session" to --session's other
                                     // peer, or a TCP line (modem.h); empty: none
     std::string session;            // a playtest room's WebSocket URL, which the run joins (online.cpp); empty: none
+    int sync = -1;                  // the room's peers play one game, their pads in lockstep (online_sync.cpp); the room's
+                                    // creator starts it once this many players are in; -1: no
+    int sync_pads = 1;              // ... the players on this machine
+    int sync_delay = 0;             // ... frames between a press and the VBlank it applies at; 0: from the round trip
     std::string steer;              // presses over the controllers' from power-on, as --input's: the way to the game's call
     std::string line_in;            // a classic match's OUT/line.txt, which --modem session's line hears again
     std::string steer_again;        // "PROGRAM:SCRIPT": SCRIPT, from each later start of PROGRAM, once the player asks
@@ -137,6 +142,18 @@ void online_program_start(const char* module);
 struct OnlineCard { std::string text; bool again = false; };
 OnlineCard online_card();
 void online_again();                // the player chose another match
+struct SessionEvent;
+class Session;
+Session* online_session();          // the room's, once the run has joined it
+
+// ---- --sync (online_sync.cpp) ---------------------------------------------------------------
+void online_sync_hear(const SessionEvent& e);
+// At each VBlank-IN: waits for every player's pads for it, calling `idle` every frame's time so the window answers
+void online_sync_vblank(const std::function<void()>& idle);
+bool online_sync_playing();         // the game has started: the pads are the room's
+uint16_t online_sync_pad(int slot);
+bool online_sync_plugged(int slot); // a player in the game owns the slot
+OnlineCard online_sync_card();
 int  sh2_active_slots();            // the modules active now (core.cpp)
 const SH2Module* sh2_active_slot(int i);
 void sh2_set_active_slot(int i, const SH2Module* m);
@@ -189,6 +206,7 @@ void smpc_input_script(const std::string& spec);   // "VBLANK:BUTTON+BUTTON,..."
 struct PadStep { uint64_t vblank; int pad; uint16_t pressed; };   // from VBlank on, pad (from 0) holds these bits
 std::vector<PadStep> smpc_parse_script(const std::string& spec);  // an --input script or "@FILE", in VBlank order
 void smpc_steer(const std::vector<PadStep>& steps, uint64_t from);  // `steps` from VBlank `from`, over the controllers'
+void smpc_local_pads(uint16_t* out, int count);   // this machine's first `count` players' pads now, script and controllers
 bool smpc_press(const std::string& spec, std::string& error);   // "[N.]BUTTON+BUTTON" from this VBlank on
 void smpc_set_area(char symbol);                   // the disc's first area symbol (J T U B K A E L)
 

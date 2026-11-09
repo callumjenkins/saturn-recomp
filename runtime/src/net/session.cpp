@@ -170,7 +170,7 @@ struct Session::Impl {
         const std::string type = m.value("type", "");
         if (type == "welcome") {
             config.iceServers = session_ice_servers(m.value("iceServers", json::array()));
-            emit({.kind = SessionEvent::Kind::Welcome, .text = m.value("code", "")});
+            emit({.kind = SessionEvent::Kind::Welcome, .peer = m.value("id", ""), .text = m.value("code", "")});
             for (const json& p : m.value("peers", json::array())) {
                 if (!joined(p)) continue;
                 connect(p.value("id", ""), true);

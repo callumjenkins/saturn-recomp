@@ -11,7 +11,7 @@
 //            [--progress FILE --progress-keep ADDR:BYTES,...] [--after FILE] [--launcher]
 //            [--modem line|session|netband=SPEC|dial=HOST:PORT[,listen=PORT]]
 //            [--session URL [--steer SCRIPT] [--steer-again PROGRAM:SCRIPT [--steer-again-saved SAVE:SCRIPT]]]
-//            [--line-in FILE]
+//            [--line-in FILE] [--sync N [--sync-pads N] [--sync-delay FRAMES]]
 //
 // --accurate-drive seeks before each read and reads at double speed, as the hardware's drive does
 // (cdblock.cpp), for comparing with Beetle Saturn; loads take longer.
@@ -53,6 +53,10 @@
 // --session joins the playtest room at URL (online.cpp), as the tester SATURN_PLAYTEST_TOKEN or SATURN_PLAYTEST_TESTER
 // names, and notes who comes and goes. Until a call connects, the window shows the room's code and the other
 // player.
+// --sync N plays one game with the room's other peers, every peer's pads in lockstep (online_sync.cpp): the room's
+// creator starts it once N players are in. --sync-pads says how many players this machine has (1), and --sync-delay
+// how many frames a press waits before it applies (from the round trip). Every peer starts from power-on with no
+// saves and, unless --clock says otherwise, the same clock.
 // --steer presses SCRIPT's buttons, as --input's, over the controllers': the way through the game's menus to its
 // call. --steer-again offers another match each time PROGRAM starts again, and presses SCRIPT, its VBlanks counted
 // from that start, once the player takes the offer with Start. Taken late, SCRIPT's first press comes at once.
@@ -94,6 +98,9 @@
 #if defined(__ANDROID__)
 #include <SDL3/SDL_main.h>                   // SDL's Java side starts the run through SDL_main
 #endif
+
+// Every --sync peer's SMPC clock at power-on, 2000-01-01, so their machines start the same.
+static const int64_t kSyncClock = 946684800;
 
 // YYYY-MM-DDTHH:MM:SS as seconds since 1970, no time zone; -1 if it does not parse.
 static int64_t clock_seconds(const char* s) {
@@ -174,6 +181,9 @@ static int parse_args(SaturnConfig& cfg, bool& launcher, int argc, char** argv) 
         else if (!std::strcmp(a, "--multitap") && more) cfg.multitap = std::atoi(argv[++i]);
         else if (!std::strcmp(a, "--modem") && more) cfg.modem = argv[++i];
         else if (!std::strcmp(a, "--session") && more) cfg.session = argv[++i];
+        else if (!std::strcmp(a, "--sync") && more) cfg.sync = std::atoi(argv[++i]);
+        else if (!std::strcmp(a, "--sync-pads") && more) cfg.sync_pads = std::atoi(argv[++i]);
+        else if (!std::strcmp(a, "--sync-delay") && more) cfg.sync_delay = std::atoi(argv[++i]);
         else if (!std::strcmp(a, "--steer") && more) cfg.steer = argv[++i];
         else if (!std::strcmp(a, "--line-in") && more) cfg.line_in = argv[++i];
         else if (!std::strcmp(a, "--steer-again") && more) cfg.steer_again = argv[++i];
@@ -213,7 +223,7 @@ static int parse_args(SaturnConfig& cfg, bool& launcher, int argc, char** argv) 
                                  "             [--state-in FILE] [--state-out FILE] [--state-every SECONDS] [--state-at VBLANK]\n"
                                  "             [--progress FILE --progress-keep ADDR:BYTES,...] [--after FILE] [--launcher [--options FILE]]\n"
                                  "             [--cheat MODULE:ADDR=HEX|MODULE:ADDR|=HEX,...] [--modem line|session|netband=SPEC|dial=HOST:PORT[,listen=PORT]]\n"
-                                 "             [--session URL [--steer SCRIPT] [--steer-again PROGRAM:SCRIPT [--steer-again-saved SAVE:SCRIPT]]] [--line-in FILE] [--other-disc CUE --from-other PATH=OTHERPATH,... --track-from-other N,...]\n");
+                                 "             [--session URL [--steer SCRIPT] [--steer-again PROGRAM:SCRIPT [--steer-again-saved SAVE:SCRIPT]]] [--line-in FILE] [--sync N [--sync-pads N] [--sync-delay FRAMES]] [--other-disc CUE --from-other PATH=OTHERPATH,... --track-from-other N,...]\n");
             return 2;
         }
     }
@@ -235,6 +245,16 @@ int main(int argc, char** argv) {
             for (auto& arg : cfg.launch_args) std::fprintf(f, "%s\n", arg.c_str());
             std::fclose(f);
         }
+    }
+    if (cfg.sync >= 0) {
+        if (cfg.session.empty() || !cfg.modem.empty() || cfg.realtime || cfg.sync_pads < 1 || cfg.sync_pads > 12 ||
+            cfg.sync_delay < 0 || cfg.sync_delay > 30) {
+            std::fprintf(stderr, "saturn: --sync needs --session, and neither --modem nor --realtime; --sync-pads is 1 to 12 "
+                                 "and --sync-delay 0 to 30\n");
+            return 2;
+        }
+        if (cfg.clock < 0) cfg.clock = kSyncClock;
+        cfg.save = "-";
     }
     return saturn_main(cfg);
 }

@@ -22,6 +22,8 @@ CHECKPOINT = 600
 SEND_AFTER_CHECKPOINT = 15              # seconds for the runtime to finish writing the coverage
 # saturn.exe is a console program, so Windows would open a console window behind the game's
 NO_CONSOLE = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+# Every synced player's clock at power-on, as saturn --sync sets it, so a replay starts the same machine.
+SYNC_CLOCK = "2000-01-01T00:00:00"
 
 
 def classic_args(info, code=None):
@@ -30,6 +32,14 @@ def classic_args(info, code=None):
     url = "ws" + info["endpoint"].removeprefix("http")   # https:// is wss://, http:// ws://
     role = "dial" if code else "wait"
     return ["--modem", "session", "--session", f"{url}/api/rooms/{code or 'new'}", *info["classic"][role]]
+
+
+def sync_args(info, players=None, code=None):
+    """saturn's arguments for one game played by everyone in a playtest room: a new room, which starts the game once
+    `players` are in, or the room `code`. Everyone starts with no saves and the same clock."""
+    url = "ws" + info["endpoint"].removeprefix("http")
+    return ["--session", f"{url}/api/rooms/{code or 'new'}", "--sync", str(0 if code else players),
+            "--clock", SYNC_CLOCK, "--save", "-"]
 
 
 def exit_reason(log_path, code):
@@ -56,7 +66,8 @@ def play(saturn, cue, info, endpoint=None, token=None, args=(), on_sent=None):
     sessions = os.path.join(game_dir(info["product"]), "sessions")
     out = os.path.join(sessions, f"{started:%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:8]}")
     os.makedirs(out)
-    clock = started.isoformat()
+    # A synced game names its own clock, which every player shares.
+    clock = args[list(args).index("--clock") + 1] if "--clock" in args else started.isoformat()
     open(os.path.join(out, "clock.txt"), "w").write(clock + "\n")
     save = os.path.join(game_dir(info["product"]), "backup.bin")
     if os.path.exists(save):

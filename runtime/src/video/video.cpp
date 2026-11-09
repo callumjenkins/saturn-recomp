@@ -93,6 +93,7 @@ static void vblank_in(uint64_t now) {
     }
     scu_raise(IRQ_VBLANK_IN);
     scu_frame_event(0);
+    online_sync_vblank([] { host_present(g_frame); });
     host_pace(now);
 }
 

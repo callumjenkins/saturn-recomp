@@ -195,15 +195,15 @@ static void sample_host() {
     }
 }
 
-// pad p now, active low: byte 1 RIGHT LEFT DOWN UP START A C B, byte 2 R X Y Z L 1 1 1
-static uint16_t pad_now(int p) {
+// The script's steps due by now. A --sync game records the room's pads instead (sync_pad).
+static void advance_script() {
     while (g_script_pos < g_script.size() && g_script[g_script_pos].vblank <= sat_vblanks() &&
            !(g_cfg.resume && g_script[g_script_pos].vblank >= g_cfg.resume)) {
         const PadStep& s = g_script[g_script_pos];
         g_script_pressed[s.pad] = s.pressed;
         // Steered presses are recorded too, with the host's buttons held alongside them.
         // A replay plays the file alone, and each of its steps sets the whole pad.
-        if (g_cfg.resume || host_drives()) record_host(s.vblank, s.pad, s.pressed | g_host_pressed[s.pad]);
+        if (g_cfg.sync < 0 && (g_cfg.resume || host_drives())) record_host(s.vblank, s.pad, s.pressed | g_host_pressed[s.pad]);
         if (!g_cfg.resume && s.pad) sat_note("pad %d: %04X", s.pad + 1, s.pressed);
         else if (!g_cfg.resume) sat_note("pad: %04X", s.pressed);
         ++g_script_pos;
@@ -214,6 +214,36 @@ static uint16_t pad_now(int p) {
         for (int q = 0; q < kPads; ++q)
             if (g_script_pressed[q]) record_host(sat_vblanks(), q, g_script_pressed[q] = 0);
     }
+}
+
+void smpc_local_pads(uint16_t* out, int count) {
+    advance_script();
+    for (int q = 0; q < count && q < kPads; ++q)
+        out[q] = g_script_pressed[q] | (host_drives() && q < kHostSlots ? host_pad(q) : 0);
+}
+
+// A --sync game's pads, the room's, taken and recorded once a VBlank as the host's are. Every pad a player owns is
+// recorded at the first VBlank, so a replay of the file has the same pads plugged in.
+static uint16_t g_sync_pressed[kPads];
+static uint64_t g_sync_vblank = ~0ull;
+
+static uint16_t sync_pad(int p) {
+    if (g_sync_vblank != sat_vblanks()) {
+        const bool first = g_sync_vblank == ~0ull;
+        g_sync_vblank = sat_vblanks();
+        for (int q = 0; q < kPads; ++q) {
+            const uint16_t h = online_sync_pad(q);
+            if (h != g_sync_pressed[q] || (first && online_sync_plugged(q))) record_host(g_sync_vblank, q, h);
+            g_sync_pressed[q] = h;
+        }
+    }
+    return g_sync_pressed[p];
+}
+
+// pad p now, active low: byte 1 RIGHT LEFT DOWN UP START A C B, byte 2 R X Y Z L 1 1 1
+static uint16_t pad_now(int p) {
+    if (online_sync_playing()) return (uint16_t)~sync_pad(p) | 0x0007;
+    advance_script();
     sample_host();
     return (uint16_t)~(g_script_pressed[p] | g_host_pressed[p]) | 0x0007;
 }
@@ -222,7 +252,10 @@ static uint16_t pad_now(int p) {
 static int first_on(int port) { return port == 0 ? 0 : g_cfg.multitap >= 1 ? 6 : 1; }
 
 // port 2's own pad, when it has no multitap
-static bool plugged(int p) { return g_script_names[p] || (host_drives() && p < kHostSlots && host_pad_connected(p)); }
+static bool plugged(int p) {
+    if (g_cfg.sync >= 0) return online_sync_plugged(p);
+    return g_script_names[p] || (host_drives() && p < kHostSlots && host_pad_connected(p));
+}
 
 static uint16_t pad1_now() { return pad_now(0); }
 

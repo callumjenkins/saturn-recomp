@@ -15,3 +15,5 @@ Session::~Session() = default;
 std::vector<SessionEvent> Session::poll() { return std::exchange(impl_->events, {}); }
 
 void Session::send(const std::string&, Channel, std::vector<uint8_t>) {}
+
+void Session::sever() {}

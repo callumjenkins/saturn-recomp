@@ -2,7 +2,7 @@
 // every peer's pads (lockstep.h). The room's creator waits at the first VBlank until --sync's number of players are
 // connected, then starts the game for all of them with each peer's slots and the input delay. Each VBlank, a peer
 // sends its own pads and waits for everyone's. Every second the peers compare hashes of work RAM, so a machine that
-// falls out of step is reported.
+// falls out of step is reported. Everyone plays with the creator's saves, which only the creator's game writes back.
 #include "saturn.h"
 #include "host.h"
 #include "lockstep.h"
@@ -10,6 +10,7 @@
 #include <saturn/sh2.h>
 #include <algorithm>
 #include <chrono>
+#include <fstream>
 #include <functional>
 #include <map>
 #include <memory>
@@ -41,6 +42,7 @@ std::map<std::string, Peer> g_peers;
 std::string g_ended;                  // why the game is no longer played together
 std::string g_waiting_for;            // the member a long wait is for
 bool g_start_asked;
+bool g_saves_in;                      // a joiner's backup memory is the creator's
 uint16_t g_pads[kLockstepSlots];
 Clock::time_point g_pinged;
 
@@ -112,6 +114,15 @@ std::optional<LockstepStart> ready_to_start() {
     return s;
 }
 
+// What the backup memory started as, kept with the run's output so a replay starts from the same saves.
+void keep_saves(const std::vector<uint8_t>& saves) {
+    if (g_cfg.out.empty()) return;
+    const std::string path = g_cfg.out + "/backup-at-start.bin";
+    std::ofstream f(path, std::ios::binary);
+    if (!f.write(reinterpret_cast<const char*>(saves.data()), (std::streamsize)saves.size()))
+        sat_note("sync: cannot write %s", path.c_str());
+}
+
 void begin(const LockstepStart& s) {
     int self = -1;
     for (int i = 0; i < (int)s.members.size(); ++i)
@@ -131,8 +142,17 @@ void heard_control(const SessionEvent& e) {
     if (m.empty()) return;
     switch ((LockstepKind)m[0]) {
     case LockstepKind::Start:
-        if (auto s = lockstep_read_start(m); s && !g_ls && g_ended.empty()) begin(*s);
+        if (!g_saves_in) end("the game started before the creator's saves came");
+        else if (auto s = lockstep_read_start(m); s && !g_ls && g_ended.empty()) begin(*s);
         break;
+    case LockstepKind::Saves: {
+        if (g_ls || creator()) break;
+        const std::vector<uint8_t> saves(m.begin() + 1, m.end());
+        g_saves_in = bios_backup_install(saves, "the room's creator");
+        if (g_saves_in) keep_saves(saves);
+        else end("the creator's saves came after this game had read its own");
+        break;
+    }
     case LockstepKind::Ping:
         if (auto t = lockstep_read_time(m)) send(e.peer, Channel::Control, lockstep_time_message(LockstepKind::Pong, *t));
         break;
@@ -242,7 +262,11 @@ void online_sync_vblank(const std::function<void()>& idle) {
             if (creator()) {
                 ping_open_peers();
                 if (auto s = ready_to_start()) {
+                    std::vector<uint8_t> saves = bios_backup();
+                    keep_saves(saves);
                     begin(*s);
+                    saves.insert(saves.begin(), (uint8_t)LockstepKind::Saves);
+                    to_members(Channel::Control, saves);
                     to_members(Channel::Control, lockstep_start_message(*s));
                 }
             }

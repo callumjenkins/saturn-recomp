@@ -52,11 +52,12 @@ object Sessions {
 
     /**
      * The runtime's arguments for one game played by everyone in a playtest room: a new room, whose maker starts the
-     * game with Start, or the room `code`. Everyone starts with no saves and the same clock.
+     * game with Start, or the room `code`. Everyone shares one clock and plays with the maker's saves, which only the
+     * maker's copy writes back.
      */
     fun syncArgs(info: JSONObject, code: String?): List<String> {
         val url = "ws" + info.getString("endpoint").removePrefix("http")
-        return listOf("--session", "$url/api/rooms/${code ?: "new"}", "--sync", "0", "--clock", SYNC_CLOCK, "--save", "-")
+        return listOf("--session", "$url/api/rooms/${code ?: "new"}", "--sync", "0", "--clock", SYNC_CLOCK)
     }
 
     /** The room code a player typed, in capitals, or null when it is not the four letters a room's maker sees. */

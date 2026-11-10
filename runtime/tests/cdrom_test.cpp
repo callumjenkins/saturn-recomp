@@ -92,8 +92,8 @@ TEST(a_boot_copies_ip_bins_header_over_what_a_previous_program_left_in_the_bios_
     CHECK_EQ(ld8(0x06000CCC), (uint8_t)' ');
 }
 
-// The NetLink's client chooses its way back from a match by the saves it finds after the program reboots the disc.
-TEST(a_reboot_keeps_the_saves_the_program_wrote_and_a_power_on_does_not) {
+// Boots a disc with no saves, then writes one called SAVED as its program would.
+static void boot_and_write_a_save() {
     std::string dir = test_dir("cdrom_test");
     std::string cue = disc(dir, "saves", "FIRST");
     uint8_t ip[0x100];
@@ -115,10 +115,28 @@ TEST(a_reboot_keeps_the_saves_the_program_wrote_and_a_power_on_does_not) {
     c.r[4] = 0, c.r[5] = entry, c.r[6] = data, c.r[7] = 0;
     CHECK_EQ(bios_call(c, 0x00003000u + 4 * 4), true);          // BUP Write
     CHECK_EQ(c.r[0], 0u);
+}
+
+// The NetLink's client chooses its way back from a match by the saves it finds after the program reboots the disc.
+TEST(a_reboot_keeps_the_saves_the_program_wrote_and_a_power_on_does_not) {
+    boot_and_write_a_save();
     bios_reboot();
     CHECK_EQ(bios_save_held("SAVED"), true);
     bios_boot();
     CHECK_EQ(bios_save_held("SAVED"), false);
+}
+
+// Every player in a synced game starts from the creator's saves, so they have to be in before the program reads any.
+TEST(saves_installed_before_the_program_reads_the_backup_memory_are_the_ones_it_finds) {
+    boot_and_write_a_save();
+    const std::vector<uint8_t> saves = bios_backup();
+    bios_boot();
+    CHECK_EQ(bios_backup_install(saves, "a test"), true);
+    CHECK_EQ(bios_save_held("SAVED"), true);
+    CHECK_EQ(bios_backup() == saves, true);
+    bios_boot();
+    CHECK_EQ(bios_save_held("SAVED"), false);
+    CHECK_EQ(bios_backup_install(saves, "a test"), false);
 }
 
 static uint16_t change_to_root() {

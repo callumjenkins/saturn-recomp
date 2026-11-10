@@ -29,8 +29,9 @@ struct LockstepStart {
     std::vector<LockstepMember> members;
 };
 
-// A control message's kind, its first byte.
-enum class LockstepKind : uint8_t { Start = 'S', Lost = 'L', Hash = 'H', Ping = 'I', Pong = 'O', Late = 'X' };
+// A control message's kind, its first byte. Saves, the creator's backup memory in its save file's form, comes just
+// before Start.
+enum class LockstepKind : uint8_t { Start = 'S', Saves = 'B', Lost = 'L', Hash = 'H', Ping = 'I', Pong = 'O', Late = 'X' };
 
 std::vector<uint8_t> lockstep_start_message(const LockstepStart& s);
 std::optional<LockstepStart> lockstep_read_start(const std::vector<uint8_t>& m);

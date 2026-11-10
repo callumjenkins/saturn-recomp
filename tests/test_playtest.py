@@ -208,15 +208,15 @@ def test_a_classic_call_goes_through_its_room_as_waiter_or_dialler(endpoint, cod
     pytest.param(None, None, "wss://pt.example/api/rooms/new", "0", id="a new room starts on its maker's Start"),
     pytest.param(3, "BCDK", "wss://pt.example/api/rooms/BCDK", "0", id="joining waits for the start"),
 ])
-def test_a_synced_game_goes_through_its_room_with_no_saves_and_one_clock(players, code, url, sync):
+def test_a_synced_game_goes_through_its_room_with_one_clock(players, code, url, sync):
     args = session.sync_args({"endpoint": "https://pt.example"}, players, code)
-    assert args == ["--session", url, "--sync", sync, "--clock", session.SYNC_CLOCK, "--save", "-"]
+    assert args == ["--session", url, "--sync", sync, "--clock", session.SYNC_CLOCK]
 
 
-def test_a_synced_replay_plays_the_recorded_pads_without_the_room(tmp_path):
+def test_a_synced_replay_plays_the_recorded_pads_and_saves_without_the_room(tmp_path):
     from saturnrecomp.playtest.__main__ import replay_args
-    played = replay_args(other_disc_game(tmp_path), [*session.sync_args({"endpoint": "https://pt.example"}, 2), "--sync-delay", "4"])
-    assert played == ["--clock", session.SYNC_CLOCK, "--save", "-"]
+    joined = [*session.sync_args({"endpoint": "https://pt.example"}, code="BCDK"), "--sync-delay", "4", "--save", "-"]
+    assert replay_args(other_disc_game(tmp_path), joined) == ["--clock", session.SYNC_CLOCK]
 
 
 @pytest.mark.parametrize("typed, code", [

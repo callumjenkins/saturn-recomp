@@ -96,19 +96,18 @@ class SessionsTest {
     }
 
     @Test
-    fun aSyncedGameGoesThroughItsRoomWithNoSavesAndOneClock() {
+    fun aSyncedGameGoesThroughItsRoomWithOneClock() {
         val info = JSONObject().put("endpoint", "https://pt.example")
-        val rest = listOf("--sync", "0", "--clock", Sessions.SYNC_CLOCK, "--save", "-")
+        val rest = listOf("--sync", "0", "--clock", Sessions.SYNC_CLOCK)
         assertEquals(listOf("--session", "wss://pt.example/api/rooms/new") + rest, Sessions.syncArgs(info, null))
         assertEquals(listOf("--session", "wss://pt.example/api/rooms/BCDK") + rest, Sessions.syncArgs(info, "BCDK"))
     }
 
     @Test
-    fun aSyncedSessionRecordsTheSharedClockAndPlaysWithoutTheSaves() {
+    fun aSyncedSessionRecordsTheSharedClock() {
         val more = Sessions.syncArgs(info.put("endpoint", "https://pt.example"), null)
         val (out, args) = Sessions.start(tmp.root, info, File(tmp.root, "disc.cue"), send = false, more = more)
         assertEquals(Sessions.SYNC_CLOCK, Sessions.read(out).getString("clock"))
-        assertEquals("-", args[args.lastIndexOf("--save") + 1])
         assertEquals(Sessions.SYNC_CLOCK, args[args.lastIndexOf("--clock") + 1])
     }
 

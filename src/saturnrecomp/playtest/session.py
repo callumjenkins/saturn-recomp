@@ -36,11 +36,11 @@ def classic_args(info, code=None):
 
 def sync_args(info, players=None, code=None):
     """saturn's arguments for one game played by everyone in a playtest room: a new room, or the room `code`. A new
-    room's game starts when its maker presses Start, or once `players` are in. Everyone starts with no saves and the
-    same clock."""
+    room's game starts when its maker presses Start, or once `players` are in. Everyone shares one clock and plays
+    with the maker's saves, which only the maker's copy writes back."""
     url = "ws" + info["endpoint"].removeprefix("http")
     return ["--session", f"{url}/api/rooms/{code or 'new'}", "--sync", str(0 if code else players or 0),
-            "--clock", SYNC_CLOCK, "--save", "-"]
+            "--clock", SYNC_CLOCK]
 
 
 def exit_reason(log_path, code):

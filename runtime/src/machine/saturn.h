@@ -173,6 +173,9 @@ void bios_save();                   // the backup memory to its file
 std::string sat_data_dir();         // the user's data directory by the platform's convention; empty if none
 void bios_select_save(const uint8_t* ip);   // the save file for the disc with this IP.BIN, none loaded yet
 bool bios_save_held(const std::string& name);   // whether the backup memory holds this save
+std::vector<uint8_t> bios_backup();    // the backup memory in its save file's form
+// Starts the backup memory from `bytes`, in that form, for this run alone, unless the program has already used it.
+bool bios_backup_install(const std::vector<uint8_t>& bytes, const std::string& from);
 std::string bios_product(const uint8_t* ip);   // IP.BIN's product number and version, as MK-81070_V1.003
 
 // ---- the address map (mmio.cpp) ---------------------------------------------------

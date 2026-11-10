@@ -75,6 +75,7 @@ struct SaturnConfig {
                                     // creator starts it once this many players are in; -1: no
     int sync_pads = 1;              // ... the players on this machine
     int sync_delay = 0;             // ... frames between a press and the VBlank it applies at; 0: from the round trip
+    uint64_t session_sever_at = 0;  // for tests: the VBlank the session's network goes, as a phone's does; 0: never
     std::string steer;              // presses over the controllers' from power-on, as --input's: the way to the game's call
     std::string line_in;            // a classic match's OUT/line.txt, which --modem session's line hears again
     std::string steer_again;        // "PROGRAM:SCRIPT": SCRIPT, from each later start of PROGRAM, once the player asks

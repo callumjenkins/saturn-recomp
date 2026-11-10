@@ -55,6 +55,8 @@ public:
     std::vector<SessionEvent> poll();   // what has happened since the last poll, oldest first
     // To `peer`, or to every peer when it is empty. A peer whose channel is not open yet misses it.
     void send(const std::string& peer, Channel channel, std::vector<uint8_t> data);
+    // For tests: drops the room's socket and every connection at once, as a network that goes away does.
+    void sever();
 
     struct Impl;
 

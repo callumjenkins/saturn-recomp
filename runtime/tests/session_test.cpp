@@ -1,5 +1,5 @@
 // Sessions joined to a room in this process: a stub that speaks the playtest Worker's room messages (rooms.ts) without
-// its checks, so two sessions meet, open their channels and exchange each, and see each other go.
+// its checks, so two sessions meet, open their channels and exchange each, see each other go, and come back.
 #include "session.h"
 #include "session_ice.h"
 #include "test.h"
@@ -16,12 +16,14 @@ using json = nlohmann::json;
 
 namespace {
 
-// One room, code ABCD. A hello whose game is "refuse-me" is refused.
+// One room, code ABCD. A hello whose game is "refuse-me" is refused. A peer that goes without a bye can come back,
+// for as long as the room lasts.
 struct StubRoom {
     rtc::WebSocketServer server;
     std::mutex mutex;
     std::vector<std::shared_ptr<rtc::WebSocket>> clients;   // every socket, kept open until the room goes
     std::map<std::string, std::shared_ptr<rtc::WebSocket>> peers;
+    std::map<std::string, bool> said_bye, away;
     int next = 0;
 
     StubRoom() : server(config()) {
@@ -62,21 +64,36 @@ struct StubRoom {
             ws->send(json{{"type", "refused"}, {"reason", "the game differs"}}.dump());
             return;
         }
-        if (m["type"] == "hello") {
+        if (m["type"] == "bye") {
+            said_bye[id] = true;
+            return;
+        }
+        if (m["type"] == "hello" && m.contains("resume") && away.erase(m["resume"])) {
+            id = m["resume"];
+            welcome(ws, id, m["pads"]);
+        } else if (m["type"] == "hello") {
             id = "p" + std::to_string(next++);
-            json others = json::array();
-            for (auto& [other, _] : peers) others.push_back({{"id", other}, {"name", other}, {"pads", 2}});
-            ws->send(json{{"type", "welcome"}, {"code", "ABCD"}, {"id", id}, {"peers", others}, {"iceServers", json::array()}}.dump());
-            for (auto& [_, other] : peers) other->send(json{{"type", "joined"}, {"peer", {{"id", id}, {"name", id}, {"pads", m["pads"]}}}}.dump());
-            peers[id] = ws;
+            welcome(ws, id, m["pads"]);
         } else if (m["type"] == "signal" && peers.count(m["to"])) {
             peers[m["to"]]->send(json{{"type", "signal"}, {"from", id}, {"data", m["data"]}}.dump());
         }
     }
 
+    void welcome(const std::shared_ptr<rtc::WebSocket>& ws, const std::string& id, const json& pads) {
+        json others = json::array();
+        for (auto& [other, _] : peers) others.push_back({{"id", other}, {"name", other}, {"pads", 2}});
+        ws->send(json{{"type", "welcome"}, {"code", "ABCD"}, {"id", id}, {"peers", others}, {"iceServers", json::array()}}.dump());
+        for (auto& [_, other] : peers) other->send(json{{"type", "joined"}, {"peer", {{"id", id}, {"name", id}, {"pads", pads}}}}.dump());
+        peers[id] = ws;
+    }
+
     void gone(const std::string& id) {
         std::scoped_lock lock(mutex);
         if (!peers.erase(id)) return;
+        if (!said_bye[id]) {
+            away[id] = true;
+            return;
+        }
         for (auto& [_, other] : peers) other->send(json{{"type", "left"}, {"id", id}}.dump());
     }
 };
@@ -143,6 +160,28 @@ TEST(session_hears_a_peer_leave) {
     }
     CHECK_EQ(wait_for(a, as, kind(SessionEvent::Kind::Left)), true);
     CHECK_EQ(as.back().peer == "p1", true);
+}
+
+// The network under b goes: it joins the room again as itself, and both connect again with nobody reported gone.
+TEST(session_comes_back_to_the_room_after_its_network_goes) {
+    StubRoom room;
+    Session a(room.url("/api/rooms/new"), hello());
+    std::vector<SessionEvent> as, bs;
+    CHECK_EQ(wait_for(a, as, kind(SessionEvent::Kind::Welcome)), true);
+    Session b(room.url("/api/rooms/ABCD"), hello());
+    CHECK_EQ(wait_for(b, bs, kind(SessionEvent::Kind::Open)), true);
+    CHECK_EQ(wait_for(a, as, kind(SessionEvent::Kind::Open)), true);
+
+    b.sever();
+    CHECK_EQ(wait_for(b, bs, kind(SessionEvent::Kind::Open)), true);
+    CHECK_EQ(wait_for(a, as, kind(SessionEvent::Kind::Open)), true);
+    CHECK_EQ(as.back().peer == "p1", true);
+    b.send("p0", Channel::Control, {7});
+    CHECK_EQ(wait_for(a, as, kind(SessionEvent::Kind::Message)), true);
+    CHECK_EQ(as.back().data == std::vector<uint8_t>({7}), true);
+    for (const auto* seen : {&as, &bs})
+        for (auto k : {SessionEvent::Kind::Left, SessionEvent::Kind::RoomClosed, SessionEvent::Kind::Welcome})
+            CHECK_EQ(std::count_if(seen->begin(), seen->end(), kind(k)), k == SessionEvent::Kind::Welcome);
 }
 
 TEST(session_leaves_the_room_once_its_game_stops_polling) {

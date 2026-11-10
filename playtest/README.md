@@ -85,6 +85,11 @@ keeps what the line heard as `line.txt`, so `replay` plays a classic match again
 (`--line-in`). A game that stops polling its session for 10 seconds, paused in the background or behind its
 menu, leaves the room, and the other peer's modem hears NO CARRIER.
 
+A game that quits says bye to the room, and the others hear at once that it left. A peer whose socket drops without
+one, as a phone's does when it changes networks, keeps its place for 15 seconds: its session joins again as itself
+and offers each peer a new connection, since libdatachannel cannot restart ICE. Only once the 15 seconds pass do the
+others hear it left. A synced game waits through it, showing "Waiting for NAME".
+
 `tests/netlink.py --room` in the game runs a match and a rematch through a room on this machine
 (`saturnrecomp.playtest.local_worker`, under `wrangler dev`), then replays each side from what it recorded.
 

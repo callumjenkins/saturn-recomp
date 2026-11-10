@@ -1,4 +1,5 @@
-import { exports } from 'cloudflare:workers'
+import { runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test'
+import { env, exports } from 'cloudflare:workers'
 import { describe, expect, it } from 'vitest'
 
 type Message = { type: string; [field: string]: unknown }
@@ -41,10 +42,27 @@ const open = async (path: string): Promise<Socket> => {
 }
 
 /** A peer that has said hello to `path` with `terms`, and the room's answer. */
-const join = async (path: string, token: string, terms: Record<string, string> = TERMS, pads = 2) => {
+const join = async (path: string, token: string, terms: Record<string, string> = TERMS, pads = 2, resume?: string) => {
 	const socket = await open(path)
-	socket.ws.send(JSON.stringify({ type: 'hello', token, terms, pads }))
+	socket.ws.send(JSON.stringify({ type: 'hello', token, terms, pads, resume }))
 	return { ...socket, answer: await socket.next() }
+}
+
+/** Closes `socket` as a game that quits does, saying bye first. */
+const quit = (socket: Socket) => {
+	socket.ws.send(JSON.stringify({ type: 'bye' }))
+	socket.ws.close()
+}
+
+/** The room `code`'s alarm, run now, with every away peer's time to resume already past. */
+const resumeRunsOut = async (code: string) => {
+	const stub = env.ROOMS.get(env.ROOMS.idFromName(code))
+	await runInDurableObject(stub, async (_, state) => {
+		const away = (await state.storage.get<Record<string, { until: number }>>('away')) ?? {}
+		for (const a of Object.values(away)) a.until = 0
+		await state.storage.put('away', away)
+	})
+	await runDurableObjectAlarm(stub)
 }
 
 describe('rooms', () => {
@@ -72,9 +90,9 @@ describe('rooms', () => {
 		const code = host.answer.code as string
 		const guest = await join(`/api/rooms/${code}`, await invite('Ed'))
 		await host.next()
-		guest.ws.close()
+		quit(guest)
 		expect(await host.next()).toEqual({ type: 'left', id: guest.answer.id })
-		host.ws.close()
+		quit(host)
 		await host.closed
 
 		const late = await join(`/api/rooms/${code}`, await invite('Fi'))
@@ -108,9 +126,51 @@ describe('rooms', () => {
 		const code = host.answer.code as string
 		const guest = await join(`/api/rooms/${code}`, await invite('Ned'), TERMS, 1)
 		await host.next()
-		guest.ws.close()
+		quit(guest)
 		await host.next()
 		expect((await join(`/api/rooms/${code}`, await invite('Oz'), TERMS, 1)).answer.type).toBe('welcome')
+	})
+
+	it('keep a peer that dropped without a bye for it to come back as itself', async () => {
+		const host = await join('/api/rooms/new', await invite('Una'), TERMS, 1)
+		const code = host.answer.code as string
+		const token = await invite('Vic')
+		const guest = await join(`/api/rooms/${code}`, token, TERMS, 1)
+		const id = guest.answer.id as string
+		await host.next()
+		guest.ws.close()
+		await guest.closed
+		const third = await join(`/api/rooms/${code}`, await invite('Wyn'), TERMS, 1)
+		expect(third.answer).toEqual({ type: 'refused', reason: 'a classic room takes 2 peers' })
+
+		const back = await join(`/api/rooms/${code}`, token, TERMS, 1, id)
+		expect(back.answer).toMatchObject({ type: 'welcome', code, id, peers: [{ id: host.answer.id, name: 'Una', pads: 1 }] })
+		expect(await host.next()).toEqual({ type: 'joined', peer: { id, name: 'Vic', pads: 1 } })
+	})
+
+	it('tell the others a dropped peer left once its time to come back runs out', async () => {
+		const host = await join('/api/rooms/new', await invite('Xan'), TERMS, 1)
+		const code = host.answer.code as string
+		const token = await invite('Yul')
+		const guest = await join(`/api/rooms/${code}`, token, TERMS, 1)
+		await host.next()
+		guest.ws.close()
+		await guest.closed
+		await resumeRunsOut(code)
+		expect(await host.next()).toEqual({ type: 'left', id: guest.answer.id })
+		const late = await join(`/api/rooms/${code}`, token, TERMS, 1, guest.answer.id as string)
+		expect(late.answer).toEqual({ type: 'refused', reason: 'this game is no longer in the room' })
+	})
+
+	it('let only the tester a dropped peer was come back as it', async () => {
+		const host = await join('/api/rooms/new', await invite('Zed'), TERMS, 1)
+		const code = host.answer.code as string
+		const guest = await join(`/api/rooms/${code}`, await invite('Abe'), TERMS, 1)
+		await host.next()
+		guest.ws.close()
+		await guest.closed
+		const other = await join(`/api/rooms/${code}`, await invite('Bea'), TERMS, 1, guest.answer.id as string)
+		expect(other.answer).toEqual({ type: 'refused', reason: 'this game is no longer in the room' })
 	})
 
 	it('take more than two peers in a room that is not classic', async () => {

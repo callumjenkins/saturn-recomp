@@ -213,6 +213,11 @@ void online_poll() {
             sat_fatal("--steer-again-saved: %s is not SAVE:SCRIPT", g_cfg.steer_again_saved.c_str());
         g_session = std::make_unique<Session>(g_cfg.session, hello());
     }
+    if (g_cfg.session_sever_at && sat_vblanks() == g_cfg.session_sever_at) {
+        sat_note("session: the network goes, for the test");
+        g_session->sever();
+        g_cfg.session_sever_at = 0;
+    }
     for (const SessionEvent& e : g_session->poll()) {
         hear(e);
         note(e);

@@ -6,13 +6,20 @@ import { iceServers } from './turn'
 /** A peer as the others see it. */
 export type Peer = { id: string; name: string; pads: number }
 
+/** A peer whose socket dropped without a bye, kept for it to resume until `until`. */
+type Away = { peer: Peer; tester: string; until: number }
+
+/** What the room keeps on each peer's socket. */
+type Attachment = { peer: Peer; tester: string; bye?: true }
+
 /** What every peer in a room must share: the disc, both builds and the way the room plays. */
 export type Terms = Record<(typeof TERM_FIELDS)[number], string>
 
 /** A message from a peer. Anything else is answered with an error. */
 type FromPeer =
-	| { type: 'hello'; token?: unknown; tester?: unknown; terms?: unknown; pads?: unknown }
+	| { type: 'hello'; token?: unknown; tester?: unknown; terms?: unknown; pads?: unknown; resume?: unknown }
 	| { type: 'signal'; to?: unknown; data?: unknown }
+	| { type: 'bye' }
 
 export const MAX_PADS = 10
 
@@ -22,6 +29,9 @@ export const TERM_FIELDS = ['product', 'game', 'runtime', 'mode'] as const
 const CLASSIC_PEERS = 2
 
 const CODE_LETTERS = 'BCDFGHJKLMNPQRSTVWXZ'
+
+/** How long a peer whose socket dropped without a bye can come back as itself, as a phone that changed networks does. */
+export const RESUME_MS = 15_000
 
 /** How long a room's code stays claimed with nobody in the room. */
 const UNJOINED_MS = 60_000
@@ -40,12 +50,20 @@ export const openRoom = async (env: Env, request: Request, code?: string) => {
 
 /**
  * One room: its code, the terms its first peer set, and a WebSocket per peer. A peer says hello first; the room checks
- * its tester and terms, then passes its signals to the peer each names. The room forgets everything when its last peer
+ * its tester and terms, then passes its signals to the peer each names. A peer that goes without a bye is away until it
+ * resumes or RESUME_MS pass, and only then do the others hear it left. The room forgets everything when its last peer
  * goes, so its code can be claimed again.
  */
 export class Room extends DurableObject<Env> {
 	async alarm() {
-		if (!this.peers().length) await this.ctx.storage.deleteAll()
+		const away = await this.away()
+		const now = Date.now()
+		for (const [id, a] of Object.entries(away)) {
+			if (a.until > now) continue
+			delete away[id]
+			for (const ws of this.sockets()) send(ws, { type: 'left', id })
+		}
+		await this.keepAway(away)
 	}
 
 	/** Takes the code for this room, if no room has it. */
@@ -81,7 +99,13 @@ export class Room extends DurableObject<Env> {
 		const me = peerOf(ws)
 		if (!me && msg?.type === 'hello') return this.hello(ws, msg)
 		if (me && msg?.type === 'signal') return this.signal(me, msg)
-		send(ws, { type: 'error', reason: me ? 'a peer sends only signals' : 'say hello first' })
+		if (me && msg?.type === 'bye') return ws.serializeAttachment({ ...attachmentOf(ws), bye: true })
+		send(ws, { type: 'error', reason: me ? 'a peer sends only signals and its bye' : 'say hello first' })
+	}
+
+	/** The peers away, by id. */
+	private async away() {
+		return (await this.ctx.storage.get<Record<string, Away>>('away')) ?? {}
 	}
 
 	private async hello(ws: WebSocket, msg: Extract<FromPeer, { type: 'hello' }>) {
@@ -95,36 +119,70 @@ export class Room extends DurableObject<Env> {
 		if (typeof pads !== 'number' || !Number.isInteger(pads) || pads < 1 || pads > MAX_PADS)
 			return refuse(ws, `pads must be 1 to ${MAX_PADS}`)
 		const others = this.peers()
-		const free = MAX_PADS - others.reduce((sum, p) => sum + p.pads, 0)
+		const away = await this.away()
+		if (msg.resume !== undefined) return this.resume(ws, msg.resume, tester, away, others, code)
+		const holding = [...others, ...Object.values(away).map((a) => a.peer)]
+		const free = MAX_PADS - holding.reduce((sum, p) => sum + p.pads, 0)
 		if (pads > free) return refuse(ws, `the room has ${free} of its ${MAX_PADS} pads free`)
 		const roomTerms = await this.ctx.storage.get<Terms>('terms')
 		const differs = roomTerms ? TERM_FIELDS.filter((f) => roomTerms[f] !== terms[f]) : []
 		if (roomTerms && differs.length)
 			return refuse(ws, differs.map((f) => `the ${f} differs: the room's is ${roomTerms[f]}, yours is ${terms[f]}`).join('; '))
-		if (terms.mode === 'classic' && others.length >= CLASSIC_PEERS) return refuse(ws, `a classic room takes ${CLASSIC_PEERS} peers`)
+		if (terms.mode === 'classic' && holding.length >= CLASSIC_PEERS) return refuse(ws, `a classic room takes ${CLASSIC_PEERS} peers`)
 		if (!roomTerms) await this.ctx.storage.put('terms', terms)
-		await this.ctx.storage.deleteAlarm()
+		if (!Object.keys(away).length) await this.ctx.storage.deleteAlarm()
+		await this.admit(ws, { id: crypto.randomUUID().slice(0, 8), name: tester.name, pads }, tester, others, code)
+	}
 
-		const me: Peer = { id: crypto.randomUUID().slice(0, 8), name: tester.name, pads }
-		ws.serializeAttachment(me)
+	/** Welcomes `me` on `ws`, and tells the others it has joined. */
+	private async admit(ws: WebSocket, me: Peer, tester: Tester, others: Peer[], code: string) {
+		ws.serializeAttachment({ peer: me, tester: tester.id } satisfies Attachment)
 		send(ws, { type: 'welcome', code, id: me.id, peers: others, iceServers: await iceServers(this.env, tester.id) })
 		for (const other of this.sockets(ws)) send(other, { type: 'joined', peer: me })
 	}
 
+	/** Keeps `away`, waking the room when the first of them runs out, or forgets the room once nobody is left. */
+	private async keepAway(away: Record<string, Away>) {
+		const untils = Object.values(away).map((a) => a.until)
+		if (untils.length) {
+			await this.ctx.storage.put('away', away)
+			await this.ctx.storage.setAlarm(Math.min(...untils))
+		} else if (this.peers().length) {
+			await this.ctx.storage.delete('away')
+		} else {
+			await this.ctx.storage.deleteAll()
+		}
+	}
+
 	private async leave(ws: WebSocket) {
-		const me = peerOf(ws)
+		const attached = attachmentOf(ws)
 		const rest = this.sockets(ws)
-		if (me) for (const other of rest) send(other, { type: 'left', id: me.id })
 		try {
 			ws.close()
 		} catch {
 			// already closed
 		}
-		if (!rest.some(peerOf)) await this.ctx.storage.deleteAll()
+		const away = await this.away()
+		if (attached && !attached.bye) {
+			away[attached.peer.id] = { peer: attached.peer, tester: attached.tester, until: Date.now() + RESUME_MS }
+		} else if (attached) {
+			for (const other of rest) send(other, { type: 'left', id: attached.peer.id })
+		}
+		if (!rest.some(peerOf) && !Object.keys(away).length) return this.ctx.storage.deleteAll()
+		await this.keepAway(away)
 	}
 
 	private peers() {
 		return this.ctx.getWebSockets().map(peerOf).filter((p) => p !== null)
+	}
+
+	/** Takes back an away peer's place, as itself, for the tester it was. */
+	private async resume(ws: WebSocket, id: unknown, tester: Tester, away: Record<string, Away>, others: Peer[], code: string) {
+		const was = typeof id === 'string' ? away[id] : undefined
+		if (!was || was.tester !== tester.id) return refuse(ws, 'this game is no longer in the room')
+		delete away[was.peer.id]
+		await this.admit(ws, was.peer, tester, others, code)
+		await this.keepAway(away)
 	}
 
 	private signal(me: Peer, msg: Extract<FromPeer, { type: 'signal' }>) {
@@ -146,7 +204,9 @@ export class Room extends DurableObject<Env> {
 
 const newCode = () => [...crypto.getRandomValues(new Uint8Array(4))].map((b) => CODE_LETTERS[b % CODE_LETTERS.length]).join('')
 
-const peerOf = (ws: WebSocket) => ws.deserializeAttachment() as Peer | null
+const attachmentOf = (ws: WebSocket) => ws.deserializeAttachment() as Attachment | null
+
+const peerOf = (ws: WebSocket) => attachmentOf(ws)?.peer ?? null
 
 const readTerms = (value: unknown): Terms | null => {
 	if (typeof value !== 'object' || value === null) return null

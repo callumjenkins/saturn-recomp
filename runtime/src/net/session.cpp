@@ -1,6 +1,11 @@
 // saturn-recomp runtime — a session over libdatachannel (session.h). The room's WebSocket carries the hello and each
 // connection's offers, answers and candidates; the peer that joins last offers to every peer already there.
 //
+// A network that changes under a phone takes its connections with it, and libdatachannel cannot restart ICE. So a
+// session whose room socket drops joins the room again as itself and offers every peer a new connection, and a
+// connection that fails while the room is still there is offered again by the peer with the lower id. A peer
+// not connected again within kComeBackFor is reported Left.
+//
 // libdatachannel calls back on threads of its own. A channel's message goes straight to the events; every other
 // callback posts a task to the session's thread, which alone touches the links and the room's socket.
 #include "session.h"
@@ -18,6 +23,7 @@
 #include <functional>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <thread>
 #include <utility>
 
@@ -28,6 +34,13 @@ namespace {
 const char* const kLabels[] = {"pads", "line", "control"};
 const int kChannels = 3;
 const int kAllOpen = (1 << kChannels) - 1;
+// The room's RESUME_MS, which keeps a peer's place while it comes back.
+const auto kComeBackFor = std::chrono::seconds(15);
+const auto kRejoinEvery = std::chrono::seconds(1);
+// Unanswered for two of these, the room's socket closes: a dropped network is noticed within about 4 seconds.
+const auto kPingEvery = std::chrono::seconds(2);
+
+using Clock = std::chrono::steady_clock;
 
 int channel_of(const std::string& label) {
     for (int i = 0; i < kChannels; ++i)
@@ -71,6 +84,7 @@ struct Session::Impl {
         std::shared_ptr<rtc::PeerConnection> pc;
         std::shared_ptr<rtc::DataChannel> channels[kChannels];
         int open = 0;   // a bit for each channel open
+        std::optional<Clock::time_point> broken_since;   // while a new connection replaces a failed one
     };
 
     SessionHello hello;
@@ -79,6 +93,9 @@ struct Session::Impl {
     rtc::Configuration config;
     std::map<std::string, Link> links;
     bool room_closed = false;
+    std::string self, code;                           // from the welcome
+    std::optional<Clock::time_point> rejoining_since;  // while the room's socket is gone and the session comes back
+    Clock::time_point rejoin_tried;
     std::chrono::milliseconds away_after{};
     std::atomic<std::chrono::steady_clock::rep> last_poll{};
     bool gone_away = false;
@@ -124,8 +141,25 @@ struct Session::Impl {
                 }
             }
             leave_if_away();
+            if (!gone_away) come_back();
         }
         shut();
+    }
+
+    // Joins the room again while its socket is gone, and gives up on connections not back in time.
+    void come_back() {
+        const auto now = Clock::now();
+        if (rejoining_since && now - *rejoining_since >= kComeBackFor) {
+            rejoining_since.reset();
+            close_room("the room's connection closed, and joining it again failed");
+        } else if (rejoining_since && now - rejoin_tried >= kRejoinEvery && !(room && room->isOpen())) {
+            rejoin_tried = now;
+            start();
+        }
+        std::vector<std::string> lost;
+        for (const auto& [id, link] : links)
+            if (link.broken_since && now - *link.broken_since >= kComeBackFor) lost.push_back(id);
+        for (const std::string& id : lost) drop(id, "its connection failed");
     }
 
     void leave_if_away() {
@@ -145,14 +179,22 @@ struct Session::Impl {
     void start() {
         rtc::WebSocketConfiguration wc;
         wc.caCertificatePemFile = ca_bundle_pem();
+        wc.pingInterval = kPingEvery;
+        wc.maxOutstandingPings = 1;
+        if (room) {
+            room->resetCallbacks();
+            room->close();
+        }
         room = std::make_shared<rtc::WebSocket>(wc);
-        room->onOpen([this] { post([this] { say_hello(); }); });
-        room->onMessage([this](rtc::message_variant m) {
-            if (auto* text = std::get_if<std::string>(&m)) post([this, s = *text] { from_room(s); });
+        auto socket = room.get();
+        room->onOpen([this, socket] { post([this, socket] { if (socket == room.get()) say_hello(); }); });
+        room->onMessage([this, socket](rtc::message_variant m) {
+            if (auto* text = std::get_if<std::string>(&m)) post([this, socket, s = *text] { if (socket == room.get()) from_room(s); });
         });
-        room->onError([this](std::string why) { post([this, why] { close_room(why); }); });
-        room->onClosed([this] { post([this] { close_room("the room's connection closed"); }); });
-        room->open(url);
+        room->onError([this, socket](std::string why) { post([this, socket, why] { if (socket == room.get()) room_lost(why); }); });
+        room->onClosed([this, socket] { post([this, socket] { if (socket == room.get()) room_lost("the room's connection closed"); }); });
+        // Once in, the session comes back to the room it is in, whatever room the URL made.
+        room->open(self.empty() ? url : url.substr(0, url.rfind('/') + 1) + code);
     }
 
     void say_hello() {
@@ -161,27 +203,62 @@ struct Session::Impl {
                              {"runtime", hello.terms.runtime}, {"mode", hello.terms.mode}}}};
         if (!hello.token.empty()) h["token"] = hello.token;
         if (!hello.tester.empty()) h["tester"] = hello.tester;
+        if (rejoining_since) h["resume"] = self;
         room->send(h.dump());
+    }
+
+    // A room joined comes back to; one never joined, or one that refused this peer, is closed.
+    void room_lost(const std::string& why) {
+        if (rejoining_since || room_closed) return;
+        if (self.empty()) return close_room(why);
+        rejoining_since = rejoin_tried = Clock::now();
+        start();
     }
 
     void from_room(const std::string& text) {
         const json m = json::parse(text, nullptr, false);
         if (!m.is_object()) return;
         const std::string type = m.value("type", "");
-        if (type == "welcome") {
+        if (type == "welcome" && rejoining_since) {
+            rejoining_since.reset();
             config.iceServers = session_ice_servers(m.value("iceServers", json::array()));
-            emit({.kind = SessionEvent::Kind::Welcome, .peer = m.value("id", ""), .text = m.value("code", "")});
+            std::map<std::string, bool> there;
+            for (const json& p : m.value("peers", json::array()))
+                if (p.is_object() && !p.value("id", "").empty()) there[p.value("id", "")] = true;
+            std::vector<std::string> gone;
+            for (const auto& [id, _] : links)
+                if (!there.count(id)) gone.push_back(id);
+            for (const std::string& id : gone) drop(id, "left the room");
+            for (const json& p : m.value("peers", json::array())) {
+                const std::string id = p.value("id", "");
+                if (links.count(id)) reconnect(id, true);
+                else if (joined(p)) connect(id, true);
+            }
+        } else if (type == "welcome") {
+            config.iceServers = session_ice_servers(m.value("iceServers", json::array()));
+            self = m.value("id", "");
+            code = m.value("code", "");
+            emit({.kind = SessionEvent::Kind::Welcome, .peer = self, .text = code});
             for (const json& p : m.value("peers", json::array())) {
                 if (!joined(p)) continue;
                 connect(p.value("id", ""), true);
             }
         } else if (type == "joined") {
             const json p = m.value("peer", json::object());
-            if (joined(p)) connect(p.value("id", ""), false);
+            const std::string id = p.value("id", "");
+            if (links.count(id)) reconnect(id, false);   // it came back, and offers a new connection
+            else if (joined(p)) connect(id, false);
         } else if (type == "signal") {
             signalled(m.value("from", ""), m.value("data", json::object()));
         } else if (type == "left") {
             drop(m.value("id", ""), "left the room");
+        } else if (type == "refused" && rejoining_since) {
+            rejoining_since.reset();
+            std::vector<std::string> all;
+            for (const auto& [id, _] : links) all.push_back(id);
+            for (const std::string& id : all) drop(id, "is no longer reached: this game could not join the room again");
+            close_room("joining again, " + m.value("reason", ""));
+            room->close();
         } else if (type == "refused") {
             emit({.kind = SessionEvent::Kind::Refused, .text = m.value("reason", "")});
             room_closed = true;
@@ -208,8 +285,9 @@ struct Session::Impl {
                 signal(id, {{"candidate", {{"candidate", candidate}, {"mid", mid}}}});
             });
         });
-        pc->onStateChange([this, id](rtc::PeerConnection::State s) {
-            if (s == rtc::PeerConnection::State::Failed) post([this, id] { drop(id, "its connection failed"); });
+        auto raw = pc.get();
+        pc->onStateChange([this, id, raw](rtc::PeerConnection::State s) {
+            if (s == rtc::PeerConnection::State::Failed) post([this, id, raw] { failed(id, raw); });
         });
         pc->onDataChannel([this, id](std::shared_ptr<rtc::DataChannel> dc) { post([this, id, dc] { attach(id, dc); }); });
         links[id].pc = pc;
@@ -243,7 +321,26 @@ struct Session::Impl {
         auto it = links.find(id);
         if (it == links.end() || it->second.open == kAllOpen) return;
         it->second.open |= 1 << c;
-        if (it->second.open == kAllOpen) emit({.kind = SessionEvent::Kind::Open, .peer = id});
+        if (it->second.open != kAllOpen) return;
+        it->second.broken_since.reset();
+        emit({.kind = SessionEvent::Kind::Open, .peer = id});
+    }
+
+    // `pc`'s connection to `id` failed. The lower id offers its replacement while the room is there to carry it.
+    void failed(const std::string& id, rtc::PeerConnection* pc) {
+        auto it = links.find(id);
+        if (it == links.end() || it->second.pc.get() != pc || it->second.broken_since) return;
+        it->second.broken_since = Clock::now();
+        if (self < id && room && room->isOpen()) reconnect(id, true);
+    }
+
+    // A new connection to `id` in place of its link, offered by this side or awaiting the other's offer.
+    void reconnect(const std::string& id, bool offer) {
+        Link& old = links[id];
+        const auto since = old.broken_since.value_or(Clock::now());
+        if (old.pc) close_link(old);
+        links[id] = Link{.broken_since = since};
+        connect(id, offer);
     }
 
     void signalled(const std::string& from, const json& data) {
@@ -251,6 +348,11 @@ struct Session::Impl {
         if (it == links.end() || !data.is_object()) return;
         if (data.contains("description")) {
             const json& d = data["description"];
+            // An offer to a connection that already has one is the other side replacing a failed connection.
+            if (d.value("type", "") == "offer" && it->second.pc->remoteDescription()) {
+                reconnect(from, false);
+                it = links.find(from);
+            }
             it->second.pc->setRemoteDescription(rtc::Description(d.value("sdp", ""), d.value("type", "")));
         } else if (data.contains("candidate")) {
             const json& c = data["candidate"];
@@ -291,14 +393,25 @@ struct Session::Impl {
         link.pc->close();
     }
 
-    // On the session's thread, as it ends: nothing calls back once this returns.
+    // On the session's thread, as it ends: nothing calls back once this returns. The bye tells the room this peer
+    // is not coming back.
     void shut() {
         for (auto& [id, link] : links) close_link(link);
         links.clear();
         if (room) {
             room->resetCallbacks();
+            if (room->isOpen()) room->send(json{{"type", "bye"}}.dump());
             room->close();
             room.reset();
+        }
+    }
+
+    // For tests: the network gone at once, with no bye and no goodbyes to the peers.
+    void sever() {
+        if (room) room->forceClose();
+        for (auto& [id, link] : links) {
+            close_link(link);
+            link.broken_since = Clock::now();
         }
     }
 };
@@ -328,6 +441,10 @@ std::vector<SessionEvent> Session::poll() {
     impl_->last_poll = std::chrono::steady_clock::now().time_since_epoch().count();
     std::scoped_lock lock(impl_->event_mutex);
     return std::exchange(impl_->events, {});
+}
+
+void Session::sever() {
+    impl_->post([impl = impl_.get()] { impl->sever(); });
 }
 
 void Session::send(const std::string& peer, Channel channel, std::vector<uint8_t> data) {

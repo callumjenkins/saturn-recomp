@@ -19,7 +19,7 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
-const auto kLostAfter = std::chrono::seconds(10);   // as long as a session waits for a game paused in the background
+const auto kLostAfter = std::chrono::seconds(15);   // as long as the room keeps a peer's place while it comes back
 const auto kWaitShown = std::chrono::seconds(1);
 const auto kResend = std::chrono::milliseconds(4);
 const auto kPingEvery = std::chrono::milliseconds(200);
@@ -262,7 +262,7 @@ void online_sync_vblank(const std::function<void()>& idle) {
         const std::vector<int> missing = g_ls->waiting_on(frame);
         g_waiting_for = waited >= kWaitShown && !missing.empty() ? name(g_ls->members()[missing[0]].id) : "";
         if (waited >= kLostAfter)
-            for (int m : missing) lose(m, "sent no pads for 10 seconds");
+            for (int m : missing) lose(m, "sent no pads for 15 seconds");
         if (Clock::now() - sent >= kResend) {
             send_pads();
             sent = Clock::now();

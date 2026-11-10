@@ -96,6 +96,23 @@ class SessionsTest {
     }
 
     @Test
+    fun aSyncedGameGoesThroughItsRoomWithNoSavesAndOneClock() {
+        val info = JSONObject().put("endpoint", "https://pt.example")
+        val rest = listOf("--sync", "0", "--clock", Sessions.SYNC_CLOCK, "--save", "-")
+        assertEquals(listOf("--session", "wss://pt.example/api/rooms/new") + rest, Sessions.syncArgs(info, null))
+        assertEquals(listOf("--session", "wss://pt.example/api/rooms/BCDK") + rest, Sessions.syncArgs(info, "BCDK"))
+    }
+
+    @Test
+    fun aSyncedSessionRecordsTheSharedClockAndPlaysWithoutTheSaves() {
+        val more = Sessions.syncArgs(info.put("endpoint", "https://pt.example"), null)
+        val (out, args) = Sessions.start(tmp.root, info, File(tmp.root, "disc.cue"), send = false, more = more)
+        assertEquals(Sessions.SYNC_CLOCK, Sessions.read(out).getString("clock"))
+        assertEquals("-", args[args.lastIndexOf("--save") + 1])
+        assertEquals(Sessions.SYNC_CLOCK, args[args.lastIndexOf("--clock") + 1])
+    }
+
+    @Test
     fun aRoomCodeIsFourLettersInEitherCase() {
         assertEquals("BCDK", Sessions.roomCode(" bcdk "))
         for (bad in listOf("BCD", "BCDKF", "BC1K", "BCDÉ")) assertEquals(null, Sessions.roomCode(bad))

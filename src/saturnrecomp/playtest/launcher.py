@@ -75,9 +75,7 @@ class Launcher:
             ttk.Button(frame, text="Join that room", command=self.join_room).grid(column=2, row=row + 1, sticky="w")
             row += 2
         ttk.Label(frame, text="Online, one game with other testers").grid(column=0, row=row, columnspan=3, sticky="w", pady=(12, 0))
-        self.players = tk.IntVar(value=2)
-        ttk.Spinbox(frame, from_=2, to=10, textvariable=self.players, width=4).grid(column=0, row=row + 1, sticky="w")
-        ttk.Button(frame, text="Make a room for them", command=self.make_sync_room).grid(column=0, row=row + 1, sticky="e")
+        ttk.Button(frame, text="Make a room", command=self.make_sync_room).grid(column=0, row=row + 1, sticky="w")
         self.sync_code = tk.StringVar()
         ttk.Entry(frame, textvariable=self.sync_code, width=8).grid(column=1, row=row + 1, sticky="w")
         ttk.Button(frame, text="Join that game", command=self.join_sync_room).grid(column=2, row=row + 1, sticky="w")
@@ -129,7 +127,7 @@ class Launcher:
         self.play(session.sync_args(self.info, code=code))
 
     def make_sync_room(self):
-        self.play(session.sync_args(self.info, self.players.get()))
+        self.play(session.sync_args(self.info))
 
     def open_sessions(self):
         webbrowser.open(f"{self.info['endpoint']}/#token={self.token.get().strip()}")

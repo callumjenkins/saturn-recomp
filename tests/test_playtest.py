@@ -203,13 +203,14 @@ def test_a_classic_call_goes_through_its_room_as_waiter_or_dialler(endpoint, cod
     assert args == ["--modem", "session", "--session", url, "--steer", "W" if role == "wait" else "D"]
 
 
-@pytest.mark.parametrize("code, url, players", [
-    pytest.param(None, "wss://pt.example/api/rooms/new", "3", id="a new room starts at its players"),
-    pytest.param("BCDK", "wss://pt.example/api/rooms/BCDK", "0", id="joining waits for the start"),
+@pytest.mark.parametrize("players, code, url, sync", [
+    pytest.param(3, None, "wss://pt.example/api/rooms/new", "3", id="a new room starts at its players"),
+    pytest.param(None, None, "wss://pt.example/api/rooms/new", "0", id="a new room starts on its maker's Start"),
+    pytest.param(3, "BCDK", "wss://pt.example/api/rooms/BCDK", "0", id="joining waits for the start"),
 ])
-def test_a_synced_game_goes_through_its_room_with_no_saves_and_one_clock(code, url, players):
-    args = session.sync_args({"endpoint": "https://pt.example"}, 3, code)
-    assert args == ["--session", url, "--sync", players, "--clock", session.SYNC_CLOCK, "--save", "-"]
+def test_a_synced_game_goes_through_its_room_with_no_saves_and_one_clock(players, code, url, sync):
+    args = session.sync_args({"endpoint": "https://pt.example"}, players, code)
+    assert args == ["--session", url, "--sync", sync, "--clock", session.SYNC_CLOCK, "--save", "-"]
 
 
 def test_a_synced_replay_plays_the_recorded_pads_without_the_room(tmp_path):

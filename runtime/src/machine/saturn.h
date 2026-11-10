@@ -154,6 +154,7 @@ bool online_sync_playing();         // the game has started: the pads are the ro
 uint16_t online_sync_pad(int slot);
 bool online_sync_plugged(int slot); // a player in the game owns the slot
 OnlineCard online_sync_card();
+void online_sync_start();           // the room's creator chose to start with the players in
 int  sh2_active_slots();            // the modules active now (core.cpp)
 const SH2Module* sh2_active_slot(int i);
 void sh2_set_active_slot(int i, const SH2Module* m);

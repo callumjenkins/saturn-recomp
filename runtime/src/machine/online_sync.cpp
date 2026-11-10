@@ -40,6 +40,7 @@ std::vector<std::string> g_order;     // the other peers, in the order they join
 std::map<std::string, Peer> g_peers;
 std::string g_ended;                  // why the game is no longer played together
 std::string g_waiting_for;            // the member a long wait is for
+bool g_start_asked;
 uint16_t g_pads[kLockstepSlots];
 Clock::time_point g_pinged;
 
@@ -80,13 +81,22 @@ uint64_t median(std::vector<uint64_t> v) {
     return v[v.size() / 2];
 }
 
-// The creator's start, once enough players' channels are open and their round trips measured: each peer's slots
-// one after the other, this one's first.
+// The players whose channels are open, this one included.
+int players_in() {
+    int in = 1;
+    for (const std::string& id : g_order) in += g_peers[id].open;
+    return in;
+}
+
+// The creator's start, once its player has asked for it or --sync's number are in, and every open channel's round
+// trip is measured: each peer's slots one after the other, this one's first.
 std::optional<LockstepStart> ready_to_start() {
     std::vector<std::string> open;
     for (const std::string& id : g_order)
         if (g_peers[id].open && g_peers[id].rtts.size() >= kPingsNeeded) open.push_back(id);
-    if ((int)open.size() + 1 < std::max(g_cfg.sync, 2)) return std::nullopt;
+    const int ready = (int)open.size() + 1;
+    const bool asked = g_start_asked || (g_cfg.sync >= 2 && ready >= g_cfg.sync);
+    if (ready < 2 || !asked || ready < players_in()) return std::nullopt;
     LockstepStart s{.frame = sat_vblanks(), .delay = g_cfg.sync_delay};
     uint64_t rtt = 0;
     int slot = 0;
@@ -279,7 +289,14 @@ OnlineCard online_sync_card() {
     if (g_ls) return {};
     std::string text = g_code.empty() ? "Joining the room" : "Room " + g_code;
     if (!creator()) return {text + ": waiting for the game to start"};
-    int open = 1;
-    for (const std::string& id : g_order) open += g_peers[id].open;
-    return {text + ": " + std::to_string(open) + " of " + std::to_string(std::max(g_cfg.sync, 2)) + " players"};
+    const int in = players_in();
+    text += ": " + std::to_string(in) + (g_cfg.sync >= 2 ? " of " + std::to_string(g_cfg.sync) : "") +
+            (in == 1 ? " player" : " players");
+    if (g_start_asked) return {text + ", starting"};
+    if (in < 2) return {text};
+    return {text + ". Start: play", true};
+}
+
+void online_sync_start() {
+    if (creator() && !g_ls && players_in() >= 2) g_start_asked = true;
 }

@@ -54,9 +54,10 @@
 // names, and notes who comes and goes. Until a call connects, the window shows the room's code and the other
 // player.
 // --sync N plays one game with the room's other peers, every peer's pads in lockstep (online_sync.cpp): the room's
-// creator starts it once N players are in. --sync-pads says how many players this machine has (1), and --sync-delay
-// how many frames a press waits before it applies (from the round trip). Every peer starts from power-on with no
-// saves and, unless --clock says otherwise, the same clock.
+// creator starts it once N players are in, or when its player presses Start with two or more in, which is the only
+// way with --sync 0. --sync-pads says how many players this machine has (1), and --sync-delay how many frames a
+// press waits before it applies (from the round trip). Every peer starts from power-on with no saves and, unless
+// --clock says otherwise, the same clock.
 // --steer presses SCRIPT's buttons, as --input's, over the controllers': the way through the game's menus to its
 // call. --steer-again offers another match each time PROGRAM starts again, and presses SCRIPT, its VBlanks counted
 // from that start, once the player takes the offer with Start. Taken late, SCRIPT's first press comes at once.

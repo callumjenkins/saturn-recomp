@@ -52,6 +52,7 @@ class LauncherActivity : Activity() {
     private lateinit var who: Spinner
     private lateinit var playButton: Button
     private lateinit var roomCode: EditText
+    private lateinit var gameCode: EditText
     private lateinit var status: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -134,6 +135,17 @@ class LauncherActivity : Activity() {
                 val code = Sessions.roomCode(roomCode.text.toString())
                 if (code == null) say("A room's code is the four letters its maker's screen shows.") else playOnline(code)
             }
+        }
+        text("Online, one game with other testers", bold = true).setPadding(0, pad, 0, 0)
+        button("Make a room") { playOnline(null, synced = true) }
+        gameCode = EditText(this).apply {
+            hint = "A room's code"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
+            column.addView(this)
+        }
+        button("Join that game") {
+            val code = Sessions.roomCode(gameCode.text.toString())
+            if (code == null) say("A room's code is the four letters its maker's screen shows.") else playOnline(code, synced = true)
         }
         button("Save files…") { chooseSession() }
         button("My sessions") { openSessions() }
@@ -288,11 +300,11 @@ class LauncherActivity : Activity() {
         startActivityForResult(Intent(this, SavesActivity::class.java), SAVES)
     }
 
-    /** Plays through a playtest room: a new one, or the room `code`. */
-    private fun playOnline(code: String?) {
+    /** Plays through a playtest room, a new one or the room `code`: the game's own online call, or `synced`, one game for everyone in it. */
+    private fun playOnline(code: String?, synced: Boolean = false) {
         settings.put("token", token.text.toString().trim())
         if (credential().isEmpty()) return say("Playing online needs a tester: pick who's playing.")
-        play(online = Sessions.classicArgs(info, code))
+        play(online = if (synced) Sessions.syncArgs(info, code) else Sessions.classicArgs(info, code))
     }
 
     private fun play(from: File? = null, useDump: Boolean = true, branch: Sessions.Branch? = null, save: String? = null, parent: JSONObject? = null,

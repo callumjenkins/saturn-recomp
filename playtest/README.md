@@ -88,6 +88,11 @@ menu, leaves the room, and the other peer's modem hears NO CARRIER.
 `tests/netlink.py --room` in the game runs a match and a rematch through a room on this machine
 (`saturnrecomp.playtest.local_worker`, under `wrangler dev`), then replays each side from what it recorded.
 
+Any game can also be played by everyone in a room as one game, with every player's pads in lockstep
+(`runtime/src/machine/online_sync.cpp`, `--sync`). Both launchers offer it as "Online, one game with other
+testers". Whoever makes the room sees its code and who has joined on the window's card, and starts the game with
+Start. Every copy starts from power-on with no saves and the same clock. The game's own `tests/sync.py` checks it.
+
 A classic game can also play outside the rooms, against a real Saturn on SegaRPGFan's NetBand tunnel:
 `--modem netband=wait`, `wait:CODE`, `dial:CODE` or `dial:IP` (`runtime/src/net/netband.h`). `CODE` is the
 game's three digits on the dreampipe.net match service, `netband_code` in `[online.classic]`.

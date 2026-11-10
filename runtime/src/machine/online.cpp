@@ -244,6 +244,7 @@ OnlineCard online_card() {
 }
 
 void online_again() {
+    if (g_cfg.sync >= 0) return online_sync_start();
     std::optional<uint64_t> offered_at = g_room.take_offer();
     if (!offered_at) return;
     // The client keeps the last match's call, and one back with its save found opens a chat on it that it leaves

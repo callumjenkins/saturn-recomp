@@ -1,8 +1,10 @@
 // The pads: which player each controller drives, and what INTBACK reports for each port.
 #include "saturn.h"
 #include "pad_slots.h"
+#include "state.h"
 #include "unplugs.h"
 #include "test.h"
+#include <cstring>
 #include <fstream>
 #include <iterator>
 #include <string>
@@ -18,6 +20,22 @@ std::vector<uint8_t> peripherals() {
     std::vector<uint8_t> out;
     for (int i = 0; i < 32; ++i) out.push_back((uint8_t)smpc_read(0x21 + 2 * i));
     return out;
+}
+
+// The VBlank count as a loaded dump would set it.
+void set_vblanks(uint64_t n) {
+    State s;
+    s.loading = true;
+    s.data.resize(2 * sizeof n);
+    std::memcpy(s.data.data() + sizeof n, &n, sizeof n);
+    video_state(s);
+}
+
+State taken(void (*part)(State&)) {
+    State s;
+    part(s);
+    s.loading = true;
+    return s;
 }
 
 void press(const char* spec) {
@@ -156,4 +174,21 @@ TEST(steered_presses_reach_the_recorded_input) {
     const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     const std::string at = std::to_string(now);
     CHECK_EQ(text == at + ":START," + at + ":,", true);
+}
+
+TEST(a_dump_from_an_earlier_vblank_plays_the_script_steps_after_it_again) {
+    State video = taken(video_state);
+    const uint64_t now = sat_vblanks();
+    smpc_steer(smpc_parse_script("1:B,2:"), now);
+    State pads = taken(smpc_state);
+    set_vblanks(now + 3);
+    CHECK_EQ(peripherals()[2], 0xFF);       // pad 1: B pressed and let go
+    video_state(video);
+    smpc_state(pads);
+    set_vblanks(now + 1);
+    CHECK_EQ(peripherals()[2], 0xFE);       // B held again
+    set_vblanks(now + 2);
+    CHECK_EQ(peripherals()[2], 0xFF);
+    video.pos = 0;
+    video_state(video);
 }

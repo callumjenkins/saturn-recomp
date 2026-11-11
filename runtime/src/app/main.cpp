@@ -89,6 +89,8 @@
 // --state-out writes one: at the first safe moment from VBlank --state-at, every --state-every
 // SECONDS of the host's time, and when the window is closed or Quit chosen in its menu, which then wait for it.
 // A safe moment is a task switch (--tasks), so a game without one makes no dumps.
+// --rewind FROM:AT keeps the machine in memory at the first safe moment from VBlank FROM and loads it back at the
+// first from AT, so the VBlanks between them play twice: a check that a dump loads in the middle of a run.
 // --progress adds a line to FILE whenever the first --progress-keep range changes: the VBlank, then
 // each range's bytes in hex. A game's stage number, say, then what a stage start has to be rebuilt from.
 // --after gives the window's menu Save files, which writes "saves" to FILE and quits, for a launcher to
@@ -158,6 +160,7 @@ static int parse_args(SaturnConfig& cfg, bool& launcher, int argc, char** argv) 
         else if (!std::strcmp(a, "--state-out") && more) cfg.state_out = argv[++i];
         else if (!std::strcmp(a, "--state-every") && more) cfg.state_every = std::atoi(argv[++i]);
         else if (!std::strcmp(a, "--state-at") && more) cfg.state_at = argv[++i];
+        else if (!std::strcmp(a, "--rewind") && more) cfg.rewind = argv[++i];
         else if (!std::strcmp(a, "--progress") && more) cfg.progress = argv[++i];
         else if (!std::strcmp(a, "--progress-keep") && more) cfg.progress_keep = argv[++i];
         else if (!std::strcmp(a, "--virtual-input") && more) cfg.virtual_input = argv[++i];
@@ -224,7 +227,7 @@ static int parse_args(SaturnConfig& cfg, bool& launcher, int argc, char** argv) 
                                  "             [--wav FILE] [--hook ADDR:rN=VALUE ...] [--tasks SETJMP:LONGJMP] [--multitap N]\n"
                                  "             [--clock YYYY-MM-DDTHH:MM:SS] [--agent FD] [--write VBLANK:ADDR=HEX,...] [--video FILE]\n"
                                  "             [--save FILE|-] [--coverage FILE] [--checkpoint SECONDS] [--log FILE]\n"
-                                 "             [--state-in FILE] [--state-out FILE] [--state-every SECONDS] [--state-at VBLANK]\n"
+                                 "             [--state-in FILE] [--state-out FILE] [--state-every SECONDS] [--state-at VBLANK] [--rewind FROM:AT]\n"
                                  "             [--progress FILE --progress-keep ADDR:BYTES,...] [--after FILE] [--launcher [--options FILE]]\n"
                                  "             [--cheat MODULE:ADDR=HEX|MODULE:ADDR|=HEX,...] [--modem line|session|netband=SPEC|dial=HOST:PORT[,listen=PORT]]\n"
                                  "             [--session URL [--steer SCRIPT] [--steer-again PROGRAM:SCRIPT [--steer-again-saved SAVE:SCRIPT]]] [--line-in FILE] [--sync N [--sync-pads N] [--sync-delay FRAMES]] [--other-disc CUE --from-other PATH=OTHERPATH,... --track-from-other N,...]\n");

@@ -197,6 +197,7 @@ static void writes_due() {
 
 // A dump is taken after its VBlank's writes, so a run loaded from one starts after them.
 static void writes_skip_past() {
+    g_write_pos = 0;
     while (g_write_pos < g_writes.size() && g_writes[g_write_pos].vblank <= sat_vblanks()) ++g_write_pos;
 }
 
@@ -699,6 +700,12 @@ int saturn_main(const SaturnConfig& cfg) {
             tasks_route(g_master, ~0u);
         } catch (TaskUnwind& u) {
             entry = u.pc;
+        } catch (StateRewind&) {
+            tasks_reset();
+            state_rewind();
+            writes_skip_past();
+            entry = g_master.pc;
+            tasks = true;
         } catch (ProgramStart& s) {
             tasks_reset();
             entry = s.addr;

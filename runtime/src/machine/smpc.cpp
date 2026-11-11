@@ -410,5 +410,6 @@ void smpc_state(State& s) {
         g_script_names[p] |= named[p];
         (host_drives() ? g_host_pressed : g_script_pressed)[p] = held[p];
     }
+    g_script_pos = 0;
     while (g_script_pos < g_script.size() && g_script[g_script_pos].vblank < sat_vblanks()) ++g_script_pos;
 }

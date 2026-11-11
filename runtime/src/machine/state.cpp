@@ -64,6 +64,8 @@ static std::chrono::steady_clock::time_point g_next;
 static bool g_points;                           // the run has safe moments (state_enable)
 static const char* g_stop_why;                  // the run stops once this dump is written
 static uint64_t g_stop_by;                      // ... or at this VBlank without one
+static uint64_t g_keep_at = ~0ull, g_rewind_at = ~0ull;   // --rewind FROM:AT
+static std::vector<uint8_t> g_kept;
 
 static void put(std::vector<uint8_t>& out, const void* p, size_t n) {
     auto* b = static_cast<const uint8_t*>(p);
@@ -86,6 +88,9 @@ void state_enable() { g_points = true; }
 
 void state_init() {
     if (!g_cfg.state_at.empty()) g_at_vblank = std::stoull(g_cfg.state_at);
+    if (!g_cfg.rewind.empty() && std::sscanf(g_cfg.rewind.c_str(), "%llu:%llu", (unsigned long long*)&g_keep_at,
+                                             (unsigned long long*)&g_rewind_at) != 2)
+        sat_fatal("--rewind %s is not FROM:AT", g_cfg.rewind.c_str());
     if (g_cfg.state_every) g_next = std::chrono::steady_clock::now() + std::chrono::seconds(g_cfg.state_every);
 }
 
@@ -111,10 +116,7 @@ void state_stop(const char* why) {
     g_wanted = true;
 }
 
-void state_point(SH2Context& c) {
-    if (!g_wanted || g_writing || c.cpu != 0 || sat_in_interrupt() || state_slave_busy()) return;
-    g_wanted = false;
-    g_at_vblank = ~0ull;
+static std::vector<uint8_t> dump() {
     std::vector<uint8_t> out;
     put(out, kMagic, sizeof kMagic);
     put(out, &kVersion, sizeof kVersion);
@@ -128,6 +130,27 @@ void state_point(SH2Context& c) {
         put(out, &size, sizeof size);
         put(out, s.data.data(), s.data.size());
     }
+    return out;
+}
+
+// What a --rewind does at a safe moment: keeps the machine, or throws to go back to it.
+static void rewind_point() {
+    if (g_kept.empty() && sat_vblanks() >= g_keep_at) {
+        g_kept = dump();
+        sat_note("state: VBlank %llu kept to go back to", (unsigned long long)sat_vblanks());
+    } else if (!g_kept.empty() && sat_vblanks() >= g_rewind_at) {
+        g_rewind_at = ~0ull;
+        throw StateRewind{};
+    }
+}
+
+void state_point(SH2Context& c) {
+    if (c.cpu != 0 || sat_in_interrupt() || state_slave_busy()) return;
+    rewind_point();
+    if (!g_wanted || g_writing) return;
+    g_wanted = false;
+    g_at_vblank = ~0ull;
+    std::vector<uint8_t> out = dump();
     if (g_writer.joinable()) g_writer.join();
     g_writing = true;
     g_writer = std::thread(write_file, std::move(out), g_cfg.state_out, sat_vblanks());
@@ -142,14 +165,7 @@ void state_finish() {
 }
 
 // ---- loading --------------------------------------------------------------------------------
-void state_load(const std::string& path) {
-    g_loading_path = path;
-    FILE* f = std::fopen(path.c_str(), "rb");
-    if (!f) state_fail("cannot open it");
-    std::vector<uint8_t> bytes;
-    uint8_t buf[1 << 16];
-    for (size_t n; (n = std::fread(buf, 1, sizeof buf, f)) > 0;) bytes.insert(bytes.end(), buf, buf + n);
-    std::fclose(f);
+static void load(const std::vector<uint8_t>& bytes) {
     size_t at = sizeof kMagic + sizeof kVersion;
     uint32_t version;
     if (bytes.size() < at || std::memcmp(bytes.data(), kMagic, sizeof kMagic)) state_fail("not a dump");
@@ -177,6 +193,24 @@ void state_load(const std::string& path) {
         p.fn(s);
         if (s.pos != s.data.size()) state_fail((std::string("the part ") + p.name + " is longer than this build reads").c_str());
     }
+}
+
+void state_load(const std::string& path) {
+    g_loading_path = path;
+    FILE* f = std::fopen(path.c_str(), "rb");
+    if (!f) state_fail("cannot open it");
+    std::vector<uint8_t> bytes;
+    uint8_t buf[1 << 16];
+    for (size_t n; (n = std::fread(buf, 1, sizeof buf, f)) > 0;) bytes.insert(bytes.end(), buf, buf + n);
+    std::fclose(f);
+    load(bytes);
     sat_note("state: loaded %s at VBlank %llu, going on at %08X", path.c_str(), (unsigned long long)sat_vblanks(), g_master.pc);
     g_loading_path.clear();
+}
+
+void state_rewind() {
+    uint64_t from = sat_vblanks();
+    load(g_kept);
+    sat_note("state: VBlank %llu back to %llu, going on at %08X", (unsigned long long)from,
+             (unsigned long long)sat_vblanks(), g_master.pc);
 }

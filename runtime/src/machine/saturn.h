@@ -93,6 +93,8 @@ struct SaturnConfig {
     std::string state_out;          // dumps go to this file: at a stop that waits for one, and as below
     int state_every = 0;            // ... every this many seconds of the host's time (0: only at a stop)
     std::string state_at;           // ... at the first safe moment from this VBlank on
+    std::string rewind;             // "FROM:AT": the machine kept at the first safe moment from VBlank FROM, and
+                                    // loaded back at the first from AT
     std::string progress;           // a file the --progress-keep ranges are added to, a line each time the first changes
     std::string progress_keep;      // "ADDR:BYTES,...": the ranges
     std::string resume_label;       // what the window says while --resume plays
@@ -129,6 +131,8 @@ void state_point(SH2Context& c);    // a safe moment: c's registers and PC are a
 void state_stop(const char* why);   // the run stops at the next dump, or soon without one
 void state_finish();                // the last dump written
 void state_load(const std::string& path);   // after the boot: the machine as the dump has it
+struct StateRewind {};              // thrown at a safe moment, for the master's loop to load the machine kept for --rewind
+void state_rewind();                // on the master's own stack: the machine as it was kept
 
 // ---- --session (online.cpp) ---------------------------------------------------------------
 void online_poll();                 // from the master's polls: the room joined once IP.BIN is in, or --line-in played

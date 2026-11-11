@@ -52,8 +52,13 @@ struct StubRoom {
 
     ~StubRoom() {
         server.stop();
-        std::scoped_lock lock(mutex);
-        for (auto& ws : clients) ws->resetCallbacks();
+        std::vector<std::shared_ptr<rtc::WebSocket>> all;
+        {
+            std::scoped_lock lock(mutex);
+            all.swap(clients);
+        }
+        // A socket's callback takes the room's lock while holding its own, so the room's is let go before taking the sockets'.
+        for (auto& ws : all) ws->resetCallbacks();
     }
 
     std::string url(const std::string& path) { return "ws://127.0.0.1:" + std::to_string(server.port()) + path; }

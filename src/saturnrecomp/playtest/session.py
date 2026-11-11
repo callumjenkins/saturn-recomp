@@ -34,13 +34,13 @@ def classic_args(info, code=None):
     return ["--modem", "session", "--session", f"{url}/api/rooms/{code or 'new'}", *info["classic"][role]]
 
 
-def sync_args(info, players=None, code=None):
+def sync_args(info, players=None, code=None, watch=False):
     """saturn's arguments for one game played by everyone in a playtest room: a new room, or the room `code`. A new
     room's game starts when its maker presses Start, or once `players` are in. Everyone shares one clock and plays
-    with the maker's saves, which only the maker's copy writes back."""
+    with the maker's saves, which only the maker's copy writes back. A copy that will `watch` takes no pads."""
     url = "ws" + info["endpoint"].removeprefix("http")
     return ["--session", f"{url}/api/rooms/{code or 'new'}", "--sync", str(0 if code else players or 0),
-            "--clock", SYNC_CLOCK]
+            "--clock", SYNC_CLOCK, *(["--sync-pads", "0"] if watch else [])]
 
 
 def exit_reason(log_path, code):

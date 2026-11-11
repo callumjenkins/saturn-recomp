@@ -55,10 +55,11 @@
 // player.
 // --sync N plays one game with the room's other peers, every peer's pads in lockstep (online_sync.cpp): the room's
 // creator starts it once N players are in, or when its player presses Start with two or more in, which is the only
-// way with --sync 0. --sync-pads says how many players this machine has (1), and --sync-delay how many frames a
-// press waits before it applies (from the round trip). Every peer starts from power-on with the creator's saves and,
-// unless --clock says otherwise, the same clock. A peer that joins leaves its own save file alone. --session-sever-at VBLANK, for tests, drops the session's network at that
-// VBlank, as a phone that changes networks does, and the session comes back to the room.
+// way with --sync 0. --sync-pads says how many players this machine has (1; 0 only watches), and --sync-delay how
+// many frames a press waits before it applies (from the round trip). Every peer starts from power-on with the
+// creator's saves and, unless --clock says otherwise, the same clock. A peer that joins leaves its own save file
+// alone. --session-sever-at VBLANK, for tests, drops the session's network at that VBlank, as a phone that changes
+// networks does, and the session comes back to the room.
 // --steer presses SCRIPT's buttons, as --input's, over the controllers': the way through the game's menus to its
 // call. --steer-again offers another match each time PROGRAM starts again, and presses SCRIPT, its VBlanks counted
 // from that start, once the player takes the offer with Start. Taken late, SCRIPT's first press comes at once.
@@ -250,9 +251,9 @@ int main(int argc, char** argv) {
         }
     }
     if (cfg.sync >= 0) {
-        if (cfg.session.empty() || !cfg.modem.empty() || cfg.realtime || cfg.sync_pads < 1 || cfg.sync_pads > 12 ||
+        if (cfg.session.empty() || !cfg.modem.empty() || cfg.realtime || cfg.sync_pads < 0 || cfg.sync_pads > 12 ||
             cfg.sync_delay < 0 || cfg.sync_delay > 30) {
-            std::fprintf(stderr, "saturn: --sync needs --session, and neither --modem nor --realtime; --sync-pads is 1 to 12 "
+            std::fprintf(stderr, "saturn: --sync needs --session, and neither --modem nor --realtime; --sync-pads is 0 to 12 "
                                  "and --sync-delay 0 to 30\n");
             return 2;
         }

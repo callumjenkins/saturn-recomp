@@ -3,7 +3,7 @@ import { type Tester, testerById, testerByToken } from './auth'
 import { HttpError } from './http'
 import { iceServers } from './turn'
 
-/** A peer as the others see it. */
+/** A peer as the others see it, with no pads when it only watches a synced game. */
 export type Peer = { id: string; name: string; pads: number }
 
 /** A peer whose socket dropped without a bye, kept for it to resume until `until`. */
@@ -116,8 +116,9 @@ export class Room extends DurableObject<Env> {
 		const terms = readTerms(msg.terms)
 		if (!terms) return refuse(ws, `the hello's terms need ${TERM_FIELDS.join(', ')}`)
 		const pads = msg.pads
-		if (typeof pads !== 'number' || !Number.isInteger(pads) || pads < 1 || pads > MAX_PADS)
-			return refuse(ws, `pads must be 1 to ${MAX_PADS}`)
+		if (typeof pads !== 'number' || !Number.isInteger(pads) || pads < 0 || pads > MAX_PADS)
+			return refuse(ws, `pads must be 0 to ${MAX_PADS}`)
+		if (terms.mode === 'classic' && pads < 1) return refuse(ws, 'a peer in a classic room needs a pad')
 		const others = this.peers()
 		const away = await this.away()
 		if (msg.resume !== undefined) return this.resume(ws, msg.resume, tester, away, others, code)

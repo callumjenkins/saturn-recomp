@@ -104,13 +104,22 @@ describe('rooms', () => {
 		['another disc and mode', { ...TERMS, product: 'T-14302G', mode: 'sync' }, 2, 'the product differs'],
 		['terms missing', { product: 'MK-81070_V1.003' }, 2, "the hello's terms need product, game, runtime, mode"],
 		['more pads than are free', TERMS, 9, 'the room has 8 of its 10 pads free'],
-		['no pads', TERMS, 0, 'pads must be 1 to 10'],
+		['too many pads', TERMS, 11, 'pads must be 0 to 10'],
+		['no pads in a classic room', TERMS, 0, 'a peer in a classic room needs a pad'],
 	])('refuse a peer with %s, saying why', async (_, terms, pads, reason) => {
 		const host = await join('/api/rooms/new', await invite('Gus'))
 		const guest = await join(`/api/rooms/${host.answer.code}`, await invite('Hal'), terms as Record<string, string>, pads)
 		expect(guest.answer.type).toBe('refused')
 		expect(guest.answer.reason).toContain(reason)
 		await guest.closed
+	})
+
+	it('take a watcher with no pads into a synced room whose pads are all taken', async () => {
+		const synced = { ...TERMS, mode: 'sync' }
+		const host = await join('/api/rooms/new', await invite('Ivy'), synced, 10)
+		const watcher = await join(`/api/rooms/${host.answer.code}`, await invite('Jem'), synced, 0)
+		expect(watcher.answer.type).toBe('welcome')
+		expect(await host.next()).toMatchObject({ type: 'joined', peer: { name: 'Jem', pads: 0 } })
 	})
 
 	it('take two peers in a classic room', async () => {

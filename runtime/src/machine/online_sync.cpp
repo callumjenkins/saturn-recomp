@@ -132,9 +132,11 @@ void begin(const LockstepStart& s) {
     g_ls = std::make_unique<Lockstep>(s, self);
     sat_note("sync: the game starts at VBlank %llu with %zu players, the pads %d frames behind",
              (unsigned long long)s.frame, s.members.size(), s.delay);
-    for (const LockstepMember& m : s.members)
-        sat_note("sync: %s has pads %d to %d", m.id == g_self ? "this game" : name(m.id).c_str(), m.first + 1,
-                 m.first + m.count);
+    for (const LockstepMember& m : s.members) {
+        const std::string who = m.id == g_self ? "this game" : name(m.id);
+        if (m.count) sat_note("sync: %s has pads %d to %d", who.c_str(), m.first + 1, m.first + m.count);
+        else sat_note("sync: %s watches", who.c_str());
+    }
 }
 
 void heard_control(const SessionEvent& e) {

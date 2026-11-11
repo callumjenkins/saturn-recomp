@@ -129,6 +129,25 @@ TEST(lockstep_the_start_message_reads_back) {
     CHECK_EQ(lockstep_read_start(past).has_value(), false);
 }
 
+// A watcher owns no slots, but each frame still waits for its message, which is how the others learn it is there.
+TEST(lockstep_a_watcher_with_no_pads_reads_back_and_plays_in_step) {
+    LockstepStart s{.frame = 100, .delay = 2, .members = {{"ann", 0, 1}, {"dee", 1, 0}}};
+    const auto read = lockstep_read_start(lockstep_start_message(s));
+    CHECK_EQ(read.has_value(), true);
+    CHECK_EQ(read->members[1].count, 0);
+    Lockstep ann(s, 0), dee(s, 1);
+    const uint16_t press = 0x0400;
+    ann.local(100, &press);
+    dee.local(100, nullptr);
+    CHECK_EQ(ann.ready(102), false);
+    ann.hear_pads(1, dee.pads_message(0));
+    dee.hear_pads(0, ann.pads_message(1));
+    CHECK_EQ(ann.ready(102), true);
+    CHECK_EQ(dee.ready(102), true);
+    CHECK_EQ(pad_at(dee, 102, 0), press);
+    CHECK_EQ(dee.owned(1), false);
+}
+
 // Bob holds Cat's pads through frame 104 and Ann through 102. Both settle on Cat's pads going idle at 105, with Ann
 // given 103 and 104 from Bob's report, since Bob may already have run them.
 TEST(lockstep_the_rest_agree_on_when_a_lost_member_goes_idle) {

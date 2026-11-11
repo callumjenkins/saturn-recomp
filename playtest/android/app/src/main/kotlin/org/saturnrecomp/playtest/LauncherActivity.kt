@@ -143,9 +143,9 @@ class LauncherActivity : Activity() {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
             column.addView(this)
         }
-        button("Join that game") {
+        for ((label, watch) in listOf("Join that game" to false, "Watch that game" to true)) button(label) {
             val code = Sessions.roomCode(gameCode.text.toString())
-            if (code == null) say("A room's code is the four letters its maker's screen shows.") else playOnline(code, synced = true)
+            if (code == null) say("A room's code is the four letters its maker's screen shows.") else playOnline(code, synced = true, watch = watch)
         }
         button("Save files…") { chooseSession() }
         button("My sessions") { openSessions() }
@@ -300,11 +300,14 @@ class LauncherActivity : Activity() {
         startActivityForResult(Intent(this, SavesActivity::class.java), SAVES)
     }
 
-    /** Plays through a playtest room, a new one or the room `code`: the game's own online call, or `synced`, one game for everyone in it. */
-    private fun playOnline(code: String?, synced: Boolean = false) {
+    /**
+     * Plays through a playtest room, a new one or the room `code`: the game's own online call, or `synced`, one game for
+     * everyone in it, which this player may only `watch`.
+     */
+    private fun playOnline(code: String?, synced: Boolean = false, watch: Boolean = false) {
         settings.put("token", token.text.toString().trim())
         if (credential().isEmpty()) return say("Playing online needs a tester: pick who's playing.")
-        play(online = if (synced) Sessions.syncArgs(info, code) else Sessions.classicArgs(info, code))
+        play(online = if (synced) Sessions.syncArgs(info, code, watch) else Sessions.classicArgs(info, code))
     }
 
     private fun play(from: File? = null, useDump: Boolean = true, branch: Sessions.Branch? = null, save: String? = null, parent: JSONObject? = null,

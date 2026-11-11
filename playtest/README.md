@@ -97,7 +97,7 @@ Any game can also be played by everyone in a room as one game, with every player
 (`runtime/src/machine/online_sync.cpp`, `--sync`). Both launchers offer it as "Online, one game with other
 testers". Whoever makes the room sees its code and who has joined on the window's card, and starts the game with
 Start. Every copy starts from power-on with the maker's saves and the same clock, and only the maker's copy writes
-them back. The game's own `tests/sync.py` checks it.
+them back. "Watch that game" joins with no pad; the game still waits for a watcher's connection as for a player's. The game's own `tests/sync.py` checks it.
 
 A classic game can also play outside the rooms, against a real Saturn on SegaRPGFan's NetBand tunnel:
 `--modem netband=wait`, `wait:CODE`, `dial:CODE` or `dial:IP` (`runtime/src/net/netband.h`). `CODE` is the

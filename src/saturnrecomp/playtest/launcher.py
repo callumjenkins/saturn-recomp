@@ -79,7 +79,9 @@ class Launcher:
         self.sync_code = tk.StringVar()
         ttk.Entry(frame, textvariable=self.sync_code, width=8).grid(column=1, row=row + 1, sticky="w")
         ttk.Button(frame, text="Join that game", command=self.join_sync_room).grid(column=2, row=row + 1, sticky="w")
-        row += 2
+        ttk.Button(frame, text="Watch that game", command=lambda: self.join_sync_room(watch=True)).grid(
+            column=2, row=row + 2, sticky="w")
+        row += 3
         self.status = ttk.Label(frame, width=52, wraplength=420)
         self.status.grid(column=0, row=row, columnspan=3, sticky="w", pady=(12, 0))
 
@@ -119,12 +121,12 @@ class Launcher:
     def make_room(self):
         self.play(session.classic_args(self.info))
 
-    def join_sync_room(self):
+    def join_sync_room(self, watch=False):
         code = session.room_code(self.sync_code.get())
         if not code:
             messagebox.showinfo("Join a game", "A room's code is the four letters its maker's window shows.")
             return
-        self.play(session.sync_args(self.info, code=code))
+        self.play(session.sync_args(self.info, code=code, watch=watch))
 
     def make_sync_room(self):
         self.play(session.sync_args(self.info))

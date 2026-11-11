@@ -101,6 +101,7 @@ class SessionsTest {
         val rest = listOf("--sync", "0", "--clock", Sessions.SYNC_CLOCK)
         assertEquals(listOf("--session", "wss://pt.example/api/rooms/new") + rest, Sessions.syncArgs(info, null))
         assertEquals(listOf("--session", "wss://pt.example/api/rooms/BCDK") + rest, Sessions.syncArgs(info, "BCDK"))
+        assertEquals(listOf("--session", "wss://pt.example/api/rooms/BCDK") + rest + listOf("--sync-pads", "0"), Sessions.syncArgs(info, "BCDK", watch = true))
     }
 
     @Test

@@ -81,7 +81,7 @@ std::optional<LockstepStart> lockstep_read_start(const std::vector<uint8_t>& m) 
         r.pos += length;
         member.first = r.u8();
         member.count = r.u8();
-        if (member.count < 1 || member.first + member.count > kLockstepSlots) return std::nullopt;
+        if (member.first + member.count > kLockstepSlots) return std::nullopt;
         s.members.push_back(std::move(member));
     }
     if (!r.done() || s.members.empty() || s.delay < 1) return std::nullopt;

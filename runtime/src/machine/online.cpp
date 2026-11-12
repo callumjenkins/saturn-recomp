@@ -12,8 +12,10 @@
 #include "online_room.h"
 #include "saturn_build_id.h"
 #include "session.h"
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <deque>
 #include <fstream>
 #include <memory>
 #include <optional>
@@ -29,6 +31,7 @@ OnlineRoom g_room;
 FILE* g_line_out;
 std::vector<LineHeard> g_line_in;
 size_t g_line_in_pos;
+std::deque<std::pair<std::chrono::steady_clock::time_point, SessionEvent>> g_lagging;   // --session-lag
 
 std::string env(const char* name) {
     const char* v = std::getenv(name);
@@ -218,7 +221,12 @@ void online_poll() {
         g_session->sever();
         g_cfg.session_sever_at = 0;
     }
-    for (const SessionEvent& e : g_session->poll()) {
+    const auto now = std::chrono::steady_clock::now();
+    const auto due = now + std::chrono::milliseconds(g_cfg.session_lag);
+    for (SessionEvent& e : g_session->poll()) g_lagging.emplace_back(due, std::move(e));
+    while (!g_lagging.empty() && g_lagging.front().first <= now) {
+        const SessionEvent e = std::move(g_lagging.front().second);
+        g_lagging.pop_front();
         hear(e);
         note(e);
         online_sync_hear(e);
@@ -228,6 +236,7 @@ void online_poll() {
 }
 
 void online_finish() {
+    online_sync_finish();
     if (g_line_out) std::fclose(g_line_out);
     g_line_out = nullptr;
     g_line = nullptr;

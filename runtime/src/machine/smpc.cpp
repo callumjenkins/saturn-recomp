@@ -195,7 +195,7 @@ static void sample_host() {
     }
 }
 
-// The script's steps due by now. A --sync game records the room's pads instead (sync_pad).
+// The script's steps due by now. A --sync game records the room's pads instead (smpc_record_sync).
 static void advance_script() {
     while (g_script_pos < g_script.size() && g_script[g_script_pos].vblank <= sat_vblanks() &&
            !(g_cfg.resume && g_script[g_script_pos].vblank >= g_cfg.resume)) {
@@ -222,22 +222,25 @@ void smpc_local_pads(uint16_t* out, int count) {
         out[q] = g_script_pressed[q] | (host_drives() && q < kHostSlots ? host_pad(q) : 0);
 }
 
-// A --sync game's pads, the room's, taken and recorded once a VBlank as the host's are. Every pad a player owns is
-// recorded at the first VBlank, so a replay of the file has the same pads plugged in.
+// A --sync game's pads, the room's, taken once a VBlank as the host's are.
 static uint16_t g_sync_pressed[kPads];
 static uint64_t g_sync_vblank = ~0ull;
 
 static uint16_t sync_pad(int p) {
     if (g_sync_vblank != sat_vblanks()) {
-        const bool first = g_sync_vblank == ~0ull;
         g_sync_vblank = sat_vblanks();
-        for (int q = 0; q < kPads; ++q) {
-            const uint16_t h = online_sync_pad(q);
-            if (h != g_sync_pressed[q] || (first && online_sync_plugged(q))) record_host(g_sync_vblank, q, h);
-            g_sync_pressed[q] = h;
-        }
+        for (int q = 0; q < kPads; ++q) g_sync_pressed[q] = online_sync_pad(q);
     }
     return g_sync_pressed[p];
+}
+
+// Every pad a player owns is recorded at the first frame, so a replay of the file has the same pads plugged in.
+void smpc_record_sync(uint64_t vblank, const uint16_t* pads) {
+    static uint16_t recorded[kPads];
+    static bool first = true;
+    for (int q = 0; q < kPads; ++q)
+        if (pads[q] != recorded[q] || (first && online_sync_plugged(q))) record_host(vblank, q, recorded[q] = pads[q]);
+    first = false;
 }
 
 // pad p now, active low: byte 1 RIGHT LEFT DOWN UP START A C B, byte 2 R X Y Z L 1 1 1

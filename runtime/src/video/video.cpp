@@ -74,27 +74,29 @@ static void vblank_in(uint64_t now) {
     ++g_vblanks;
     std::string n = std::to_string(g_vblanks);
     if (listed(g_cfg.dump, n)) dump("", g_vblanks);
+    // A frame running again after a wrong guess was shown the first time, so only a shot of it is made again.
+    const bool again = online_sync_again();
     bool shot = listed(g_cfg.shots, n);
-    bool compose = shot || host_wants_frame() || movie_on();
+    bool show = !again && (host_wants_frame() || movie_on());
+    bool compose = shot || show;
     if (vdp1_interp_field(compose) && compose) {
         uint8_t saved[0x30];
         std::copy(g_vdp2_regs + 0x70, g_vdp2_regs + 0xA0, saved);
         vdp1_interp_scroll(g_vdp2_regs + 0x70);
         vdp2_compose(g_frame);
         std::copy(saved, saved + 0x30, g_vdp2_regs + 0x70);
-        if (shot) write_png(g_cfg.out + "/shot-" + n + ".png", g_frame);
-        movie_frame(g_frame);
-        host_present(g_frame);
     } else if (compose) {
         vdp2_compose(g_frame);
-        if (shot) write_png(g_cfg.out + "/shot-" + n + ".png", g_frame);
+    }
+    if (shot) write_png(g_cfg.out + "/shot-" + n + ".png", g_frame);
+    if (show) {
         movie_frame(g_frame);
         host_present(g_frame);
     }
     scu_raise(IRQ_VBLANK_IN);
     scu_frame_event(0);
     online_sync_vblank([] { host_present(g_frame); });
-    host_pace(now);
+    if (!again) host_pace(now);
 }
 
 uint64_t video_next_blanking_line(uint64_t now) {

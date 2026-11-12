@@ -11,11 +11,15 @@
 // the order they load (the VBlank count before the pads, which go on from it),
 // so a part this build reads differently is refused rather than read wrong. A dump is written from a
 // copy on a thread of its own, beside the file and renamed over it.
+//
+// A synced game with rollback keeps a dump in memory at each frame's first safe moment, and goes back to one at the
+// next safe moment after it is asked to.
 #include "saturn.h"
 #include "state.h"
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <deque>
 #include <filesystem>
 #include <map>
 #include <thread>
@@ -66,6 +70,18 @@ static const char* g_stop_why;                  // the run stops once this dump 
 static uint64_t g_stop_by;                      // ... or at this VBlank without one
 static uint64_t g_keep_at = ~0ull, g_rewind_at = ~0ull;   // --rewind FROM:AT
 static std::vector<uint8_t> g_kept;
+static const std::vector<uint8_t>* g_going_back;           // what state_rewind loads
+
+// --sync's rollback
+struct KeptFrame {
+    StateKept at;
+    std::vector<uint8_t> bytes;
+};
+static const size_t kFramesKeptAtMost = 32;
+static bool g_keeping;
+static std::deque<KeptFrame> g_frames;                     // oldest first
+static std::vector<std::vector<uint8_t>> g_spare;          // forgotten frames' buffers, for the next to reuse
+static uint64_t g_back_to = ~0ull;                         // the kept frame state_go_back asked for
 
 static void put(std::vector<uint8_t>& out, const void* p, size_t n) {
     auto* b = static_cast<const uint8_t*>(p);
@@ -116,8 +132,8 @@ void state_stop(const char* why) {
     g_wanted = true;
 }
 
-static std::vector<uint8_t> dump() {
-    std::vector<uint8_t> out;
+static void dump(std::vector<uint8_t>& out) {
+    out.clear();
     put(out, kMagic, sizeof kMagic);
     put(out, &kVersion, sizeof kVersion);
     for (auto& p : kParts) {
@@ -130,16 +146,65 @@ static std::vector<uint8_t> dump() {
         put(out, &size, sizeof size);
         put(out, s.data.data(), s.data.size());
     }
-    return out;
 }
+
+static void forget_oldest() {
+    g_spare.push_back(std::move(g_frames.front().bytes));
+    g_frames.pop_front();
+}
+
+static void keep_frame() {
+    KeptFrame k{.at = {sat_vblanks(), sound_samples()}};
+    if (!g_spare.empty()) {
+        k.bytes = std::move(g_spare.back());
+        g_spare.pop_back();
+    }
+    dump(k.bytes);
+    g_frames.push_back(std::move(k));
+    if (g_frames.size() > kFramesKeptAtMost) forget_oldest();
+}
+
+// The frame state_go_back asked for, and the frames after it gone, as the run goes on from it.
+static void go_back() {
+    while (!g_frames.empty() && g_frames.back().at.vblank > g_back_to) {
+        g_spare.push_back(std::move(g_frames.back().bytes));
+        g_frames.pop_back();
+    }
+    if (g_frames.empty() || g_frames.back().at.vblank != g_back_to)
+        sat_fatal("state: no frame kept at VBlank %llu", (unsigned long long)g_back_to);
+    g_back_to = ~0ull;
+    g_going_back = &g_frames.back().bytes;
+    throw StateRewind{};
+}
+
+void state_keep_frames(bool on) {
+    g_keeping = on;
+    if (on) return;
+    g_frames.clear();
+    g_spare.clear();
+    g_back_to = ~0ull;
+}
+
+std::optional<StateKept> state_kept_before(uint64_t vblank) {
+    for (auto it = g_frames.rbegin(); it != g_frames.rend(); ++it)
+        if (it->at.vblank < vblank) return it->at;
+    return std::nullopt;
+}
+
+void state_forget_before(uint64_t vblank) {
+    while (g_frames.size() >= 2 && g_frames[1].at.vblank < vblank) forget_oldest();
+}
+
+void state_go_back(uint64_t vblank) { g_back_to = std::min(g_back_to, vblank); }
 
 // What a --rewind does at a safe moment: keeps the machine, or throws to go back to it.
 static void rewind_point() {
     if (g_kept.empty() && sat_vblanks() >= g_keep_at) {
-        g_kept = dump();
+        dump(g_kept);
         sat_note("state: VBlank %llu kept to go back to", (unsigned long long)sat_vblanks());
     } else if (!g_kept.empty() && sat_vblanks() >= g_rewind_at) {
         g_rewind_at = ~0ull;
+        g_going_back = &g_kept;
         throw StateRewind{};
     }
 }
@@ -147,10 +212,13 @@ static void rewind_point() {
 void state_point(SH2Context& c) {
     if (c.cpu != 0 || sat_in_interrupt() || state_slave_busy()) return;
     rewind_point();
+    if (g_back_to != ~0ull) go_back();
+    if (g_keeping && (g_frames.empty() || g_frames.back().at.vblank < sat_vblanks())) keep_frame();
     if (!g_wanted || g_writing) return;
     g_wanted = false;
     g_at_vblank = ~0ull;
-    std::vector<uint8_t> out = dump();
+    std::vector<uint8_t> out;
+    dump(out);
     if (g_writer.joinable()) g_writer.join();
     g_writing = true;
     g_writer = std::thread(write_file, std::move(out), g_cfg.state_out, sat_vblanks());
@@ -210,7 +278,8 @@ void state_load(const std::string& path) {
 
 void state_rewind() {
     uint64_t from = sat_vblanks();
-    load(g_kept);
-    sat_note("state: VBlank %llu back to %llu, going on at %08X", (unsigned long long)from,
-             (unsigned long long)sat_vblanks(), g_master.pc);
+    load(*g_going_back);
+    if (g_going_back == &g_kept)
+        sat_note("state: VBlank %llu back to %llu, going on at %08X", (unsigned long long)from,
+                 (unsigned long long)sat_vblanks(), g_master.pc);
 }

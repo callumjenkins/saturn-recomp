@@ -90,8 +90,8 @@ TEST(lockstep_an_acknowledged_frame_is_not_sent_again) {
     room.peers[0].hear_pads(1, room.peers[1].pads_message(0));   // Bob's message acknowledges Ann's frame 102
     room.press(101, 0, 0x20);
     const std::vector<uint8_t> m = room.peers[0].pads_message(1);
-    CHECK_EQ(m[5] | m[6] << 8, 103);   // the first frame it holds
-    CHECK_EQ(m[9], 1);                 // and only that one
+    CHECK_EQ(m[11] | m[12] << 8, 103);   // the first frame it holds
+    CHECK_EQ(m[15], 1);                  // and only that one
 }
 
 TEST(lockstep_a_message_from_after_a_gap_waits_for_the_gap) {
@@ -99,7 +99,7 @@ TEST(lockstep_a_message_from_after_a_gap_waits_for_the_gap) {
     room.press(100, 0, 0x10);
     room.press(101, 0, 0x20);
     std::vector<uint8_t> late = room.peers[0].pads_message(1);
-    late[5] = 103;   // claims to start at 103, past the 102 Bob lacks
+    late[11] = 103;   // claims to start at 103, past the 102 Bob lacks
     room.peers[1].hear_pads(0, late);
     CHECK_EQ(room.peers[1].ready(102), false);
 }
@@ -220,6 +220,95 @@ TEST(lockstep_the_delay_covers_half_the_round_trip_with_a_frame_to_spare) {
     CHECK_EQ(lockstep_delay_for(60'000'000), 4);
     CHECK_EQ(lockstep_delay_for(120'000'000), 6);
     CHECK_EQ(lockstep_delay_for(2'000'000'000), 8);
+}
+
+TEST(lockstep_with_rollback_the_delay_is_half_and_at_least_one) {
+    CHECK_EQ(lockstep_delay_for(0, true), 1);
+    CHECK_EQ(lockstep_delay_for(120'000'000, true), 3);
+    CHECK_EQ(lockstep_delay_for(2'000'000'000, true), 4);
+}
+
+TEST(lockstep_the_start_message_carries_how_far_ahead_a_member_may_run) {
+    LockstepStart s = start();
+    s.delay = 0;
+    s.ahead = 8;
+    const auto read = lockstep_read_start(lockstep_start_message(s));
+    CHECK_EQ(read.has_value(), true);
+    CHECK_EQ(read->ahead, 8);
+    CHECK_EQ(read->delay, 0);
+    s.ahead = 0;
+    CHECK_EQ(lockstep_read_start(lockstep_start_message(s)).has_value(), false);
+}
+
+// Bob's pads have come through 102; a frame after that runs with his 102.
+TEST(lockstep_a_missing_pad_is_guessed_as_its_members_last) {
+    Room room(2);
+    room.press(100, 1, 0x0800);
+    room.exchange({1});
+    room.press(101, 0, 0x0400);
+    room.press(102, 0, 0x0400);
+    CHECK_EQ(room.peers[0].ready(104), false);
+    CHECK_EQ(room.peers[0].confirmed(), 103);
+    CHECK_EQ(pad_at(room.peers[0], 104, 0), 0x0400);
+    CHECK_EQ(pad_at(room.peers[0], 104, 1), 0x0800);
+}
+
+// What Ann runs 103 to 105 with, guessing Bob held his 102 press.
+struct Guessed {
+    Room room{2};
+    Guessed() {
+        room.press(100, 1, 0x0800);
+        room.exchange({1});
+        for (uint64_t f = 101; f < 104; ++f) room.press(f, 0, 0);
+        for (uint64_t f = 103; f < 106; ++f) {
+            uint16_t pads[kLockstepSlots];
+            room.peers[0].pads(f, pads);
+            room.peers[0].ran(f, pads);
+        }
+    }
+};
+
+TEST(lockstep_a_guess_that_came_true_is_never_wrong) {
+    Guessed g;
+    for (uint64_t f = 101; f < 104; ++f) g.room.press(f, 1, 0x0800);
+    g.room.exchange({1});
+    CHECK_EQ(g.room.peers[0].first_wrong().has_value(), false);
+}
+
+TEST(lockstep_a_wrong_guess_names_the_first_frame_it_was_for) {
+    Guessed g;
+    g.room.press(101, 1, 0x0800);
+    g.room.press(102, 1, 0);
+    g.room.exchange({1});
+    CHECK_EQ(g.room.peers[0].first_wrong().value_or(0), 104);
+}
+
+// Once 103 runs again, 104 and 105 have not run, so their guesses are no longer the machine's.
+TEST(lockstep_a_frame_run_again_takes_the_frames_after_it_with_it) {
+    Guessed g;
+    g.room.press(101, 1, 0);
+    g.room.exchange({1});
+    uint16_t pads[kLockstepSlots];
+    g.room.peers[0].pads(103, pads);
+    g.room.peers[0].ran(103, pads);
+    CHECK_EQ(g.room.peers[0].first_wrong().has_value(), false);
+}
+
+// Each tick both run a frame, Ann four ahead of Bob, and each hears the other's message from three ticks before.
+TEST(lockstep_the_member_ahead_finds_by_how_much_though_messages_take_time) {
+    Room room(2);
+    std::vector<std::pair<std::vector<uint8_t>, std::vector<uint8_t>>> sent;
+    for (uint64_t t = 0; t < 20; ++t) {
+        if (t >= 3) {
+            room.peers[1].hear_pads(0, sent[t - 3].first);
+            room.peers[0].hear_pads(1, sent[t - 3].second);
+        }
+        room.press(104 + t, 0, 0);
+        room.press(100 + t, 1, 0);
+        sent.emplace_back(room.peers[0].pads_message(1), room.peers[1].pads_message(0));
+    }
+    CHECK_EQ(room.peers[0].lead(), 4);
+    CHECK_EQ(room.peers[1].lead(), 0);
 }
 
 TEST(lockstep_forgotten_frames_leave_the_present_alone) {

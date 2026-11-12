@@ -56,6 +56,7 @@ std::vector<uint8_t> lockstep_start_message(const LockstepStart& s) {
     Writer w((uint8_t)LockstepKind::Start);
     w.u32(s.frame);
     w.u8(s.delay);
+    w.u8(s.ahead);
     w.u8((int)s.members.size());
     for (const LockstepMember& m : s.members) {
         w.u8((int)m.id.size());
@@ -72,6 +73,7 @@ std::optional<LockstepStart> lockstep_read_start(const std::vector<uint8_t>& m) 
     LockstepStart s;
     s.frame = r.u32();
     s.delay = r.u8();
+    s.ahead = r.u8();
     const int n = r.u8();
     for (int i = 0; i < n && r.ok; ++i) {
         LockstepMember member;
@@ -84,7 +86,7 @@ std::optional<LockstepStart> lockstep_read_start(const std::vector<uint8_t>& m) 
         if (member.first + member.count > kLockstepSlots) return std::nullopt;
         s.members.push_back(std::move(member));
     }
-    if (!r.done() || s.members.empty() || s.delay < 1) return std::nullopt;
+    if (!r.done() || s.members.empty() || s.delay < (s.ahead ? 0 : 1)) return std::nullopt;
     return s;
 }
 
@@ -101,10 +103,11 @@ std::optional<uint64_t> lockstep_read_time(const std::vector<uint8_t>& m) {
     return ns;
 }
 
-int lockstep_delay_for(uint64_t rtt_ns) {
+int lockstep_delay_for(uint64_t rtt_ns, bool rollback) {
     const uint64_t frame_ns = 1'000'000'000 / 60, margin_ns = 8'000'000;
     const uint64_t frames = (rtt_ns / 2 + margin_ns + frame_ns - 1) / frame_ns + 1;
-    return (int)std::clamp<uint64_t>(frames, 2, 8);
+    const int delay = (int)std::clamp<uint64_t>(frames, 2, 8);
+    return rollback ? (delay + 1) / 2 : delay;
 }
 
 uint64_t lockstep_hash(const uint8_t* p, size_t n, uint64_t seed) {
@@ -122,7 +125,7 @@ uint64_t lockstep_hash(const uint8_t* p, size_t n, uint64_t seed) {
 
 Lockstep::Lockstep(const LockstepStart& start, int self)
     : members_(start.members), members_state_(start.members.size()), self_(self), delay_(start.delay),
-      start_(start.frame) {
+      ahead_(start.ahead), start_(start.frame), now_(start.frame) {
     for (size_t i = 0; i < members_.size(); ++i) {
         Member& m = members_state_[i];
         m.base = start_;
@@ -138,6 +141,7 @@ int Lockstep::member_of(const std::string& id) const {
 }
 
 void Lockstep::local(uint64_t frame, const uint16_t* pads) {
+    now_ = std::max(now_, frame);
     const uint64_t at = frame + delay_;
     if (at < through(self_)) return;
     std::vector<uint16_t> now(pads, pads + members_[self_].count);
@@ -149,8 +153,12 @@ std::vector<uint8_t> Lockstep::pads_message(int member) const {
     const Member& own = members_state_[self_];
     const uint64_t from = std::max(members_state_[member].acked, own.base);
     const uint64_t to = std::min(through(self_), from + kMaxSent);
+    const Member& them = members_state_[member];
+    const int64_t gap = them.heard ? (int64_t)them.at - (int64_t)now_ : 0;
     Writer w(kPads);
     w.u32(through(member));
+    w.u32(now_);
+    w.u16((uint16_t)(int16_t)std::clamp<int64_t>(gap, INT16_MIN, INT16_MAX));
     w.u32(from);
     w.u8((int)(to - from));
     w.u8(members_[self_].count);
@@ -162,7 +170,9 @@ std::vector<uint8_t> Lockstep::pads_message(int member) const {
 bool Lockstep::hear_pads(int member, const std::vector<uint8_t>& m) {
     if (!kind_is(m, kPads) || member == self_) return false;
     Reader r(m);
-    const uint64_t ack = r.u32(), first = r.u32();
+    const uint64_t ack = r.u32(), at = r.u32();
+    const int gap = (int16_t)r.u16();
+    const uint64_t first = r.u32();
     const size_t n = r.u8();
     const int count = r.u8();
     if (!r.ok || count != members_[member].count) return false;
@@ -170,6 +180,11 @@ bool Lockstep::hear_pads(int member, const std::vector<uint8_t>& m) {
     if (!r.done()) return false;
     Member& them = members_state_[member];
     them.acked = std::max(them.acked, ack);
+    if (!them.heard || at >= them.at) {
+        them.heard = true;
+        them.at = at;
+        them.gap = gap;
+    }
     // Once its loss is reported, what this peer holds of it must stay what the report said.
     if (them.leaving || them.gone_from) return true;
     for (size_t i = 0; i < frames.size(); ++i) {
@@ -181,7 +196,14 @@ bool Lockstep::hear_pads(int member, const std::vector<uint8_t>& m) {
     return true;
 }
 
-bool Lockstep::ready(uint64_t frame) const { return waiting_on(frame).empty(); }
+bool Lockstep::ready(uint64_t frame) const { return frame < confirmed(); }
+
+uint64_t Lockstep::confirmed() const {
+    uint64_t first = UINT64_MAX;
+    for (size_t i = 0; i < members_.size(); ++i)
+        if (!members_state_[i].gone_from) first = std::min(first, through((int)i));
+    return first;
+}
 
 std::vector<int> Lockstep::waiting_on(uint64_t frame) const {
     std::vector<int> out;
@@ -198,8 +220,9 @@ void Lockstep::pads(uint64_t frame, uint16_t out[kLockstepSlots]) const {
     for (size_t i = 0; i < members_.size(); ++i) {
         const Member& m = members_state_[i];
         if (m.gone_from && frame >= *m.gone_from) continue;
-        if (const std::vector<uint16_t>* in = input((int)i, frame))
-            std::copy(in->begin(), in->end(), out + members_[i].first);
+        const std::vector<uint16_t>* in = input((int)i, frame);
+        if (!in && frame >= through((int)i) && !m.inputs.empty()) in = &m.inputs.back();
+        if (in) std::copy(in->begin(), in->end(), out + members_[i].first);
     }
 }
 
@@ -289,6 +312,44 @@ void Lockstep::hear_hash(int from, const std::vector<uint8_t>& m) {
         }
     heard_hashes_.push_back({from, {frame, hash}});
     if (heard_hashes_.size() > kHashesKept * members_.size()) heard_hashes_.erase(heard_hashes_.begin());
+}
+
+void Lockstep::ran(uint64_t frame, const uint16_t pads[kLockstepSlots]) {
+    if (ran_.empty() || frame < ran_base_ || frame > ran_base_ + ran_.size()) {
+        ran_.clear();
+        ran_base_ = frame;
+    }
+    ran_.resize(frame - ran_base_);
+    ran_.emplace_back();
+    std::copy(pads, pads + kLockstepSlots, ran_.back().begin());
+}
+
+std::optional<uint64_t> Lockstep::first_wrong() {
+    std::optional<uint64_t> wrong;
+    for (size_t i = 0; i < ran_.size() && !wrong; ++i) {
+        uint16_t now[kLockstepSlots];
+        pads(ran_base_ + i, now);
+        if (!std::equal(now, now + kLockstepSlots, ran_[i].begin())) wrong = ran_base_ + i;
+    }
+    const uint64_t right_before = std::min(confirmed(), wrong.value_or(UINT64_MAX));
+    while (ran_.size() > 1 && ran_base_ < right_before) {
+        ran_.pop_front();
+        ++ran_base_;
+    }
+    return wrong;
+}
+
+int Lockstep::lead() const {
+    int lead = 0;
+    for (size_t i = 0; i < members_.size(); ++i) {
+        const Member& m = members_state_[i];
+        if ((int)i == self_ || !m.heard || m.gone_from) continue;
+        // It said this peer was `gap` frames ahead of it, and this peer finds it `mine` frames ahead of this one. The
+        // time the messages took is in both and cancels out of the difference.
+        const int64_t mine = (int64_t)m.at - (int64_t)now_;
+        lead = std::max(lead, (int)((m.gap - mine) / 2));
+    }
+    return lead;
 }
 
 void Lockstep::forget_before(uint64_t frame) {

@@ -29,6 +29,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -74,7 +75,9 @@ struct SaturnConfig {
     int sync = -1;                  // the room's peers play one game, their pads in lockstep (online_sync.cpp); the room's
                                     // creator starts it once this many players are in; -1: no
     int sync_pads = 1;              // ... the players on this machine
-    int sync_delay = 0;             // ... frames between a press and the VBlank it applies at; 0: from the round trip
+    int sync_delay = -1;            // ... frames between a press and the VBlank it applies at; -1: from the round trip
+    int sync_ahead = 8;             // ... frames a peer may run on guesses before every peer's pads are in; 0: none
+    int session_lag = 0;            // for tests: milliseconds every event from the room is held for
     uint64_t session_sever_at = 0;  // for tests: the VBlank the session's network goes, as a phone's does; 0: never
     std::string steer;              // presses over the controllers' from power-on, as --input's: the way to the game's call
     std::string line_in;            // a classic match's OUT/line.txt, which --modem session's line hears again
@@ -131,8 +134,16 @@ void state_point(SH2Context& c);    // a safe moment: c's registers and PC are a
 void state_stop(const char* why);   // the run stops at the next dump, or soon without one
 void state_finish();                // the last dump written
 void state_load(const std::string& path);   // after the boot: the machine as the dump has it
-struct StateRewind {};              // thrown at a safe moment, for the master's loop to load the machine kept for --rewind
+struct StateRewind {};              // thrown at a safe moment, for the master's loop to load a machine kept
 void state_rewind();                // on the master's own stack: the machine as it was kept
+// --sync's rollback: the machine kept at each frame's first safe moment, `samples` the sound made by then.
+struct StateKept {
+    uint64_t vblank = 0, samples = 0;
+};
+void state_keep_frames(bool on);            // off: the frames kept are forgotten, and a go back with them
+std::optional<StateKept> state_kept_before(uint64_t vblank);   // the latest frame kept before `vblank`
+void state_forget_before(uint64_t vblank);   // all but the latest frame kept before `vblank` and the frames after
+void state_go_back(uint64_t vblank);         // to the frame kept at `vblank`, at the next safe moment
 
 // ---- --session (online.cpp) ---------------------------------------------------------------
 void online_poll();                 // from the master's polls: the room joined once IP.BIN is in, or --line-in played
@@ -158,6 +169,9 @@ void online_sync_vblank(const std::function<void()>& idle);
 bool online_sync_playing();         // the game has started: the pads are the room's
 uint16_t online_sync_pad(int slot);
 bool online_sync_plugged(int slot); // a player in the game owns the slot
+bool online_sync_again();           // the frame is running again, after a wrong guess
+void online_sync_went_back(uint64_t from);   // the machine went back to a kept frame from VBlank `from`
+void online_sync_finish();
 OnlineCard online_sync_card();
 void online_sync_start();           // the room's creator chose to start with the players in
 int  sh2_active_slots();            // the modules active now (core.cpp)
@@ -217,6 +231,7 @@ struct PadStep { uint64_t vblank; int pad; uint16_t pressed; };   // from VBlank
 std::vector<PadStep> smpc_parse_script(const std::string& spec);  // an --input script or "@FILE", in VBlank order
 void smpc_steer(const std::vector<PadStep>& steps, uint64_t from);  // `steps` from VBlank `from`, over the controllers'
 void smpc_local_pads(uint16_t* out, int count);   // this machine's first `count` players' pads now, script and controllers
+void smpc_record_sync(uint64_t vblank, const uint16_t* pads);   // a --sync frame's pads, every slot, once confirmed
 bool smpc_press(const std::string& spec, std::string& error);   // "[N.]BUTTON+BUTTON" from this VBlank on
 void smpc_set_area(char symbol);                   // the disc's first area symbol (J T U B K A E L)
 
@@ -284,5 +299,8 @@ void sound_init();
 void sound_power(bool on);            // SMPC SNDON/SNDOFF: the 68000 runs or is held
 void sound_tick();                    // the samples due by now, the 68000 between them
 void sound_close();                   // the report line, the WAV file finished
+uint64_t sound_samples();             // made since power-on
+void sound_hold(bool on);             // samples wait for sound_release to play (--sync's rollback); off: all play
+void sound_release(uint64_t before);  // the held samples before this one play
 uint32_t sound_read(uint32_t a, int size);    // 0x05A00000-0x05B00FFF from the SH-2
 void sound_write(uint32_t a, uint32_t v, int size);

@@ -258,7 +258,7 @@ static void parse_keep(const std::string& spec) {
 static void progress_due() {
     static uint64_t vblank = ~0ull;
     static std::vector<uint8_t> first;
-    if (g_cfg.progress.empty() || g_keep.empty() || sat_vblanks() == vblank) return;
+    if (g_cfg.progress.empty() || g_keep.empty() || sat_vblanks() == vblank || online_sync_again()) return;
     vblank = sat_vblanks();
     std::vector<uint8_t> now(g_keep[0].n);
     for (uint32_t k = 0; k < now.size(); ++k) now[k] = (uint8_t)ld8(g_keep[0].addr + k);
@@ -701,9 +701,11 @@ int saturn_main(const SaturnConfig& cfg) {
         } catch (TaskUnwind& u) {
             entry = u.pc;
         } catch (StateRewind&) {
+            const uint64_t from = sat_vblanks();
             tasks_reset();
             state_rewind();
             writes_skip_past();
+            online_sync_went_back(from);
             entry = g_master.pc;
             tasks = true;
         } catch (ProgramStart& s) {

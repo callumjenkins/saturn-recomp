@@ -3,6 +3,11 @@
 // connected, then starts the game for all of them with each peer's slots and the input delay. Each VBlank, a peer
 // sends its own pads and waits for everyone's. Every second the peers compare hashes of work RAM, so a machine that
 // falls out of step is reported. Everyone plays with the creator's saves, which only the creator's game writes back.
+//
+// With rollback, a frame runs before every peer's pads for it are here, on guesses, and the machine is kept at each
+// frame's first safe moment. When a guess turns out wrong, the machine goes back to the latest frame kept before it
+// and runs on to where it was, drawing nothing and waiting for nothing. Only confirmed frames count: their pads are
+// recorded, their RAM is hashed, and their sound plays.
 #include "saturn.h"
 #include "host.h"
 #include "lockstep.h"
@@ -14,6 +19,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <set>
 #include <thread>
 
 namespace {
@@ -27,6 +33,7 @@ const auto kPingEvery = std::chrono::milliseconds(200);
 const size_t kPingsNeeded = 5;
 const uint64_t kHashEvery = 60;
 const uint64_t kFramesKept = 128;
+const auto kSlowedBy = std::chrono::milliseconds(1);   // a frame, while this peer is ahead of another
 
 struct Peer {
     std::string name;
@@ -45,6 +52,11 @@ bool g_start_asked;
 bool g_saves_in;                      // a joiner's backup memory is the creator's
 uint16_t g_pads[kLockstepSlots];
 Clock::time_point g_pinged;
+uint64_t g_again_to;                  // the frames before this one are running again
+uint64_t g_recorded_to;               // the frames before this one are recorded
+std::map<uint64_t, uint64_t> g_hashes;   // frame, its hash, from the latest time it ran
+uint64_t g_went_back, g_ran_again, g_most_again;
+std::set<int> g_noted_lost;
 
 uint64_t now_ns() { return (uint64_t)Clock::now().time_since_epoch().count(); }
 
@@ -64,6 +76,10 @@ void end(const std::string& why) {
     if (!g_ended.empty()) return;
     g_ended = why;
     sat_note("sync: %s", why.c_str());
+    if (g_ls && g_ls->ahead()) {
+        state_keep_frames(false);
+        sound_hold(false);
+    }
 }
 
 std::string name(const std::string& peer) {
@@ -71,11 +87,11 @@ std::string name(const std::string& peer) {
     return it == g_peers.end() || it->second.name.empty() ? peer : it->second.name;
 }
 
+// Noted once, however the loss is first heard: from the room or another member's report.
 void lose(int member, const char* how) {
     std::vector<uint8_t> report = g_ls->lose(member);
-    if (report.empty()) return;
-    sat_note("sync: %s %s", name(g_ls->members()[member].id).c_str(), how);
-    to_members(Channel::Control, report);
+    if (g_noted_lost.insert(member).second) sat_note("sync: %s %s", name(g_ls->members()[member].id).c_str(), how);
+    if (!report.empty()) to_members(Channel::Control, report);
 }
 
 uint64_t median(std::vector<uint64_t> v) {
@@ -99,7 +115,7 @@ std::optional<LockstepStart> ready_to_start() {
     const int ready = (int)open.size() + 1;
     const bool asked = g_start_asked || (g_cfg.sync >= 2 && ready >= g_cfg.sync);
     if (ready < 2 || !asked || ready < players_in()) return std::nullopt;
-    LockstepStart s{.frame = sat_vblanks(), .delay = g_cfg.sync_delay};
+    LockstepStart s{.frame = sat_vblanks(), .delay = g_cfg.sync_delay, .ahead = g_cfg.sync_ahead};
     uint64_t rtt = 0;
     int slot = 0;
     s.members.push_back({g_self, slot, g_cfg.sync_pads});
@@ -110,7 +126,7 @@ std::optional<LockstepStart> ready_to_start() {
         slot += g_peers[id].pads;
         rtt = std::max(rtt, median(g_peers[id].rtts));
     }
-    if (!s.delay) s.delay = lockstep_delay_for(rtt);
+    if (s.delay < 0) s.delay = lockstep_delay_for(rtt, s.ahead > 0);
     return s;
 }
 
@@ -130,8 +146,13 @@ void begin(const LockstepStart& s) {
     if (self < 0) return end("the game started without this player");
     if (s.frame != sat_vblanks()) return end("the game started at another VBlank");
     g_ls = std::make_unique<Lockstep>(s, self);
-    sat_note("sync: the game starts at VBlank %llu with %zu players, the pads %d frames behind",
-             (unsigned long long)s.frame, s.members.size(), s.delay);
+    g_recorded_to = s.frame;
+    sat_note("sync: the game starts at VBlank %llu with %zu players, the pads %d frames behind, guessed up to %d ahead",
+             (unsigned long long)s.frame, s.members.size(), s.delay, s.ahead);
+    if (s.ahead) {
+        state_keep_frames(true);
+        sound_hold(true);
+    }
     for (const LockstepMember& m : s.members) {
         const std::string who = m.id == g_self ? "this game" : name(m.id);
         if (m.count) sat_note("sync: %s has pads %d to %d", who.c_str(), m.first + 1, m.first + m.count);
@@ -212,6 +233,54 @@ void send_pads() {
         if (i != g_ls->self() && !g_ls->gone(i)) send(g_ls->members()[i].id, Channel::Pads, g_ls->pads_message(i));
 }
 
+// The frame may run on guesses: a frame kept before the first unconfirmed one is near enough to go back to, the
+// frame is not too far past it, and it is not the last before a stop, so the run ends on confirmed frames.
+bool may_guess(uint64_t frame) {
+    const uint64_t confirmed = g_ls->confirmed();
+    const std::optional<StateKept> kept = state_kept_before(confirmed);
+    const bool last = g_cfg.stop_vblanks && frame + 1 >= g_cfg.stop_vblanks;
+    return g_ls->ahead() && kept && confirmed - kept->vblank <= (uint64_t)g_ls->ahead() &&
+           frame < confirmed + g_ls->ahead() && !last;
+}
+
+// Waits until `frame` may run, sending this peer's pads again while it does, and gives up on a member silent for
+// 15 seconds.
+void wait_to_run(uint64_t frame, const std::function<void()>& idle) {
+    const auto began = Clock::now();
+    auto sent = began;
+    wait(idle, [&] {
+        if (g_ls->ready(frame) || may_guess(frame)) return true;
+        const auto waited = Clock::now() - began;
+        const std::vector<int> missing = g_ls->waiting_on(frame);
+        g_waiting_for = waited >= kWaitShown && !missing.empty() ? name(g_ls->members()[missing[0]].id) : "";
+        if (waited >= kLostAfter)
+            for (int m : missing) lose(m, "sent no pads for 15 seconds");
+        if (Clock::now() - sent >= kResend) {
+            send_pads();
+            sent = Clock::now();
+        }
+        return false;
+    });
+    g_waiting_for.clear();
+    host_pace_hold((uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - began).count());
+}
+
+// What can no longer change, the frames before `right`: their pads recorded, their hashes sent, their sound played,
+// and the frames kept before them forgotten but the one a wrong guess would go back to.
+void settle(uint64_t frame, uint64_t right) {
+    uint16_t pads[kLockstepSlots];
+    for (; g_recorded_to < right && g_recorded_to <= frame; ++g_recorded_to) {
+        g_ls->pads(g_recorded_to, pads);
+        smpc_record_sync(g_recorded_to, pads);
+    }
+    // A frame's hash is of the machine before its own pads apply.
+    for (auto it = g_hashes.begin(); it != g_hashes.end() && it->first <= right; it = g_hashes.erase(it))
+        to_members(Channel::Control, g_ls->hash_message(it->first, it->second));
+    if (!g_ls->ahead()) return;
+    state_forget_before(right);
+    if (const std::optional<StateKept> kept = state_kept_before(right)) sound_release(kept->samples);
+}
+
 }  // namespace
 
 bool online_sync_playing() { return g_ls != nullptr; }
@@ -276,37 +345,50 @@ void online_sync_vblank(const std::function<void()>& idle) {
         });
         if (!g_ls) return;
     }
+    const bool again = frame < g_again_to;
     uint16_t local[kLockstepSlots] = {};
     smpc_local_pads(local, g_ls->members()[g_ls->self()].count);
     g_ls->local(frame, local);
-    send_pads();
-    const auto began = Clock::now();
-    auto sent = began;
-    wait(idle, [&] {
-        if (g_ls->ready(frame)) return true;
-        const auto waited = Clock::now() - began;
-        const std::vector<int> missing = g_ls->waiting_on(frame);
-        g_waiting_for = waited >= kWaitShown && !missing.empty() ? name(g_ls->members()[missing[0]].id) : "";
-        if (waited >= kLostAfter)
-            for (int m : missing) lose(m, "sent no pads for 15 seconds");
-        if (Clock::now() - sent >= kResend) {
-            send_pads();
-            sent = Clock::now();
-        }
-        return false;
-    });
-    g_waiting_for.clear();
-    if (!g_ended.empty()) return alone();
-    host_pace_hold((uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - began).count());
-    g_ls->pads(frame, g_pads);
-    if (frame % kHashEvery == 0) {
-        const uint64_t hash = lockstep_hash(g_wram_l, 0x100000, lockstep_hash(g_wram_h, 0x100000));
-        to_members(Channel::Control, g_ls->hash_message(frame, hash));
+    if (!again) {
+        send_pads();
+        wait_to_run(frame, idle);
+        if (!g_ended.empty()) return alone();
+        if (g_ls->ahead() && g_ls->lead() > 0)
+            host_pace_hold((uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(kSlowedBy).count());
     }
+    g_ls->pads(frame, g_pads);
+    g_ls->ran(frame, g_pads);
+    if (frame % kHashEvery == 0) g_hashes[frame] = lockstep_hash(g_wram_l, 0x100000, lockstep_hash(g_wram_h, 0x100000));
+    const std::optional<uint64_t> wrong = g_ls->first_wrong();
+    if (wrong) {
+        if (const std::optional<StateKept> kept = state_kept_before(*wrong)) state_go_back(kept->vblank);
+        else return end("a guess at VBlank " + std::to_string(*wrong) + " was wrong, with no frame kept before it");
+    }
+    settle(frame, std::min(g_ls->confirmed(), wrong.value_or(UINT64_MAX)));
     if (auto parted = g_ls->parted())
         end("this game and " + name(g_ls->members()[g_ls->parted_with()].id) + "'s fell out of step by VBlank " +
             std::to_string(*parted));
     if (frame > kFramesKept) g_ls->forget_before(frame - kFramesKept);
+}
+
+bool online_sync_again() { return g_ls && sat_vblanks() < g_again_to; }
+
+void online_sync_went_back(uint64_t from) {
+    if (!g_ls) return;
+    const uint64_t frames = from - sat_vblanks();
+    g_again_to = std::max(g_again_to, from);
+    g_ls->pads(sat_vblanks(), g_pads);
+    g_hashes.erase(g_hashes.upper_bound(sat_vblanks()), g_hashes.end());   // they have not run again yet
+    ++g_went_back;
+    g_ran_again += frames;
+    g_most_again = std::max(g_most_again, frames);
+    sat_note("sync: VBlank %llu back to %llu", (unsigned long long)from, (unsigned long long)sat_vblanks());
+}
+
+void online_sync_finish() {
+    if (g_ls && g_ls->ahead())
+        sat_note("sync: %llu wrong guesses, %llu frames run again, at most %llu at once",
+                 (unsigned long long)g_went_back, (unsigned long long)g_ran_again, (unsigned long long)g_most_again);
 }
 
 OnlineCard online_sync_card() {

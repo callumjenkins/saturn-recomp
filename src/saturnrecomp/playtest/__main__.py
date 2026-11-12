@@ -40,7 +40,7 @@ WORKFLOW = "playtest.yml"
 # instead; the steering and a synced game's room, whose presses input.txt already holds; and the save file, which a
 # replay takes from backup-at-start.bin
 LIVE_ONLY = ("--session", "--steer", "--steer-again", "--steer-again-saved", "--sync", "--sync-pads", "--sync-delay",
-             "--save")
+             "--sync-ahead", "--session-lag", "--save")
 
 
 def api(game, method, path, body=None, raw=False):

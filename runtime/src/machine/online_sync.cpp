@@ -55,7 +55,8 @@ Clock::time_point g_pinged;
 uint64_t g_again_to;                  // the frames before this one are running again
 uint64_t g_recorded_to;               // the frames before this one are recorded
 std::map<uint64_t, uint64_t> g_hashes;   // frame, its hash, from the latest time it ran
-uint64_t g_went_back, g_ran_again, g_most_again;
+uint64_t g_went_back, g_ran_again, g_most_again, g_slowed;
+Clock::duration g_waited;
 std::set<int> g_noted_lost;
 
 uint64_t now_ns() { return (uint64_t)Clock::now().time_since_epoch().count(); }
@@ -262,6 +263,7 @@ void wait_to_run(uint64_t frame, const std::function<void()>& idle) {
         return false;
     });
     g_waiting_for.clear();
+    g_waited += Clock::now() - began;
     host_pace_hold((uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - began).count());
 }
 
@@ -353,7 +355,7 @@ void online_sync_vblank(const std::function<void()>& idle) {
         send_pads();
         wait_to_run(frame, idle);
         if (!g_ended.empty()) return alone();
-        if (g_ls->ahead() && g_ls->lead() > 0)
+        if (g_ls->ahead() && g_ls->lead() > 0 && ++g_slowed)
             host_pace_hold((uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(kSlowedBy).count());
     }
     g_ls->pads(frame, g_pads);
@@ -387,8 +389,10 @@ void online_sync_went_back(uint64_t from) {
 
 void online_sync_finish() {
     if (g_ls && g_ls->ahead())
-        sat_note("sync: %llu wrong guesses, %llu frames run again, at most %llu at once",
-                 (unsigned long long)g_went_back, (unsigned long long)g_ran_again, (unsigned long long)g_most_again);
+        sat_note("sync: %llu wrong guesses, %llu frames run again, at most %llu at once; %.1f s waiting, %llu frames "
+                 "slowed", (unsigned long long)g_went_back, (unsigned long long)g_ran_again,
+                 (unsigned long long)g_most_again, std::chrono::duration<double>(g_waited).count(),
+                 (unsigned long long)g_slowed);
 }
 
 OnlineCard online_sync_card() {

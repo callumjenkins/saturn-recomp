@@ -27,7 +27,7 @@ struct SessionEvent {
     enum class Kind {
         Welcome,     // in the room, whose code is `text`, as `peer`
         Joined,      // `peer` is in the room, as `name` with `pads` pads; every peer already there comes first
-        Open,        // all of `peer`'s channels are open
+        Open,        // all of `peer`'s channels are open, `text` naming the kinds of candidate chosen, "host to srflx"
         Message,     // `data` came from `peer` on `channel`
         Left,        // `peer` has gone, `text` saying how
         Refused,     // the room turned this peer away, `text` saying why

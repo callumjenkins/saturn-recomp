@@ -113,7 +113,7 @@ void note(const SessionEvent& e) {
     case SessionEvent::Kind::Joined:
         sat_note("session: %s is in the room as %s, with %d pads", e.peer.c_str(), e.name.c_str(), e.pads);
         break;
-    case SessionEvent::Kind::Open: sat_note("session: connected to %s", e.peer.c_str()); break;
+    case SessionEvent::Kind::Open: sat_note("session: connected to %s, %s", e.peer.c_str(), e.text.c_str()); break;
     case SessionEvent::Kind::Message: break;
     case SessionEvent::Kind::Left: sat_note("session: %s %s", e.peer.c_str(), e.text.c_str()); break;
     case SessionEvent::Kind::Refused: sat_note("session: refused: %s", e.text.c_str()); break;

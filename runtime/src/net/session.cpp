@@ -24,6 +24,7 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <sstream>
 #include <thread>
 #include <utility>
 
@@ -46,6 +47,15 @@ int channel_of(const std::string& label) {
     for (int i = 0; i < kChannels; ++i)
         if (label == kLabels[i]) return i;
     return -1;
+}
+
+// The kinds of the two candidates `pc` chose, such as "srflx to relay"; empty before it has chosen.
+std::string route(rtc::PeerConnection& pc) {
+    rtc::Candidate local, remote;
+    if (!pc.getSelectedCandidatePair(&local, &remote)) return "";
+    std::ostringstream out;
+    out << local.type() << " to " << remote.type();
+    return out.str();
 }
 
 }  // namespace
@@ -323,7 +333,7 @@ struct Session::Impl {
         it->second.open |= 1 << c;
         if (it->second.open != kAllOpen) return;
         it->second.broken_since.reset();
-        emit({.kind = SessionEvent::Kind::Open, .peer = id});
+        emit({.kind = SessionEvent::Kind::Open, .peer = id, .text = route(*it->second.pc)});
     }
 
     // `pc`'s connection to `id` failed. The lower id offers its replacement while the room is there to carry it.

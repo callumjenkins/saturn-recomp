@@ -177,12 +177,24 @@ export class Room extends DurableObject<Env> {
 		return this.ctx.getWebSockets().map(peerOf).filter((p) => p !== null)
 	}
 
-	/** Takes back an away peer's place, as itself, for the tester it was. */
+	/**
+	 * Takes back an away peer's place, as itself, for the tester it was. A peer can come back before its old socket has
+	 * closed here, as when a phone's network vanishes, so it takes over that socket's place too.
+	 */
 	private async resume(ws: WebSocket, id: unknown, tester: Tester, away: Record<string, Away>, others: Peer[], code: string) {
-		const was = typeof id === 'string' ? away[id] : undefined
+		const stale = this.sockets(ws).find((s) => attachmentOf(s)?.peer.id === id)
+		const was = typeof id === 'string' ? (away[id] ?? (stale && attachmentOf(stale))) : undefined
 		if (!was || was.tester !== tester.id) return refuse(ws, 'this game is no longer in the room')
+		if (stale) {
+			stale.serializeAttachment(null)
+			try {
+				stale.close(1000, 'resumed elsewhere')
+			} catch {
+				// already closed
+			}
+		}
 		delete away[was.peer.id]
-		await this.admit(ws, was.peer, tester, others, code)
+		await this.admit(ws, was.peer, tester, others.filter((p) => p.id !== was.peer.id), code)
 		await this.keepAway(away)
 	}
 

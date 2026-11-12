@@ -157,6 +157,26 @@ describe('rooms', () => {
 		expect(await host.next()).toEqual({ type: 'joined', peer: { id, name: 'Vic', pads: 1 } })
 	})
 
+	it('let a peer come back as itself before its old socket has closed', async () => {
+		const host = await join('/api/rooms/new', await invite('Gus'), TERMS, 1)
+		const code = host.answer.code as string
+		const token = await invite('Hal')
+		const guest = await join(`/api/rooms/${code}`, token, TERMS, 1)
+		const id = guest.answer.id as string
+		await host.next()
+
+		const thief = await join(`/api/rooms/${code}`, await invite('Ida'), TERMS, 1, id)
+		expect(thief.answer).toEqual({ type: 'refused', reason: 'this game is no longer in the room' })
+		const back = await join(`/api/rooms/${code}`, token, TERMS, 1, id)
+		expect(back.answer).toMatchObject({ type: 'welcome', code, id, peers: [{ id: host.answer.id, name: 'Gus', pads: 1 }] })
+		await guest.closed
+		expect(await host.next()).toEqual({ type: 'joined', peer: { id, name: 'Hal', pads: 1 } })
+
+		await resumeRunsOut(code)
+		back.ws.send(JSON.stringify({ type: 'signal', to: host.answer.id, data: 'still here' }))
+		expect(await host.next()).toEqual({ type: 'signal', from: id, data: 'still here' })
+	})
+
 	it('tell the others a dropped peer left once its time to come back runs out', async () => {
 		const host = await join('/api/rooms/new', await invite('Xan'), TERMS, 1)
 		const code = host.answer.code as string

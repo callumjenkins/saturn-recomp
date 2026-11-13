@@ -45,23 +45,13 @@ int pads() {
     return 2;
 }
 
-// The way the room plays. A --sync game also needs the same multitaps and drive on every machine.
-std::string mode() {
-    if (!g_cfg.modem.empty()) return "classic";
-    if (g_cfg.sync < 0) return "session";
-    std::string m = "sync";
-    if (g_cfg.multitap) m += "-multitap" + std::to_string(g_cfg.multitap);
-    if (g_cfg.accurate_drive) m += "-accurate-drive";
-    return m;
-}
-
 SessionHello hello() {
     return {.token = env("SATURN_PLAYTEST_TOKEN"),
             .tester = env("SATURN_PLAYTEST_TESTER"),
             .terms = {.product = bios_product(g_wram_h + 0x2000),
                       .game = SATURN_GAME_BUILD,
                       .runtime = SATURN_RUNTIME_BUILD,
-                      .mode = mode()},
+                      .mode = online_mode()},
             .pads = g_cfg.sync < 0 ? pads() : g_cfg.sync_pads};
 }
 
@@ -171,6 +161,18 @@ void open_line_out(const char* modem) {
 }
 
 }  // namespace
+
+std::string online_mode() {
+    if (!g_cfg.modem.empty()) return "classic";
+    if (g_cfg.sync < 0) return "session";
+    std::string m = "sync";
+    if (g_cfg.multitap) m += "-multitap" + std::to_string(g_cfg.multitap);
+    if (g_cfg.accurate_drive) m += "-accurate-drive";
+#if SATURN_VDP1_GPL
+    m += "-vdp1-gpl";   // a draw's length in time comes from the rules that drew it
+#endif
+    return m;
+}
 
 std::unique_ptr<ModemLine> online_netband_line(const std::string& spec_text, std::string& error) {
     std::optional<NetBandSpec> spec = netband_spec(spec_text, error);

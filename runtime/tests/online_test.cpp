@@ -2,6 +2,7 @@
 // entries of OUT/line.txt.
 #include "line_log.h"
 #include "online_room.h"
+#include "saturn.h"
 #include "test.h"
 #include <string>
 
@@ -113,4 +114,21 @@ TEST(a_line_log_entry_that_does_not_read_is_refused) {
     for (const char* bad : {"", "12", "x reachable 1", "12 reachable", "12 reachable 2", "12 reachable 1 more",
                             "12 heard", "12 heard 4", "12 heard 4G", "12 sent 44"})
         CHECK_EQ(line_log_read(bad).has_value(), false);
+}
+
+// VDP1's two sets of rules give the same draw different lengths, so two machines that draw by different rules part
+// within seconds of the boot.
+TEST(a_synced_room_is_joined_only_by_machines_that_draw_by_the_same_rules) {
+    const SaturnConfig kept = g_cfg;
+    g_cfg = SaturnConfig{};
+    g_cfg.sync = 2;
+    g_cfg.multitap = 1;
+#if SATURN_VDP1_GPL
+    CHECK_EQ(online_mode() == "sync-multitap1-vdp1-gpl", true);
+#else
+    CHECK_EQ(online_mode() == "sync-multitap1", true);
+#endif
+    g_cfg.sync = -1;
+    CHECK_EQ(online_mode() == "session", true);
+    g_cfg = kept;
 }

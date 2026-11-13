@@ -4,6 +4,7 @@ import android.app.Activity
 import android.app.ActivityManager
 import android.app.AlertDialog
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.graphics.BitmapFactory
 import android.graphics.Typeface
 import android.net.Uri
@@ -57,6 +58,7 @@ class LauncherActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (playFromAdb()) return
         info = JSONObject(assets.open("playtest.json").use { it.readBytes().decodeToString() })
         manifest = JSONObject(assets.open("disc.json").use { it.readBytes().decodeToString() })
         home = File(filesDir, "saturn-recomp/${info.getString("product")}").apply { mkdirs() }
@@ -451,6 +453,22 @@ class LauncherActivity : Activity() {
             ?: "Needs your own copy of that disc"
     }
 
+    /**
+     * In a debuggable build, the extra `args` names a file under the app's files, holding the runtime's arguments one a
+     * line, and the game plays with them at once: a maintainer's run over adb (saturnrecomp.android). The extra `tester`
+     * is the tester id a --session joins as.
+     */
+    private fun playFromAdb(): Boolean {
+        val listed = intent.getStringExtra(ADB_ARGS) ?: return false
+        if (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE == 0) return false
+        val args = File(filesDir, listed).readLines().toTypedArray()
+        val game = Intent(this, GameActivity::class.java).putExtra(GameActivity.ARGS, args)
+        intent.getStringExtra(ADB_TESTER)?.let { game.putExtra(GameActivity.TOKEN, "tester:$it") }
+        startActivity(game)
+        finish()
+        return true
+    }
+
     private fun saveSettings() = File(home, "launcher.json").writeText(settings.toString(1))
 
     private fun say(s: String) = runOnUiThread { status.text = s }
@@ -475,6 +493,8 @@ class LauncherActivity : Activity() {
     }
 
     companion object {
+        private const val ADB_ARGS = "args"
+        private const val ADB_TESTER = "tester"
         private const val PICK = 1
         private const val SAVES = 2
         private const val PICK_OTHER = 3

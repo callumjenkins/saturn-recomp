@@ -146,6 +146,9 @@ void state_forget_before(uint64_t vblank);   // all but the latest frame kept be
 void state_go_back(uint64_t vblank);         // to the frame kept at `vblank`, at the next safe moment
 
 // ---- --session (online.cpp) ---------------------------------------------------------------
+// The room's mode, one of its terms: how the run plays, with what a --sync game's machines must share to stay in step
+// (the multitaps, the drive, and VDP1's rules).
+std::string online_mode();
 void online_poll();                 // from the master's polls: the room joined once IP.BIN is in, or --line-in played
 struct ModemLine;
 std::unique_ptr<ModemLine> online_modem_line(std::string& error);   // --modem session's line, to the room's other peer

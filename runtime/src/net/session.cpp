@@ -37,7 +37,9 @@ const int kChannels = 3;
 const int kAllOpen = (1 << kChannels) - 1;
 // The room's RESUME_MS, which keeps a peer's place while it comes back.
 const auto kComeBackFor = std::chrono::seconds(15);
+// Coming back, each try at the room's socket starts once the last has failed, and fails after kConnectFor.
 const auto kRejoinEvery = std::chrono::seconds(1);
+const auto kConnectFor = std::chrono::seconds(5);
 // Unanswered for two of these, the room's socket closes: a dropped network is noticed within about 4 seconds.
 const auto kPingEvery = std::chrono::seconds(2);
 
@@ -162,7 +164,8 @@ struct Session::Impl {
         if (rejoining_since && now - *rejoining_since >= kComeBackFor) {
             rejoining_since.reset();
             close_room("the room's connection closed, and joining it again failed");
-        } else if (rejoining_since && now - rejoin_tried >= kRejoinEvery && !(room && room->isOpen())) {
+        } else if (rejoining_since && now - rejoin_tried >= kRejoinEvery &&
+                   (!room || room->readyState() == rtc::WebSocket::State::Closed)) {
             rejoin_tried = now;
             start();
         }
@@ -191,6 +194,7 @@ struct Session::Impl {
         wc.caCertificatePemFile = ca_bundle_pem();
         wc.pingInterval = kPingEvery;
         wc.maxOutstandingPings = 1;
+        wc.connectionTimeout = kConnectFor;
         if (room) {
             room->resetCallbacks();
             room->close();

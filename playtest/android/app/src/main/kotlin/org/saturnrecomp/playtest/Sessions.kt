@@ -31,12 +31,38 @@ object Sessions {
     private val LOCAL = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")     // the runtime's --clock
     private val UTC = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ssxxx")    // Python's isoformat
     // The latest dump goes too, so a Continue on another phone has at most a minute of presses to play again.
-    private val FILES = listOf("session.json", "input.txt", "clock.txt", "backup-at-start.bin", "state-at-start.bin", "log.txt", "coverage.txt", PROGRESS, DUMP)
+    private val FILES = listOf("session.json", "input.txt", "clock.txt", "backup-at-start.bin", "state-at-start.bin", "log.txt", "coverage.txt", PROGRESS, DUMP, "line.txt")
     private const val DUMP = "state.bin"                    // the run's latest dump of the machine
     private const val PROGRESS = "progress.txt"             // the runtime's --progress: the starts Continue can rebuild
+    // Every synced player's clock at power-on, as the runtime's --sync sets it, so a replay starts the same machine.
+    const val SYNC_CLOCK = "2000-01-01T00:00:00"
 
     /** Where a new session starts: a save file's start, rebuilt from its progress line, as a save file of its own. */
     class Branch(val line: String, val clock: String, val parent: JSONObject)
+
+    /**
+     * The runtime's arguments for the game's own online call through a playtest room: a new room, or the room `code`.
+     * Whoever makes the room waits for the call, and whoever joins it dials.
+     */
+    fun classicArgs(info: JSONObject, code: String?): List<String> {
+        val url = "ws" + info.getString("endpoint").removePrefix("http")   // https:// is wss://, http:// ws://
+        val steer = info.getJSONObject("classic").getJSONArray(if (code == null) "wait" else "dial")
+        return listOf("--modem", "session", "--session", "$url/api/rooms/${code ?: "new"}") + List(steer.length()) { steer.getString(it) }
+    }
+
+    /**
+     * The runtime's arguments for one game played by everyone in a playtest room: a new room, whose maker starts the
+     * game with Start, or the room `code`. Everyone shares one clock and plays with the maker's saves, which only the
+     * maker's copy writes back. A player who will `watch` takes no pads.
+     */
+    fun syncArgs(info: JSONObject, code: String?, watch: Boolean = false): List<String> {
+        val url = "ws" + info.getString("endpoint").removePrefix("http")
+        return listOf("--session", "$url/api/rooms/${code ?: "new"}", "--sync", "0", "--clock", SYNC_CLOCK) +
+            if (watch) listOf("--sync-pads", "0") else emptyList()
+    }
+
+    /** The room code a player typed, in capitals, or null when it is not the four letters a room's maker sees. */
+    fun roomCode(typed: String): String? = typed.trim().uppercase().takeIf { Regex("[A-Z]{4}").matches(it) }
 
     /**
      * A new session's directory under `home`/sessions, and the runtime's arguments for it; with `send`, it is sent once it has ended.
@@ -53,7 +79,9 @@ object Sessions {
         val started = LocalDateTime.now().truncatedTo(ChronoUnit.SECONDS)
         val out = File(home, "sessions/${started.format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))}-${UUID.randomUUID().toString().replace("-", "").take(8)}")
         out.mkdirs()
-        val clock = branch?.clock ?: if (from != null) read(from).getString("clock") else started.format(LOCAL)
+        // A synced game names its own clock, which every player shares.
+        val clock = more.indexOf("--clock").takeIf { it >= 0 }?.let { more[it + 1] }
+            ?: branch?.clock ?: if (from != null) read(from).getString("clock") else started.format(LOCAL)
         File(out, "clock.txt").writeText(clock + "\n")
         val saves = File(home, "backup.bin")
         val dump = from?.takeIf { useDump }?.let { File(it, DUMP) }?.takeIf { it.exists() }

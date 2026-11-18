@@ -1,6 +1,7 @@
 package org.saturnrecomp.playtest
 
 import android.os.Bundle
+import android.system.Os
 import android.os.Process
 import android.view.KeyEvent
 import org.libsdl.app.SDLActivity
@@ -16,6 +17,11 @@ class GameActivity : SDLActivity() {
     override fun getArguments(): Array<String> = intent.getStringArrayExtra(ARGS) ?: emptyArray()
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // The runtime joins a playtest room as this tester, so it is set before SDL starts the runtime.
+        intent.getStringExtra(TOKEN)?.let {
+            if (it.startsWith("tester:")) Os.setenv("SATURN_PLAYTEST_TESTER", it.removePrefix("tester:"), true)
+            else Os.setenv("SATURN_PLAYTEST_TOKEN", it, true)
+        }
         super.onCreate(savedInstanceState)
         val token = intent.getStringExtra(TOKEN) ?: return
         val endpoint = intent.getStringExtra(ENDPOINT) ?: return

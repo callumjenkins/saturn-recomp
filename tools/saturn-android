@@ -1,0 +1,3 @@
+#!/bin/sh
+# saturn on an Android phone over adb, taking saturn's own arguments: src/saturnrecomp/android.py says how.
+exec python3 "$(dirname "$0")/../src/saturnrecomp/android.py" "$@"

@@ -28,6 +28,9 @@
 #pragma once
 #include "saturn/sh2.h"
 #include <cstdint>
+#include <functional>
+#include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -67,7 +70,21 @@ struct SaturnConfig {
     std::string other_disc;         // a second disc that files and audio tracks are borrowed from (cdrom_borrow)
     std::string from_other;         // ... those files: "PATH=OTHERPATH,..."
     std::string tracks_from_other;  // ... and those tracks: "2,..."
-    std::string modem;              // a NetLink fitted: "line" with nothing on its line, or a TCP line (modem.h); empty: none
+    std::string modem;              // a NetLink fitted: "line" with nothing on its line, "session" to --session's other
+                                    // peer, or a TCP line (modem.h); empty: none
+    std::string session;            // a playtest room's WebSocket URL, which the run joins (online.cpp); empty: none
+    int sync = -1;                  // the room's peers play one game, their pads in lockstep (online_sync.cpp); the room's
+                                    // creator starts it once this many players are in; -1: no
+    int sync_pads = 1;              // ... the players on this machine
+    int sync_delay = -1;            // ... frames between a press and the VBlank it applies at; -1: from the round trip
+    int sync_ahead = 8;             // ... frames a peer may run on guesses before every peer's pads are in; 0: none
+    int session_lag = 0;            // for tests: milliseconds every event from the room is held for
+    uint64_t session_sever_at = 0;  // for tests: the VBlank the session's network goes, as a phone's does; 0: never
+    std::string steer;              // presses over the controllers' from power-on, as --input's: the way to the game's call
+    std::string line_in;            // a classic match's OUT/line.txt, which --modem session's line hears again
+    std::string steer_again;        // "PROGRAM:SCRIPT": SCRIPT, from each later start of PROGRAM, once the player asks
+                                    // (asked late, from the moment its first press comes then)
+    std::string steer_again_saved;  // "SAVE:SCRIPT": --steer-again's SCRIPT instead, when the save file held SAVE
     int64_t clock = -1;             // the SMPC's clock at power-on, seconds since 1970 (no time zone); -1: the host's
     uint32_t task_setjmp = 0, task_longjmp = 0;   // the game's own task switch (tasks.cpp), 0: none
     bool hooks = false;             // --hook's register overrides were given (sh2_hook_set)
@@ -81,6 +98,8 @@ struct SaturnConfig {
     std::string state_out;          // dumps go to this file: at a stop that waits for one, and as below
     int state_every = 0;            // ... every this many seconds of the host's time (0: only at a stop)
     std::string state_at;           // ... at the first safe moment from this VBlank on
+    std::string rewind;             // "FROM:AT": the machine kept at the first safe moment from VBlank FROM, and
+                                    // loaded back at the first from AT
     std::string progress;           // a file the --progress-keep ranges are added to, a line each time the first changes
     std::string progress_keep;      // "ADDR:BYTES,...": the ranges
     std::string resume_label;       // what the window says while --resume plays
@@ -117,12 +136,56 @@ void state_point(SH2Context& c);    // a safe moment: c's registers and PC are a
 void state_stop(const char* why);   // the run stops at the next dump, or soon without one
 void state_finish();                // the last dump written
 void state_load(const std::string& path);   // after the boot: the machine as the dump has it
+struct StateRewind {};              // thrown at a safe moment, for the master's loop to load a machine kept
+void state_rewind();                // on the master's own stack: the machine as it was kept
+// --sync's rollback: the machine kept at each frame's first safe moment, `samples` the sound made by then.
+struct StateKept {
+    uint64_t vblank = 0, samples = 0;
+};
+void state_keep_frames(bool on);            // off: the frames kept are forgotten, and a go back with them
+std::optional<StateKept> state_kept_before(uint64_t vblank);   // the latest frame kept before `vblank`
+void state_forget_before(uint64_t vblank);   // all but the latest frame kept before `vblank` and the frames after
+void state_go_back(uint64_t vblank);         // to the frame kept at `vblank`, at the next safe moment
+
+// ---- --session (online.cpp) ---------------------------------------------------------------
+// The room's mode, one of its terms: how the run plays, with what a --sync game's machines must share to stay in step
+// (the multitaps, the drive, and VDP1's rules).
+std::string online_mode();
+void online_poll();                 // from the master's polls: the room joined once IP.BIN is in, or --line-in played
+struct ModemLine;
+std::unique_ptr<ModemLine> online_modem_line(std::string& error);   // --modem session's line, to the room's other peer
+// --modem netband=SPEC's line, to a real Saturn through the NetBand tunnel
+std::unique_ptr<ModemLine> online_netband_line(const std::string& spec, std::string& error);
+void online_finish();               // the session left
+void online_program_start(const char* module);
+// What the room has to tell the player, over the picture: empty when there is nothing; `again` when Start
+// would play another match (--steer-again).
+struct OnlineCard { std::string text; bool again = false; };
+OnlineCard online_card();
+void online_again();                // the player chose another match
+struct SessionEvent;
+class Session;
+Session* online_session();          // the room's, once the run has joined it
+
+// ---- --sync (online_sync.cpp) ---------------------------------------------------------------
+void online_sync_hear(const SessionEvent& e);
+// At each VBlank-IN: waits for every player's pads for it, calling `idle` every frame's time so the window answers
+void online_sync_vblank(const std::function<void()>& idle);
+bool online_sync_playing();         // the game has started: the pads are the room's
+uint16_t online_sync_pad(int slot);
+bool online_sync_plugged(int slot); // a player in the game owns the slot
+bool online_sync_again();           // the frame is running again, after a wrong guess
+void online_sync_went_back(uint64_t from);   // the machine went back to a kept frame from VBlank `from`
+void online_sync_finish();
+OnlineCard online_sync_card();
+void online_sync_start();           // the room's creator chose to start with the players in
 int  sh2_active_slots();            // the modules active now (core.cpp)
 const SH2Module* sh2_active_slot(int i);
 void sh2_set_active_slot(int i, const SH2Module* m);
 
 // ---- the BIOS (bios.cpp) -----------------------------------------------------------
 void bios_boot();                   // the state the BIOS leaves, the 1st read file loaded
+void bios_reboot();                 // bios_boot, keeping the backup memory as the program left it
 uint32_t bios_first_read();         // where it was loaded (the entry)
 bool bios_pal();                    // IP.BIN's areas: Europe alone, a PAL disc
 bool bios_call(SH2Context& c, uint32_t addr);        // a BIOS ROM address: true if handled
@@ -135,6 +198,11 @@ void bios_select_save(const uint8_t* ip);   // the save file for the disc with t
 struct DiscId { std::string product, version; };
 const DiscId& bios_disc_id();       // IP.BIN's product number and version, as the save directory is named
 const std::string& bios_save_path();   // the save file; empty: the saves last for the run alone
+bool bios_save_held(const std::string& name);   // whether the backup memory holds this save
+std::vector<uint8_t> bios_backup();    // the backup memory in its save file's form
+// Starts the backup memory from `bytes`, in that form, for this run alone, unless the program has already used it.
+bool bios_backup_install(const std::vector<uint8_t>& bytes, const std::string& from);
+std::string bios_product(const uint8_t* ip);   // IP.BIN's product number and version, as MK-81070_V1.003
 
 // ---- the address map (mmio.cpp) ---------------------------------------------------
 void mmio_log_write(const std::string& path);        // every register touched, with counts
@@ -169,6 +237,9 @@ void smpc_tick();
 void smpc_input_script(const std::string& spec);   // "VBLANK:BUTTON+BUTTON,..."
 struct PadStep { uint64_t vblank; int pad; uint16_t pressed; };   // from VBlank on, pad (from 0) holds these bits
 std::vector<PadStep> smpc_parse_script(const std::string& spec);  // an --input script or "@FILE", in VBlank order
+void smpc_steer(const std::vector<PadStep>& steps, uint64_t from);  // `steps` from VBlank `from`, over the controllers'
+void smpc_local_pads(uint16_t* out, int count);   // this machine's first `count` players' pads now, script and controllers
+void smpc_record_sync(uint64_t vblank, const uint16_t* pads);   // a --sync frame's pads, every slot, once confirmed
 bool smpc_press(const std::string& spec, std::string& error);   // "[N.]BUTTON+BUTTON" from this VBlank on
 void smpc_set_area(char symbol);                   // the disc's first area symbol (J T U B K A E L)
 
@@ -236,5 +307,8 @@ void sound_init();
 void sound_power(bool on);            // SMPC SNDON/SNDOFF: the 68000 runs or is held
 void sound_tick();                    // the samples due by now, the 68000 between them
 void sound_close();                   // the report line, the WAV file finished
+uint64_t sound_samples();             // made since power-on
+void sound_hold(bool on);             // samples wait for sound_release to play (--sync's rollback); off: all play
+void sound_release(uint64_t before);  // the held samples before this one play
 uint32_t sound_read(uint32_t a, int size);    // 0x05A00000-0x05B00FFF from the SH-2
 void sound_write(uint32_t a, uint32_t v, int size);

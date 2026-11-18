@@ -35,6 +35,7 @@ public:
     uint8_t read(int reg, uint64_t now);          // reg 0-7; now in ns of machine time
     void write(int reg, uint8_t v, uint64_t now);
     bool online() const { return online_; }
+    uint64_t commands() const { return commands_; }   // the AT commands the software has sent
     bool interrupting(uint64_t now);              // the UART's interrupt output: OUT2 set and an interrupt pending
     void bring_up(uint64_t now);                  // a leased line: dial or answer now, and go online without a word
     void dialled(bool started, uint64_t now);     // after ATD: wait for an answer, or no carrier at once
@@ -64,6 +65,7 @@ private:
     uint64_t calling_until_ = 0;                  // a call dialled waits for its answer until then; 0: none
     int wait_for_carrier_ = 50;                   // S7: seconds a dialled call waits to be answered
     bool online_ = false;                         // a call is up
+    uint64_t commands_ = 0;
     bool data_ = false;                           // ... and bytes go down it, rather than to the command parser
     bool echo_ = true, verbose_ = true, quiet_ = false;
     int auto_answer_ = 0, rings_ = 0;

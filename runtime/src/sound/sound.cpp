@@ -19,12 +19,14 @@
 // EXTS 0-1, a sample for a sample.
 //
 // The samples go to the window's audio stream (host.cpp) and, with --wav,
-// to a 16-bit stereo WAV file of the whole run (--wav, or --video's).
+// to a 16-bit stereo WAV file of the whole run (--wav, or --video's). A synced game with rollback holds
+// them until no frame they were made in can run again.
 #include "saturn.h"
 #include "state.h"
 #include "sound.h"
 #include "host.h"
 #include "video.h"
+#include <algorithm>
 #include <cstdio>
 #include <vector>
 extern "C" {
@@ -39,6 +41,9 @@ static bool g_audio;                             // a host device takes the samp
 static uint64_t g_samples;                       // made since power-on
 static int g_debt;                               // 68000 cycles owed to the current sample
 static std::vector<int16_t> g_out;               // made this poll, interleaved
+static bool g_holding;                           // sound_hold
+static std::vector<int16_t> g_held;              // made and not yet played, interleaved
+static uint64_t g_held_from;                     // the sample g_held starts at
 static FILE* g_wav;
 static uint64_t g_wav_frames;
 static uint64_t g_peak_frames;                   // samples not silent: the stop report
@@ -119,6 +124,16 @@ void sound_power(bool on) {
     if (on) m68k_set_irq((unsigned)scsp_cpu_level());
 }
 
+// `n` interleaved values to the window and the WAV file
+static void play(const int16_t* lr, size_t n) {
+    if (g_audio) host_audio_push(lr, (int)n / 2);
+    if (!g_wav) return;
+    std::vector<uint8_t> le(n * 2);
+    for (size_t i = 0; i < n; ++i) { le[2 * i] = (uint8_t)lr[i]; le[2 * i + 1] = (uint8_t)(lr[i] >> 8); }
+    std::fwrite(le.data(), 1, le.size(), g_wav);
+    g_wav_frames += n / 2;
+}
+
 void sound_tick() {
     uint64_t due = sat_now() * 441 / 10000000;   // samples at 44 100 Hz
     while (g_samples < due) {
@@ -135,17 +150,30 @@ void sound_tick() {
         ++g_samples;
     }
     if (g_out.empty()) return;
-    if (g_audio) host_audio_push(g_out.data(), (int)g_out.size() / 2);
-    if (g_wav) {
-        std::vector<uint8_t> le(g_out.size() * 2);
-        for (size_t i = 0; i < g_out.size(); ++i) { le[2 * i] = (uint8_t)g_out[i]; le[2 * i + 1] = (uint8_t)(g_out[i] >> 8); }
-        std::fwrite(le.data(), 1, le.size(), g_wav);
-        g_wav_frames += g_out.size() / 2;
-    }
+    if (g_holding) g_held.insert(g_held.end(), g_out.begin(), g_out.end());
+    else play(g_out.data(), g_out.size());
     g_out.clear();
 }
 
+uint64_t sound_samples() { return g_samples; }
+
+void sound_hold(bool on) {
+    if (!on) sound_release(g_samples);
+    g_holding = on;
+    g_held_from = g_samples;
+}
+
+void sound_release(uint64_t before) {
+    if (before <= g_held_from) return;
+    const size_t n = std::min<size_t>(before - g_held_from, g_held.size() / 2) * 2;
+    play(g_held.data(), n);
+    g_held.erase(g_held.begin(), g_held.begin() + (std::ptrdiff_t)n);
+    g_held_from += n / 2;
+}
+
 void sound_close() {
+    play(g_held.data(), g_held.size());
+    g_held.clear();
     std::fprintf(stderr, "  sound: %llu samples, %llu not silent; 68000 %s, pc %06X\n", (unsigned long long)g_samples,
                  (unsigned long long)g_peak_frames, g_on ? "on" : "off", m68k_get_reg(nullptr, M68K_REG_PC));
     host_audio_report();
@@ -176,4 +204,7 @@ void sound_state(State& s) {
     if (!s.loading) return;
     if (cpu.size() != m68k_state_size()) state_fail("the 68000's registers are another size");
     m68k_state_set(cpu.data());
+    // The samples from here on are made again.
+    if (g_samples < g_held_from) sat_fatal("sound: back before samples already played");
+    g_held.resize(std::min<size_t>(g_held.size(), (g_samples - g_held_from) * 2));
 }

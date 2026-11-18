@@ -36,6 +36,11 @@ from .upload import USER_AGENT, vblanks
 
 RUNTIME = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "runtime")
 WORKFLOW = "playtest.yml"
+# saturn's arguments, each with its value, that a replay leaves out: the room, whose line it hears from line.txt
+# instead; the steering and a synced game's room, whose presses input.txt already holds; and the save file, which a
+# replay takes from backup-at-start.bin
+LIVE_ONLY = ("--session", "--steer", "--steer-again", "--steer-again-saved", "--sync", "--sync-pads", "--sync-delay",
+             "--sync-ahead", "--session-lag", "--save")
 
 
 def api(game, method, path, body=None, raw=False):
@@ -60,6 +65,8 @@ def bundle(game, ident, out):
             "repo": game.playtest.repo, "args": game.playtest.args, "boxart": game.playtest.boxart}
     if game.checkpoint:
         info["checkpoint"] = game.checkpoint.to_json()
+    if game.classic:
+        info["classic"] = game.classic.steers()
     other = game.playtest.other_disc
     if other:
         info["other_disc"] = {"label": other.label, "files": other.files, "tracks": other.tracks}
@@ -108,9 +115,21 @@ def pull(game, pulled):
         print("no sessions waiting for review")
 
 
-def replay_args(game, args):
-    """A session's saturn arguments for this machine: another disc it played with is this machine's copy."""
-    played = list(args)
+def replay_args(game, args, session="."):
+    """A session's saturn arguments for this machine: another disc it played with is this machine's copy, and a
+    classic match's line hears what it heard then (`session`'s line.txt) rather than a room or the NetBand tunnel."""
+    played, rest = [], list(args)
+    while rest:
+        arg = rest.pop(0)
+        if arg in LIVE_ONLY:
+            del rest[:1]
+        else:
+            played.append(arg)
+    modem = played.index("--modem") + 1 if "--modem" in played[:-1] else None
+    if modem and played[modem].startswith("netband="):
+        played[modem] = "session"
+    if modem and played[modem] == "session":
+        played += ["--line-in", os.path.join(session, "line.txt")]
     if "--other-disc" in played:
         cue = game.playtest.other_disc.cue if game.playtest.other_disc else ""
         if not cue:
@@ -130,7 +149,7 @@ def replay(game, session, video):
         save = shutil.copy(os.path.join(session, "backup-at-start.bin"), os.path.join(out, "backup.bin"))
     dump = os.path.join(session, "state-at-start.bin")
     recorded = os.path.join(session, "input.txt")
-    played = replay_args(game, info.get("args", []))
+    played = replay_args(game, info.get("args", []), session)
     has_presses = os.path.exists(recorded) and open(recorded).read().strip(",\n")
     args = [game.saturn, "--cue", _cue(), "--out", out, "--save", save, "--clock", info["clock"], "--headless",
             *(["--input", f"@{recorded}"] if has_presses else []), "--vblanks", str(vblanks(session) + 600),

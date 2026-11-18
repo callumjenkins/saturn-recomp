@@ -9,7 +9,9 @@
 //            [--write VBLANK:ADDR=HEX,...] [--video FILE] [--save FILE|-] [--coverage FILE] [--checkpoint SECONDS]
 //            [--log FILE] [--state-in FILE] [--state-out FILE] [--state-every SECONDS] [--state-at VBLANK]
 //            [--progress FILE --progress-keep ADDR:BYTES,...] [--after FILE] [--launcher]
-//            [--modem line|dial=HOST:PORT[,listen=PORT]]
+//            [--modem line|session|netband=SPEC|dial=HOST:PORT[,listen=PORT]]
+//            [--session URL [--steer SCRIPT] [--steer-again PROGRAM:SCRIPT [--steer-again-saved SAVE:SCRIPT]]]
+//            [--line-in FILE] [--sync N [--sync-pads N] [--sync-delay FRAMES] [--sync-ahead FRAMES]] [--session-lag MS]
 //
 // --accurate-drive seeks before each read and reads at double speed, as the hardware's drive does
 // (cdblock.cpp), for comparing with Beetle Saturn; loads take longer.
@@ -43,7 +45,30 @@
 // whether it ran, when the run ends, an error that ends it included; --checkpoint SECONDS writes it again every
 // SECONDS of the host's time. --video writes the run's pictures and sound as an MP4 through ffmpeg, an
 // error that ends it included (movie.cpp). --modem fits a NetLink modem (modem.cpp): "line" with nothing on
-// its line, or a TCP line on which every number dialled calls HOST:PORT and a connection to PORT rings.
+// its line, "session" with the other peer in --session's room on it (a dial rings that peer, whatever the
+// number), "netband=SPEC" with a real Saturn on it through SegaRPGFan's NetBand tunnel (net/netband.h), or a TCP
+// line on which every number dialled calls HOST:PORT and a connection to PORT rings. netband=wait waits for a
+// direct call, and wait:CODE also through the dreampipe.net match service as the game whose code is CODE;
+// dial:CODE finds a game waiting there, and dial:IP calls that address directly, whatever the number dialled.
+// --session joins the playtest room at URL (online.cpp), as the tester SATURN_PLAYTEST_TOKEN or SATURN_PLAYTEST_TESTER
+// names, and notes who comes and goes. Until a call connects, the window shows the room's code and the other
+// player.
+// --sync N plays one game with the room's other peers, every peer's pads in lockstep (online_sync.cpp): the room's
+// creator starts it once N players are in, or when its player presses Start with two or more in, which is the only
+// way with --sync 0. --sync-pads says how many players this machine has (1; 0 only watches), and --sync-delay how
+// many frames a press waits before it applies (from the round trip). --sync-ahead says how many frames a peer may
+// run on guesses at the others' pads before they come, going back when a guess was wrong (8; 0 waits for every pad).
+// Every peer starts from power-on with the creator's saves and, unless --clock says otherwise, the same clock. A peer
+// that joins leaves its own save file alone. --session-sever-at VBLANK, for tests, drops the session's network at
+// that VBlank, as a phone that changes networks does, and the session comes back to the room. --session-lag MS, for
+// tests, holds everything the room sends for MS milliseconds.
+// --steer presses SCRIPT's buttons, as --input's, over the controllers': the way through the game's menus to its
+// call. --steer-again offers another match each time PROGRAM starts again, and presses SCRIPT, its VBlanks counted
+// from that start, once the player takes the offer with Start. Taken late, SCRIPT's first press comes at once.
+// Taking it hangs up a call the last match left held. --steer-again-saved presses its SCRIPT instead when backup
+// memory holds the save named SAVE, for a client that comes back from a match another way then.
+// --modem session's and netband's lines write what they heard to DIR/line.txt, at the machine time of each, and
+// --line-in FILE has the line hear that again in place of a room, for a replay.
 // --other-disc CUE with --from-other PATH=OTHERPATH,... and --track-from-other N,... plays those files and
 // audio tracks from that disc instead (cdrom.cpp).
 // --write sets memory at a VBlank-IN, as the agent's write does: a stage
@@ -66,6 +91,8 @@
 // --state-out writes one: at the first safe moment from VBlank --state-at, every --state-every
 // SECONDS of the host's time, and when the window is closed or Quit chosen in its menu, which then wait for it.
 // A safe moment is a task switch (--tasks), so a game without one makes no dumps.
+// --rewind FROM:AT keeps the machine in memory at the first safe moment from VBlank FROM and loads it back at the
+// first from AT, so the VBlanks between them play twice: a check that a dump loads in the middle of a run.
 // --progress adds a line to FILE whenever the first --progress-keep range changes: the VBlank, then
 // each range's bytes in hex. A game's stage number, say, then what a stage start has to be rebuilt from.
 // --after gives the window's menu Save files, which writes "saves" to FILE and quits, for a launcher to
@@ -78,6 +105,9 @@
 #if defined(__ANDROID__)
 #include <SDL3/SDL_main.h>                   // SDL's Java side starts the run through SDL_main
 #endif
+
+// Every --sync peer's SMPC clock at power-on, 2000-01-01, so their machines start the same.
+static const int64_t kSyncClock = 946684800;
 
 // YYYY-MM-DDTHH:MM:SS as seconds since 1970, no time zone; -1 if it does not parse.
 static int64_t clock_seconds(const char* s) {
@@ -132,6 +162,7 @@ static int parse_args(SaturnConfig& cfg, bool& launcher, int argc, char** argv) 
         else if (!std::strcmp(a, "--state-out") && more) cfg.state_out = argv[++i];
         else if (!std::strcmp(a, "--state-every") && more) cfg.state_every = std::atoi(argv[++i]);
         else if (!std::strcmp(a, "--state-at") && more) cfg.state_at = argv[++i];
+        else if (!std::strcmp(a, "--rewind") && more) cfg.rewind = argv[++i];
         else if (!std::strcmp(a, "--progress") && more) cfg.progress = argv[++i];
         else if (!std::strcmp(a, "--progress-keep") && more) cfg.progress_keep = argv[++i];
         else if (!std::strcmp(a, "--virtual-input") && more) cfg.virtual_input = argv[++i];
@@ -157,6 +188,17 @@ static int parse_args(SaturnConfig& cfg, bool& launcher, int argc, char** argv) 
         else if (!std::strcmp(a, "--interp")) cfg.interp = true;
         else if (!std::strcmp(a, "--multitap") && more) cfg.multitap = std::atoi(argv[++i]);
         else if (!std::strcmp(a, "--modem") && more) cfg.modem = argv[++i];
+        else if (!std::strcmp(a, "--session") && more) cfg.session = argv[++i];
+        else if (!std::strcmp(a, "--sync") && more) cfg.sync = std::atoi(argv[++i]);
+        else if (!std::strcmp(a, "--sync-pads") && more) cfg.sync_pads = std::atoi(argv[++i]);
+        else if (!std::strcmp(a, "--sync-delay") && more) cfg.sync_delay = std::atoi(argv[++i]);
+        else if (!std::strcmp(a, "--sync-ahead") && more) cfg.sync_ahead = std::atoi(argv[++i]);
+        else if (!std::strcmp(a, "--session-lag") && more) cfg.session_lag = std::atoi(argv[++i]);
+        else if (!std::strcmp(a, "--session-sever-at") && more) cfg.session_sever_at = std::strtoull(argv[++i], nullptr, 10);
+        else if (!std::strcmp(a, "--steer") && more) cfg.steer = argv[++i];
+        else if (!std::strcmp(a, "--line-in") && more) cfg.line_in = argv[++i];
+        else if (!std::strcmp(a, "--steer-again") && more) cfg.steer_again = argv[++i];
+        else if (!std::strcmp(a, "--steer-again-saved") && more) cfg.steer_again_saved = argv[++i];
         else if (!std::strcmp(a, "--other-disc") && more) cfg.other_disc = argv[++i];
         else if (!std::strcmp(a, "--from-other") && more) cfg.from_other = argv[++i];
         else if (!std::strcmp(a, "--track-from-other") && more) cfg.tracks_from_other = argv[++i];
@@ -190,10 +232,10 @@ static int parse_args(SaturnConfig& cfg, bool& launcher, int argc, char** argv) 
                                  "             [--wav FILE] [--hook ADDR:rN=VALUE ...] [--tasks SETJMP:LONGJMP] [--multitap N]\n"
                                  "             [--clock YYYY-MM-DDTHH:MM:SS] [--agent FD] [--write VBLANK:ADDR=HEX,...] [--video FILE]\n"
                                  "             [--save FILE|-] [--coverage FILE] [--checkpoint SECONDS] [--log FILE]\n"
-                                 "             [--state-in FILE] [--state-out FILE] [--state-every SECONDS] [--state-at VBLANK]\n"
+                                 "             [--state-in FILE] [--state-out FILE] [--state-every SECONDS] [--state-at VBLANK] [--rewind FROM:AT]\n"
                                  "             [--progress FILE --progress-keep ADDR:BYTES,...] [--after FILE] [--launcher [--options FILE]]\n"
-                                 "             [--cheat MODULE:ADDR=HEX|MODULE:ADDR|=HEX,...] [--modem line|dial=HOST:PORT[,listen=PORT]]\n"
-                                 "             [--other-disc CUE --from-other PATH=OTHERPATH,... --track-from-other N,...]\n");
+                                 "             [--cheat MODULE:ADDR=HEX|MODULE:ADDR|=HEX,...] [--modem line|session|netband=SPEC|dial=HOST:PORT[,listen=PORT]]\n"
+                                 "             [--session URL [--steer SCRIPT] [--steer-again PROGRAM:SCRIPT [--steer-again-saved SAVE:SCRIPT]]] [--line-in FILE] [--sync N [--sync-pads N] [--sync-delay FRAMES] [--sync-ahead FRAMES]] [--session-lag MS] [--other-disc CUE --from-other PATH=OTHERPATH,... --track-from-other N,...]\n");
             return 2;
         }
     }
@@ -215,6 +257,18 @@ int main(int argc, char** argv) {
             for (auto& arg : cfg.launch_args) std::fprintf(f, "%s\n", arg.c_str());
             std::fclose(f);
         }
+    }
+    if (cfg.sync >= 0) {
+        if (cfg.session.empty() || !cfg.modem.empty() || cfg.realtime || cfg.sync_pads < 0 || cfg.sync_pads > 12 ||
+            cfg.sync_delay < -1 || cfg.sync_delay > 30 || cfg.sync_ahead < 0 || cfg.sync_ahead > 15 ||
+            (cfg.sync_delay == 0 && !cfg.sync_ahead) || cfg.session_lag < 0) {
+            std::fprintf(stderr, "saturn: --sync needs --session, and neither --modem nor --realtime; --sync-pads is 0 "
+                                 "to 12, --sync-delay 0 to 30, 0 only with --sync-ahead, and --sync-ahead 0 to 15\n");
+            return 2;
+        }
+        if (cfg.clock < 0) cfg.clock = kSyncClock;
+        // A player joining a room plays with the creator's saves, and its own stay as they are.
+        if (cfg.session.find("/api/rooms/new") == std::string::npos) cfg.save = "-";
     }
     return saturn_main(cfg);
 }

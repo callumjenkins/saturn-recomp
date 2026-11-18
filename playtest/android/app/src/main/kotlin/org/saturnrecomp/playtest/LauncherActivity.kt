@@ -4,6 +4,7 @@ import android.app.Activity
 import android.app.ActivityManager
 import android.app.AlertDialog
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.graphics.BitmapFactory
 import android.graphics.Typeface
 import android.net.Uri
@@ -51,10 +52,13 @@ class LauncherActivity : Activity() {
     private lateinit var token: EditText
     private lateinit var who: Spinner
     private lateinit var playButton: Button
+    private lateinit var roomCode: EditText
+    private lateinit var gameCode: EditText
     private lateinit var status: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (playFromAdb()) return
         info = JSONObject(assets.open("playtest.json").use { it.readBytes().decodeToString() })
         manifest = JSONObject(assets.open("disc.json").use { it.readBytes().decodeToString() })
         home = File(filesDir, "saturn-recomp/${info.getString("product")}").apply { mkdirs() }
@@ -121,6 +125,30 @@ class LauncherActivity : Activity() {
             column.addView(this)
         }
         playButton = button("Play") { play() }
+        if (info.has("classic")) {
+            text("Online, against one other tester", bold = true).setPadding(0, pad, 0, 0)
+            button("Make a room") { playOnline(null) }
+            roomCode = EditText(this).apply {
+                hint = "A room's code"
+                inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
+                column.addView(this)
+            }
+            button("Join that room") {
+                val code = Sessions.roomCode(roomCode.text.toString())
+                if (code == null) say("A room's code is the four letters its maker's screen shows.") else playOnline(code)
+            }
+        }
+        text("Online, one game with other testers", bold = true).setPadding(0, pad, 0, 0)
+        button("Make a room") { playOnline(null, synced = true) }
+        gameCode = EditText(this).apply {
+            hint = "A room's code"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
+            column.addView(this)
+        }
+        for ((label, watch) in listOf("Join that game" to false, "Watch that game" to true)) button(label) {
+            val code = Sessions.roomCode(gameCode.text.toString())
+            if (code == null) say("A room's code is the four letters its maker's screen shows.") else playOnline(code, synced = true, watch = watch)
+        }
         button("Save files…") { chooseSession() }
         button("My sessions") { openSessions() }
         status = text().apply { setPadding(0, pad, 0, 0) }
@@ -274,7 +302,18 @@ class LauncherActivity : Activity() {
         startActivityForResult(Intent(this, SavesActivity::class.java), SAVES)
     }
 
-    private fun play(from: File? = null, useDump: Boolean = true, branch: Sessions.Branch? = null, save: String? = null, parent: JSONObject? = null) {
+    /**
+     * Plays through a playtest room, a new one or the room `code`: the game's own online call, or `synced`, one game for
+     * everyone in it, which this player may only `watch`.
+     */
+    private fun playOnline(code: String?, synced: Boolean = false, watch: Boolean = false) {
+        settings.put("token", token.text.toString().trim())
+        if (credential().isEmpty()) return say("Playing online needs a tester: pick who's playing.")
+        play(online = if (synced) Sessions.syncArgs(info, code, watch) else Sessions.classicArgs(info, code))
+    }
+
+    private fun play(from: File? = null, useDump: Boolean = true, branch: Sessions.Branch? = null, save: String? = null, parent: JSONObject? = null,
+                     online: List<String> = emptyList()) {
         val cue = settings.optString("cue")
         if (cue.isEmpty()) {
             say("Choose your disc first.")
@@ -284,9 +323,9 @@ class LauncherActivity : Activity() {
         saveSettings()
         val code = credential()
         val otherCue = settings.optString("other_cue")
-        val more = other?.takeIf { settings.optBoolean("other_on") && otherCue.isNotEmpty() }?.let {
+        val more = (other?.takeIf { settings.optBoolean("other_on") && otherCue.isNotEmpty() }?.let {
             listOf("--other-disc", otherCue, "--from-other", it.getString("files"), "--track-from-other", it.getString("tracks"))
-        } ?: emptyList()
+        } ?: emptyList()) + online
         val (session, args) = Sessions.start(home, info, File(cue), send = code.isNotEmpty(), from = from, useDump = useDump, branch = branch, save = save, parent = parent, more = more)
         val record = Sessions.read(session)
         say((when {
@@ -414,6 +453,22 @@ class LauncherActivity : Activity() {
             ?: "Needs your own copy of that disc"
     }
 
+    /**
+     * In a debuggable build, the extra `args` names a file under the app's files, holding the runtime's arguments one a
+     * line, and the game plays with them at once: a maintainer's run over adb (saturnrecomp.android). The extra `tester`
+     * is the tester id a --session joins as.
+     */
+    private fun playFromAdb(): Boolean {
+        val listed = intent.getStringExtra(ADB_ARGS) ?: return false
+        if (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE == 0) return false
+        val args = File(filesDir, listed).readLines().toTypedArray()
+        val game = Intent(this, GameActivity::class.java).putExtra(GameActivity.ARGS, args)
+        intent.getStringExtra(ADB_TESTER)?.let { game.putExtra(GameActivity.TOKEN, "tester:$it") }
+        startActivity(game)
+        finish()
+        return true
+    }
+
     private fun saveSettings() = File(home, "launcher.json").writeText(settings.toString(1))
 
     private fun say(s: String) = runOnUiThread { status.text = s }
@@ -438,6 +493,8 @@ class LauncherActivity : Activity() {
     }
 
     companion object {
+        private const val ADB_ARGS = "args"
+        private const val ADB_TESTER = "tester"
         private const val PICK = 1
         private const val SAVES = 2
         private const val PICK_OTHER = 3

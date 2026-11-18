@@ -31,16 +31,22 @@ export const requireMaintainer = async (env: Env, request: Request, allowed: rea
 export const requireTester = async (env: Env, request: Request): Promise<Tester> => {
 	const id = request.headers.get('x-playtest-tester')
 	if (id && !request.headers.has('authorization')) {
-		const tester = await env.DB.prepare('SELECT id, name FROM testers WHERE id = ? AND revoked_at IS NULL').bind(id).first<Tester>()
+		const tester = await testerById(env, id)
 		if (!tester) throw new HttpError(403, 'unknown or revoked tester')
 		return tester
 	}
-	const tester = await env.DB.prepare('SELECT id, name FROM testers WHERE token_hash = ? AND revoked_at IS NULL')
-		.bind(await hashToken(bearer(request)))
-		.first<Tester>()
+	const tester = await testerByToken(env, bearer(request))
 	if (!tester) throw new HttpError(403, 'unknown or revoked tester token')
 	return tester
 }
+
+export const testerById = (env: Env, id: string) =>
+	env.DB.prepare('SELECT id, name FROM testers WHERE id = ? AND revoked_at IS NULL').bind(id).first<Tester>()
+
+export const testerByToken = async (env: Env, token: string) =>
+	env.DB.prepare('SELECT id, name FROM testers WHERE token_hash = ? AND revoked_at IS NULL')
+		.bind(await hashToken(token))
+		.first<Tester>()
 
 const bearer = (request: Request) => {
 	const header = request.headers.get('authorization') ?? ''

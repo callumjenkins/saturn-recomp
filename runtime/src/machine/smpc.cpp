@@ -112,6 +112,16 @@ void smpc_input_script(const std::string& given) {
     for (auto& s : g_script) g_script_names[s.pad] = true;
 }
 
+void smpc_steer(const std::vector<PadStep>& steps, uint64_t from) {
+    for (PadStep step : steps) {
+        step.vblank += from;
+        auto at = std::upper_bound(g_script.begin() + (std::ptrdiff_t)g_script_pos, g_script.end(), step.vblank,
+                                   [](uint64_t v, const PadStep& x) { return v < x.vblank; });
+        g_script.insert(at, step);
+        g_script_names[step.pad] = true;
+    }
+}
+
 bool smpc_press(const std::string& spec, std::string& error) {
     PadStep step;
     if (!parse_press(sat_vblanks(), spec, step, error)) return false;
@@ -180,20 +190,22 @@ static void sample_host() {
     g_host_vblank = sat_vblanks();
     for (int p = 0; p < kPads && p < kHostSlots; ++p) {
         uint16_t h = host_pad(p);
-        if (h != g_host_pressed[p]) record_host(g_host_vblank, p, h);
+        if (h != g_host_pressed[p]) record_host(g_host_vblank, p, h | g_script_pressed[p]);
         g_host_pressed[p] = h;
     }
 }
 
-// pad p now, active low: byte 1 RIGHT LEFT DOWN UP START A C B, byte 2 R X Y Z L 1 1 1
-static uint16_t pad_now(int p) {
+// The script's steps due by now. A --sync game records the room's pads instead (smpc_record_sync).
+static void advance_script() {
     while (g_script_pos < g_script.size() && g_script[g_script_pos].vblank <= sat_vblanks() &&
            !(g_cfg.resume && g_script[g_script_pos].vblank >= g_cfg.resume)) {
         const PadStep& s = g_script[g_script_pos];
         g_script_pressed[s.pad] = s.pressed;
-        if (g_cfg.resume) record_host(s.vblank, s.pad, s.pressed);
-        else if (s.pad) sat_note("pad %d: %04X", s.pad + 1, s.pressed);
-        else sat_note("pad: %04X", s.pressed);
+        // Steered presses are recorded too, with the host's buttons held alongside them.
+        // A replay plays the file alone, and each of its steps sets the whole pad.
+        if (g_cfg.sync < 0 && (g_cfg.resume || host_drives())) record_host(s.vblank, s.pad, s.pressed | g_host_pressed[s.pad]);
+        if (!g_cfg.resume && s.pad) sat_note("pad %d: %04X", s.pad + 1, s.pressed);
+        else if (!g_cfg.resume) sat_note("pad: %04X", s.pressed);
         ++g_script_pos;
     }
     if (host_drives() && g_cfg.resume && !g_handed_over) {
@@ -202,6 +214,39 @@ static uint16_t pad_now(int p) {
         for (int q = 0; q < kPads; ++q)
             if (g_script_pressed[q]) record_host(sat_vblanks(), q, g_script_pressed[q] = 0);
     }
+}
+
+void smpc_local_pads(uint16_t* out, int count) {
+    advance_script();
+    for (int q = 0; q < count && q < kPads; ++q)
+        out[q] = g_script_pressed[q] | (host_drives() && q < kHostSlots ? host_pad(q) : 0);
+}
+
+// A --sync game's pads, the room's, taken once a VBlank as the host's are.
+static uint16_t g_sync_pressed[kPads];
+static uint64_t g_sync_vblank = ~0ull;
+
+static uint16_t sync_pad(int p) {
+    if (g_sync_vblank != sat_vblanks()) {
+        g_sync_vblank = sat_vblanks();
+        for (int q = 0; q < kPads; ++q) g_sync_pressed[q] = online_sync_pad(q);
+    }
+    return g_sync_pressed[p];
+}
+
+// Every pad a player owns is recorded at the first frame, so a replay of the file has the same pads plugged in.
+void smpc_record_sync(uint64_t vblank, const uint16_t* pads) {
+    static uint16_t recorded[kPads];
+    static bool first = true;
+    for (int q = 0; q < kPads; ++q)
+        if (pads[q] != recorded[q] || (first && online_sync_plugged(q))) record_host(vblank, q, recorded[q] = pads[q]);
+    first = false;
+}
+
+// pad p now, active low: byte 1 RIGHT LEFT DOWN UP START A C B, byte 2 R X Y Z L 1 1 1
+static uint16_t pad_now(int p) {
+    if (online_sync_playing()) return (uint16_t)~sync_pad(p) | 0x0007;
+    advance_script();
     sample_host();
     return (uint16_t)~(g_script_pressed[p] | g_host_pressed[p]) | 0x0007;
 }
@@ -210,7 +255,10 @@ static uint16_t pad_now(int p) {
 static int first_on(int port) { return port == 0 ? 0 : g_cfg.multitap >= 1 ? 6 : 1; }
 
 // port 2's own pad, when it has no multitap
-static bool plugged(int p) { return g_script_names[p] || (host_drives() && p < kHostSlots && host_pad_connected(p)); }
+static bool plugged(int p) {
+    if (g_cfg.sync >= 0) return online_sync_plugged(p);
+    return g_script_names[p] || (host_drives() && p < kHostSlots && host_pad_connected(p));
+}
 
 static uint16_t pad1_now() { return pad_now(0); }
 
@@ -365,5 +413,6 @@ void smpc_state(State& s) {
         g_script_names[p] |= named[p];
         (host_drives() ? g_host_pressed : g_script_pressed)[p] = held[p];
     }
+    g_script_pos = 0;
     while (g_script_pos < g_script.size() && g_script[g_script_pos].vblank < sat_vblanks()) ++g_script_pos;
 }

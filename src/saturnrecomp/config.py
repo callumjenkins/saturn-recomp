@@ -76,6 +76,17 @@
     tracks = "2"                    # saturn's --track-from-other
     cue = "iso-jp/GAME.cue"         # this machine's copy, which replays use in place of the tester's
 
+    [online.classic]                # optional: the game's own online call, through a playtest room (--modem session)
+    boot = ["1500:UP", "1530:"]     # from power-on to the program that makes the call
+    program = "XS"                  # that program, which starts again after each match
+    starts = 1559                   # the VBlank it first starts at
+    wait = ["741:A", "747:"]        # from each of its starts to waiting for a call ...
+    dial = ["741:A", "747:"]        # ... and to dialling one
+    saved = "XBAND____01"           # optional: a save the program finds after a match, and comes back another way ...
+    saved_wait = ["2700:A", "2706:"]   # ... to wait again from, after it ...
+    saved_dial = ["2700:A", "2706:"]   # ... and to dial again
+    netband_code = "123"            # optional: the 3 digits a real Saturn dials to find the game through dreampipe.net
+
     [checkpoint]                    # optional: a start a session's Continue can rebuild when its dump won't load
     keep = [["stage_2", 2], ["score", 8], ["objects+0x5E", 1]]   # the first's changes start one
     accept = [[0x0001, 0x0006], [0x0100, 0x0108]]   # ranges of the first's values, big-endian, it can be rebuilt from
@@ -104,6 +115,9 @@ import os
 import re
 import tomllib
 from dataclasses import dataclass, field
+from typing import Literal, get_args
+
+ClassicRole = Literal["wait", "dial"]   # who waits for the call, and who dials it
 
 
 @dataclass
@@ -316,6 +330,48 @@ class TaskSwitch:
 
 
 @dataclass
+class Classic:
+    """[online.classic]: the presses that take a player to the game's own call, as saturn's --steer plays them."""
+    boot: list[str]
+    program: str
+    starts: int
+    wait: list[str]
+    dial: list[str]
+    saved: str = ""
+    saved_wait: list[str] = field(default_factory=list)
+    saved_dial: list[str] = field(default_factory=list)
+    netband_code: str = ""
+
+    def first(self, role: ClassicRole) -> list[str]:
+        """From power-on to the call."""
+        return self.boot + later(getattr(self, role), self.starts)
+
+    def steer(self, role: ClassicRole) -> list[str]:
+        """saturn's arguments that steer a player to the call and to each rematch's."""
+        found = ["--steer", ",".join(self.first(role)), "--steer-again", f"{self.program}:{','.join(getattr(self, role))}"]
+        if self.saved:
+            found += ["--steer-again-saved", f"{self.saved}:{','.join(getattr(self, f'saved_{role}'))}"]
+        return found
+
+    def steers(self) -> dict[ClassicRole, list[str]]:
+        """Each role's steer, as a launcher picks from them."""
+        return {role: self.steer(role) for role in get_args(ClassicRole)}
+
+    def netband(self, target: str) -> list[str]:
+        """saturn's arguments for a call to a real Saturn through the NetBand tunnel: "wait" waits for one, "match"
+        finds a game waiting through the match service, and an IPv4 address is called directly."""
+        if target == "wait":
+            spec, role = "wait" + (f":{self.netband_code}" if self.netband_code else ""), "wait"
+        elif target == "match":
+            if not self.netband_code:
+                raise SystemExit("[online.classic] has no netband_code, so the match service cannot find the game")
+            spec, role = f"dial:{self.netband_code}", "dial"
+        else:
+            spec, role = f"dial:{target}", "dial"
+        return ["--modem", f"netband={spec}", "--steer", ",".join(self.first(role))]
+
+
+@dataclass
 class Game:
     name: str
     root: str
@@ -333,6 +389,7 @@ class Game:
     executable: str = ""
     replaces: dict[str, dict[int, str]] = field(default_factory=dict)   # {module: {entry: symbol}}
     achievements: list[Achievement] = field(default_factory=list)
+    classic: Classic | None = None
 
     @property
     def saturn(self):
@@ -351,6 +408,11 @@ class Game:
         with open(self.seeds_file, "w") as f:
             json.dump({k: [f"{x:08X}" for x in v] for k, v in seeds.items()}, f, indent=1)
             f.write("\n")
+
+
+def later(presses: list[str], by: int) -> list[str]:
+    """`presses`, saturn's VBLANK:BUTTONS, `by` VBlanks later."""
+    return [f"{int(v) + by}:{b}" for v, b in (p.split(":", 1) for p in presses)]
 
 
 def load(path):
@@ -415,7 +477,8 @@ def load(path):
                 os.path.join(root, game.get("seeds", "seeds.json")), modules, symbols, tasks, hooks,
                 list(game.get("cmake", [])), playtest, _checkpoint(t["checkpoint"], symbols) if "checkpoint" in t else None,
                 switches, inventory, replaces=replaces,
-                achievements=_achievements(t.get("achievement", []), symbols, path))
+                achievements=_achievements(t.get("achievement", []), symbols, path),
+                classic=_classic(t["online"]["classic"]) if "classic" in t.get("online", {}) else None)
 
 
 def _achievement(a: dict, symbols: dict[str, int], path: str) -> Achievement:
@@ -458,6 +521,14 @@ def _rc_address(addr: int) -> int | None:
     if 0x06000000 <= a < 0x08000000:           # work RAM high repeats every MiB
         return 0x100000 + (a & 0xFFFFF)
     return None
+
+
+def _classic(c: dict) -> Classic:
+    if "saved" in c and not ("saved_wait" in c and "saved_dial" in c):
+        raise SystemExit("[online.classic] saved needs saved_wait and saved_dial, the ways back with it")
+    return Classic(list(c["boot"]), c["program"], int(c["starts"]), list(c["wait"]), list(c["dial"]),
+                   str(c.get("saved", "")), list(c.get("saved_wait", [])), list(c.get("saved_dial", [])),
+                   str(c.get("netband_code", "")))
 
 
 def _register(name):

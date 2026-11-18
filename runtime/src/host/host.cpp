@@ -32,6 +32,7 @@
 #include "video.h"
 #include "host.h"
 #include "host_sdl.h"
+#include "online_card.h"
 #include "pace.h"
 #include "pad_slots.h"
 #include "settings.h"
@@ -292,6 +293,10 @@ static void read_pads() {
         if ((b[s] & (B_UP | B_DOWN)) == (B_UP | B_DOWN)) b[s] &= (uint16_t)~(B_UP | B_DOWN);
         g_held_over[s] &= b[s];
         g_buttons[s] = b[s] & (uint16_t)~g_held_over[s];
+    }
+    if (online_card_takes_start(g_buttons[0])) {
+        g_held_over[0] |= B_START;
+        g_buttons[0] &= (uint16_t)~B_START;
     }
 }
 
@@ -1056,6 +1061,7 @@ static void draw() {
     SDL_SetRenderDrawBlendMode(g_ren, SDL_BLENDMODE_BLEND);
     if (g_tex) SDL_RenderTexture(g_ren, g_tex, nullptr, &g_dst);
     if (sat_resuming()) draw_catching_up();
+    else if (!g_menu_open) online_card_draw(g_out_w, display_scale());
     if (g_menu_open) draw_menu();
     else {
         if (touch_shown()) draw_touch_pad();
@@ -1127,6 +1133,8 @@ void host_present(const Frame& f) {
     if (!g_win) return;
     tasks_on_thread_stack([](void* f) { present(*static_cast<const Frame*>(f)); }, const_cast<Frame*>(&f));
 }
+
+void host_pace_hold(uint64_t ns) { g_base += std::chrono::nanoseconds(ns); }
 
 void host_pace(uint64_t now) {
     if (!g_win || !g_paced) return;

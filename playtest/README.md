@@ -39,8 +39,15 @@ npx wrangler r2 bucket create saturn-playtest
 npx wrangler d1 migrations apply saturn-playtest --remote
 npx wrangler secret put ADMIN_TOKEN           # your CLI's token
 npx wrangler secret put CI_TOKEN              # the release workflow's token
+npx wrangler secret put TURN_KEY_ID           # a Cloudflare TURN key (Realtime > TURN), for rooms' relays
+npx wrangler secret put TURN_KEY_API_TOKEN    # ... and its API token
 npx wrangler deploy
 ```
+
+Without the TURN key, rooms give their peers Cloudflare's STUN alone, and two peers that cannot reach each
+other directly, such as two behind carrier-grade NAT, do not connect. `GET /api/health` says whether the key
+works, with no token: `{"turn":"ok"}`, or `{"turn":"stun-only","status":401}` with the status Cloudflare refused it
+with (`null` with no key set). It checks at most once a minute and never returns the credentials it mints.
 
 In the game's repository:
 
@@ -59,6 +66,44 @@ In the game's repository:
    gh secret set PLAYTEST_ANDROID_KEYSTORE_PASSWORD
    ```
 5. Run `python -m saturnrecomp.playtest game.toml register`.
+
+## Rooms
+
+Online play meets in rooms (`worker/src/rooms.ts`, one Durable Object a room). A runtime started with
+`--session wss://WORKER/api/rooms/new` makes one and notes its four-letter code; another joins with
+`--session wss://WORKER/api/rooms/CODE`. Each says which tester it is through `SATURN_PLAYTEST_TOKEN` or
+`SATURN_PLAYTEST_TESTER`. The room refuses a peer whose disc, game build, runtime build or mode differs from
+the first peer's, and passes the WebRTC offers and candidates by which every pair of peers connects.
+
+A game whose `game.toml` has `[online.classic]` plays its own NetLink battle through a room (`config.py`
+documents the table). Both launchers offer "Make a room" and "Join that room". Whoever makes the room waits
+for the call and whoever joins dials it. `--steer` presses each of them through the menus to the call, over
+the player's own pads, and `--modem session` puts the other peer on the modem's line. A classic room takes
+two peers. Until a call connects, the window shows the room's code and the other tester's name. Each time
+the game comes back to its client after a match, Start offers the rematch (`--steer-again`). The session
+keeps what the line heard as `line.txt`, so `replay` plays a classic match again without the room
+(`--line-in`). A game that stops polling its session for 10 seconds, paused in the background or behind its
+menu, leaves the room, and the other peer's modem hears NO CARRIER.
+
+A game that quits says bye to the room, and the others hear at once that it left. A peer whose socket drops without
+one, as a phone's does when it changes networks, keeps its place for 15 seconds: its session joins again as itself
+and offers each peer a new connection, since libdatachannel cannot restart ICE. Only once the 15 seconds pass do the
+others hear it left. A synced game waits through it, showing "Waiting for NAME".
+
+`tests/netlink.py --room` in the game runs a match and a rematch through a room on this machine
+(`saturnrecomp.playtest.local_worker`, under `wrangler dev`), then replays each side from what it recorded.
+
+Any game can also be played by everyone in a room as one game, with every player's pads in lockstep
+(`runtime/src/machine/online_sync.cpp`, `--sync`). Both launchers offer it as "Online, one game with other
+testers". Whoever makes the room sees its code and who has joined on the window's card, and starts the game with
+Start. Every copy starts from power-on with the maker's saves and the same clock, and only the maker's copy writes
+them back. "Watch that game" joins with no pad; the game still waits for a watcher's connection as for a player's. The game's own `tests/sync.py` checks it.
+
+A classic game can also play outside the rooms, against a real Saturn on SegaRPGFan's NetBand tunnel:
+`--modem netband=wait`, `wait:CODE`, `dial:CODE` or `dial:IP` (`runtime/src/net/netband.h`). `CODE` is the
+game's three digits on the dreampipe.net match service, `netband_code` in `[online.classic]`.
+`SATURN_NETBAND_MATCH` and `SATURN_NETBAND_STUN` point it at other servers for a test. Its `line.txt` replays
+the same way.
 
 ## The loop
 

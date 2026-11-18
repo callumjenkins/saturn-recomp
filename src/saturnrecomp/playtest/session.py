@@ -22,6 +22,25 @@ CHECKPOINT = 600
 SEND_AFTER_CHECKPOINT = 15              # seconds for the runtime to finish writing the coverage
 # saturn.exe is a console program, so Windows would open a console window behind the game's
 NO_CONSOLE = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+# Every synced player's clock at power-on, as saturn --sync sets it, so a replay starts the same machine.
+SYNC_CLOCK = "2000-01-01T00:00:00"
+
+
+def classic_args(info, code=None):
+    """saturn's arguments for the game's own online call through a playtest room: a new room, or the room `code`.
+    Whoever makes the room waits for the call, and whoever joins it dials."""
+    url = "ws" + info["endpoint"].removeprefix("http")   # https:// is wss://, http:// ws://
+    role = "dial" if code else "wait"
+    return ["--modem", "session", "--session", f"{url}/api/rooms/{code or 'new'}", *info["classic"][role]]
+
+
+def sync_args(info, players=None, code=None, watch=False):
+    """saturn's arguments for one game played by everyone in a playtest room: a new room, or the room `code`. A new
+    room's game starts when its maker presses Start, or once `players` are in. Everyone shares one clock and plays
+    with the maker's saves, which only the maker's copy writes back. A copy that will `watch` takes no pads."""
+    url = "ws" + info["endpoint"].removeprefix("http")
+    return ["--session", f"{url}/api/rooms/{code or 'new'}", "--sync", str(0 if code else players or 0),
+            "--clock", SYNC_CLOCK, *(["--sync-pads", "0"] if watch else [])]
 
 
 def exit_reason(log_path, code):
@@ -41,13 +60,15 @@ def play(saturn, cue, info, endpoint=None, token=None, args=(), on_sent=None):
     """Plays a session to its end and sends it; its directory.
 
     `info` gives the product and the build. Without a token the session is kept but not sent.
-    `on_sent(ok, ended)` is called from another thread after each upload.
+    `on_sent(ok, ended)` is called from another thread after each upload. The token also lets the run into a
+    playtest room, when `args` name one.
     """
     started = datetime.datetime.now().replace(microsecond=0)
     sessions = os.path.join(game_dir(info["product"]), "sessions")
     out = os.path.join(sessions, f"{started:%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:8]}")
     os.makedirs(out)
-    clock = started.isoformat()
+    # A synced game names its own clock, which every player shares.
+    clock = args[list(args).index("--clock") + 1] if "--clock" in args else started.isoformat()
     open(os.path.join(out, "clock.txt"), "w").write(clock + "\n")
     save = os.path.join(game_dir(info["product"]), "backup.bin")
     if os.path.exists(save):
@@ -62,7 +83,8 @@ def play(saturn, cue, info, endpoint=None, token=None, args=(), on_sent=None):
                "--coverage", os.path.join(out, "coverage.txt"), "--checkpoint", str(CHECKPOINT), *args]
     log_path = os.path.join(out, "log.txt")
     with open(log_path, "w") as log:
-        process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, creationflags=NO_CONSOLE)
+        process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, creationflags=NO_CONSOLE,
+                                   env={**os.environ, "SATURN_PLAYTEST_TOKEN": token or ""})
     stop = threading.Event()
     sender = None
     if token:
@@ -85,6 +107,12 @@ def play(saturn, cue, info, endpoint=None, token=None, args=(), on_sent=None):
         if on_sent:
             on_sent(ok, True)
     return out
+
+
+def room_code(typed):
+    """The room code a player typed, in capitals, or None when it is not the four letters a room's maker sees."""
+    code = typed.strip().upper()
+    return code if len(code) == 4 and code.isalpha() and code.isascii() else None
 
 
 def _send_while_playing(endpoint, token, out, stop, on_sent):

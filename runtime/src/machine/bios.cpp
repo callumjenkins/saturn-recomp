@@ -20,11 +20,14 @@
 // for what is and is not implemented.
 #include "saturn.h"
 #include "state.h"
+#include <algorithm>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <map>
 #include <string>
 #include <vector>
@@ -59,7 +62,8 @@ static bool load_file(const char* path, uint32_t addr, uint32_t* size_out) {
     return true;
 }
 
-void bios_boot() {
+// A reboot keeps the backup memory, which is battery-backed on the hardware.
+static void boot(bool power_on) {
     // IP.BIN: the first 16 sectors of the data track
     uint8_t ip[0x8000], raw[2352];
     for (int i = 0; i < 16; ++i) {
@@ -73,7 +77,7 @@ void bios_boot() {
     std::string areas(reinterpret_cast<const char*>(ip + 0x40), 10);   // area symbols: J T U B K A E L
     g_pal = areas.find('E') != std::string::npos && areas.find_first_of("JTUBKAL") == std::string::npos;
     smpc_set_area(areas[0]);
-    bios_select_save(ip);
+    if (power_on) bios_select_save(ip);
     sh2_mem_write(0x06002000u, ip, ip_size && ip_size <= sizeof ip ? ip_size : sizeof ip);
     // The BIOS also copies the header to 0x06000C00, and its sizes and addresses to 0x060002A0 (below).
     // A program's file system reads 0x06000CCC for a directory a previous program left there.
@@ -105,6 +109,10 @@ void bios_boot() {
     c.r[15] = mstack ? mstack : 0x06002000u;
     (void)sstack;
 }
+
+void bios_boot() { boot(true); }
+
+void bios_reboot() { boot(false); }
 
 // ---- the services ---------------------------------------------------------------------
 static const char* slot_name(uint32_t p) {
@@ -258,7 +266,7 @@ bool bios_call(SH2Context& c, uint32_t addr) {
         cd_init();
         onchip_reset(0);
         video_reboot();
-        bios_boot();
+        bios_reboot();
         st32(0x06000210u, hand_off[0]);
         st32(0x06000214u, hand_off[1]);
         st32(0x06000290u, 3);
@@ -312,6 +320,8 @@ static std::string ip_field(const uint8_t* ip, int at, int len) {
     return s;
 }
 
+std::string bios_product(const uint8_t* ip) { return ip_field(ip, 0x20, 10) + "_" + ip_field(ip, 0x2A, 6); }
+
 // DATA/saturn-recomp/PRODUCT_VERSION/backup.bin
 static std::string default_save() {
     std::string dir = sat_data_dir();
@@ -341,25 +351,73 @@ static std::string gstr(uint32_t a, int max) {
     return s;
 }
 
+// Saves in the save file's form, a header then the data for each, into the backup memory. `from` names where they
+// came from, for the note when one is damaged.
+static void bup_read(const std::vector<uint8_t>& bytes, const std::string& from) {
+    size_t at = 0;
+    while (bytes.size() - at >= 32) {
+        const uint8_t* h = bytes.data() + at;
+        const char* name = reinterpret_cast<const char*>(h);
+        const char* comment = name + 12;
+        uint32_t date, size;
+        std::memcpy(&date, h + 24, 4);
+        std::memcpy(&size, h + 28, 4);
+        at += 32;
+        if (size > kBupSize || size > bytes.size() - at) {
+            sat_note("backup memory: %s is damaged after %zu saves; the rest are left out", from.c_str(), g_bup.size());
+            return;
+        }
+        g_bup[std::string(name, strnlen(name, 12))] =
+            BupFile{std::string(comment, strnlen(comment, 11)), h[23], date,
+                    std::vector<uint8_t>(bytes.begin() + at, bytes.begin() + at + size)};
+        at += size;
+    }
+}
+
+// The backup memory in the save file's form.
+static std::vector<uint8_t> bup_bytes() {
+    std::vector<uint8_t> out;
+    for (auto& [name, b] : g_bup) {
+        uint8_t h[32] = {};
+        std::memcpy(h, name.data(), std::min<size_t>(name.size(), 12));
+        std::memcpy(h + 12, b.comment.data(), std::min<size_t>(b.comment.size(), 11));
+        h[23] = b.language;
+        const uint32_t size = (uint32_t)b.data.size();
+        std::memcpy(h + 24, &b.date, 4);
+        std::memcpy(h + 28, &size, 4);
+        out.insert(out.end(), h, h + 32);
+        out.insert(out.end(), b.data.begin(), b.data.end());
+    }
+    return out;
+}
+
 static void bup_load() {
     if (g_bup_loaded) return;
     g_bup_loaded = true;
     if (g_bup_path.empty()) return;
-    FILE* f = std::fopen(g_bup_path.c_str(), "rb");
-    if (!f) return;
-    char name[12], comment[11];
-    uint8_t lang;
-    uint32_t date, size;
-    while (std::fread(name, 1, 12, f) == 12 && std::fread(comment, 1, 11, f) == 11 &&
-           std::fread(&lang, 1, 1, f) == 1 && std::fread(&date, 4, 1, f) == 1 && std::fread(&size, 4, 1, f) == 1) {
-        BupFile b{std::string(comment, strnlen(comment, 11)), lang, date, std::vector<uint8_t>(size)};
-        if (size > kBupSize || (size && std::fread(b.data.data(), 1, size, f) != size)) {
-            sat_note("backup memory: %s is damaged after %zu saves; the rest are left out", g_bup_path.c_str(), g_bup.size());
-            break;
-        }
-        g_bup[std::string(name, strnlen(name, 12))] = b;
-    }
-    std::fclose(f);
+    std::ifstream f(g_bup_path, std::ios::binary);
+    if (f) bup_read(std::vector<uint8_t>(std::istreambuf_iterator<char>(f), {}), g_bup_path);
+}
+
+std::vector<uint8_t> bios_backup() {
+    bup_load();
+    return bup_bytes();
+}
+
+bool bios_backup_install(const std::vector<uint8_t>& bytes, const std::string& from) {
+    if (g_bup_loaded) return false;
+    g_bup_loaded = true;
+    g_bup_changed = false;
+    g_bup_path.clear();
+    bup_read(bytes, from);
+    sat_note("backup memory: %zu %s from %s, kept for this run alone", g_bup.size(), g_bup.size() == 1 ? "save" : "saves",
+             from.c_str());
+    return true;
+}
+
+bool bios_save_held(const std::string& name) {
+    bup_load();
+    return g_bup.count(name) != 0;
 }
 
 // Written beside the file and renamed over it, so a run that ends partway through leaves the last whole one.
@@ -372,15 +430,8 @@ void bios_save() {
     std::string tmp = g_bup_path + ".new";
     FILE* f = std::fopen(tmp.c_str(), "wb");
     if (!f) { sat_note("backup memory: cannot write %s", tmp.c_str()); return; }
-    for (auto& [name, b] : g_bup) {
-        char n[12] = {}, cm[11] = {};
-        std::memcpy(n, name.data(), name.size() < 12 ? name.size() : 12);
-        std::memcpy(cm, b.comment.data(), b.comment.size() < 11 ? b.comment.size() : 11);
-        uint32_t size = (uint32_t)b.data.size();
-        std::fwrite(n, 1, 12, f); std::fwrite(cm, 1, 11, f); std::fwrite(&b.language, 1, 1, f);
-        std::fwrite(&b.date, 4, 1, f); std::fwrite(&size, 4, 1, f);
-        std::fwrite(b.data.data(), 1, size, f);
-    }
+    const std::vector<uint8_t> bytes = bup_bytes();
+    std::fwrite(bytes.data(), 1, bytes.size(), f);
     bool ok = !std::ferror(f);
     ok = std::fclose(f) == 0 && ok;
     if (ok) fs::rename(tmp, g_bup_path, ec);

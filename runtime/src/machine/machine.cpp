@@ -198,6 +198,7 @@ static void writes_due() {
 
 // A dump is taken after its VBlank's writes, so a run loaded from one starts after them.
 static void writes_skip_past() {
+    g_write_pos = 0;
     while (g_write_pos < g_writes.size() && g_writes[g_write_pos].vblank <= sat_vblanks()) ++g_write_pos;
 }
 
@@ -258,7 +259,7 @@ static void parse_keep(const std::string& spec) {
 static void progress_due() {
     static uint64_t vblank = ~0ull;
     static std::vector<uint8_t> first;
-    if (g_cfg.progress.empty() || g_keep.empty() || sat_vblanks() == vblank) return;
+    if (g_cfg.progress.empty() || g_keep.empty() || sat_vblanks() == vblank || online_sync_again()) return;
     vblank = sat_vblanks();
     std::vector<uint8_t> now(g_keep[0].n);
     for (uint32_t k = 0; k < now.size(); ++k) now[k] = (uint8_t)ld8(g_keep[0].addr + k);
@@ -536,6 +537,7 @@ void master_poll_devices() {
     checkpoint_due();
     progress_due();
     state_poll();
+    online_poll();
     if (g_slave_on && !g_slave_idle) to_slave();
     if (g_cfg.stop_vblanks && sat_vblanks() >= g_cfg.stop_vblanks) sat_stop("VBlank limit");
 }
@@ -627,6 +629,7 @@ void sh2_program_start(SH2Context& c, uint32_t addr) {
     ++g_starts;
     sat_note("program start %d: %s at %08X (r4 %08X, r5 %08X)", g_starts, m ? m->name : "(same module)",
              addr, c.r[4], c.r[5]);
+    if (m) online_program_start(m->name);
     throw ProgramStart{addr};
 }
 
@@ -641,6 +644,7 @@ int saturn_main(const SaturnConfig& cfg) {
         g_sh2_watch_report = watch_report;
     }
     smpc_input_script(cfg.input);
+    if (!cfg.steer.empty()) smpc_steer(smpc_parse_script(cfg.steer), 0);
     parse_writes(cfg.writes);
     parse_cheats(cfg.cheats);
     parse_keep(cfg.progress_keep);
@@ -654,7 +658,11 @@ int saturn_main(const SaturnConfig& cfg) {
     }
     if (!cfg.modem.empty()) {
         std::string error;
-        std::unique_ptr<ModemLine> line = cfg.modem == "line" ? modem_no_line() : modem_tcp_line(cfg.modem, error);
+        const bool netband = cfg.modem.rfind("netband=", 0) == 0;
+        std::unique_ptr<ModemLine> line = cfg.modem == "line"      ? modem_no_line()
+                                          : cfg.modem == "session" ? online_modem_line(error)
+                                          : netband                ? online_netband_line(cfg.modem.substr(8), error)
+                                                                   : modem_tcp_line(cfg.modem, error);
         if (!line) { std::fprintf(stderr, "--modem %s: %s\n", cfg.modem.c_str(), error.c_str()); return 2; }
         g_modem = std::make_unique<Modem>(std::move(line));
     }
@@ -697,6 +705,14 @@ int saturn_main(const SaturnConfig& cfg) {
             tasks_route(g_master, ~0u);
         } catch (TaskUnwind& u) {
             entry = u.pc;
+        } catch (StateRewind&) {
+            const uint64_t from = sat_vblanks();
+            tasks_reset();
+            state_rewind();
+            writes_skip_past();
+            online_sync_went_back(from);
+            entry = g_master.pc;
+            tasks = true;
         } catch (ProgramStart& s) {
             tasks_reset();
             entry = s.addr;
@@ -720,6 +736,7 @@ int saturn_main(const SaturnConfig& cfg) {
     mmio_log_write(cfg.out + "/hw-log.txt");
     bios_save();
     state_finish();
+    online_finish();
     std::fflush(stderr);
     std::fflush(stdout);
     std::_Exit(0);                  // the slave's thread is parked: do not wait for it

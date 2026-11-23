@@ -1,6 +1,8 @@
-# Writes OUTPUT, saturn_build_id.h, with the builds a session's terms name: the runtime's commit, and the game's as
-# SATURN_GAME_BUILD gives it or else GAME_DIR's commit, "dev" when neither is known. Rewritten only when they change.
-#   cmake -DRUNTIME_DIR=... -DGAME_DIR=... -DGAME_BUILD=... -DOUTPUT=... -P build_id.cmake
+# Writes OUTPUT, saturn_build_id.h, with the builds a session's terms name: the runtime's and the game's, each as
+# RUNTIME_BUILD or GAME_BUILD gives it or else its checkout's commit, "dev" when neither is known. A copy built from
+# files without git, as on another machine, takes both from the checkout it was copied from.
+# Rewritten only when they change.
+#   cmake -DRUNTIME_DIR=... -DRUNTIME_BUILD=... -DGAME_DIR=... -DGAME_BUILD=... -DOUTPUT=... -P build_id.cmake
 function(commit_of dir out)
   set(${out} "dev" PARENT_SCOPE)
   if(dir)
@@ -11,7 +13,11 @@ function(commit_of dir out)
     endif()
   endif()
 endfunction()
-commit_of("${RUNTIME_DIR}" runtime)
+if(RUNTIME_BUILD)
+  set(runtime ${RUNTIME_BUILD})
+else()
+  commit_of("${RUNTIME_DIR}" runtime)
+endif()
 if(GAME_BUILD)
   set(game ${GAME_BUILD})
 else()

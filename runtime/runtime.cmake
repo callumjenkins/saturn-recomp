@@ -99,10 +99,11 @@ target_link_libraries(saturn_machine PUBLIC saturn_net)
 # The builds a room compares (net/session.h's terms), looked up on every build (build_id.cmake)
 set(SATURN_GAME_DIR "" CACHE PATH "the game's checkout, whose commit names the game's build")
 set(SATURN_GAME_BUILD "" CACHE STRING "the game's build, in place of its checkout's commit")
+set(SATURN_RUNTIME_BUILD "" CACHE STRING "the runtime's build, in place of its checkout's commit")
 set(_build_id ${CMAKE_CURRENT_BINARY_DIR}/saturn-build-id/saturn_build_id.h)
 add_custom_target(saturn_build_id BYPRODUCTS ${_build_id}
     COMMAND ${CMAKE_COMMAND} -DRUNTIME_DIR=${_rt} -DGAME_DIR=${SATURN_GAME_DIR} -DGAME_BUILD=${SATURN_GAME_BUILD}
-            -DOUTPUT=${_build_id} -P ${_rt}/build_id.cmake VERBATIM)
+            -DRUNTIME_BUILD=${SATURN_RUNTIME_BUILD} -DOUTPUT=${_build_id} -P ${_rt}/build_id.cmake VERBATIM)
 add_dependencies(saturn_machine saturn_build_id)
 target_include_directories(saturn_machine PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/saturn-build-id)
 foreach(t saturn_core saturn_stub saturn_machine saturn_host)
